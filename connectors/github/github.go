@@ -124,7 +124,7 @@ func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s conne
 		// An unknown plan is assumed to have protection, so a drill never returns
 		// N/A on a guess. Required reviewers stay off, the stricter reading of
 		// what to ask for.
-		available := !(private && p == "free")
+		available := !private || p != "free"
 		repoID := graph.ID("github:repo/" + full)
 		out.Node(graph.Node{ID: repoID, Kind: graph.KindGitHubRepo, Source: "github", SeenAt: s.Now, Attrs: map[string]any{
 			"name": full, "private": private, "plan": p, "protection_available": available,

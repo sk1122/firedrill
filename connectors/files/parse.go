@@ -41,8 +41,8 @@ type MCPServer struct {
 // ParseAgentFile reads one agent config by its path.
 func ParseAgentFile(rel string, data []byte, scope string) (*AgentConfig, error) {
 	base := path.Base(rel)
-	switch {
-	case base == ".cursorignore":
+	switch base {
+	case ".cursorignore":
 		c := &AgentConfig{Tool: "cursor", Scope: scope, File: rel}
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
@@ -51,9 +51,9 @@ func ParseAgentFile(rel string, data []byte, scope string) (*AgentConfig, error)
 			}
 		}
 		return c, nil
-	case base == "settings.json" || base == "settings.local.json":
+	case "settings.json", "settings.local.json":
 		return parseClaudeSettings(rel, data, scope)
-	case base == "mcp.json" || base == ".mcp.json":
+	case "mcp.json", ".mcp.json":
 		tool := "claude-code"
 		if strings.Contains(rel, ".cursor/") {
 			tool = "cursor"
@@ -253,14 +253,11 @@ func ParseWorkflow(rel string, data []byte) (*Workflow, error) {
 	w := &Workflow{File: rel}
 	prTarget := triggerHas(&doc.On, "pull_request_target")
 	allDeclared := len(doc.Jobs) > 0
-	anyJobWrite := false
 	seen := map[string]bool{}
 	for _, job := range doc.Jobs {
 		switch permLevel(&job.Permissions) {
 		case "undeclared":
 			allDeclared = false
-		case "write":
-			anyJobWrite = true
 		}
 		uses := []string{job.Uses}
 		for _, st := range job.Steps {
@@ -291,7 +288,6 @@ func ParseWorkflow(rel string, data []byte) (*Workflow, error) {
 	default:
 		w.Permissions = "undeclared"
 	}
-	_ = anyJobWrite
 	return w, nil
 }
 

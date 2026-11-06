@@ -1,0 +1,119 @@
+# Copy to .github/workflows/firedrill.yml in your private Firedrill repo.
+# Secrets: FIREDRILL_GITHUB_TOKEN, a fine-grained read token for the listed repos,
+# and FIREDRILL_SALT. The built-in GITHUB_TOKEN writes only to this repo.
+name: firedrill
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+      - name: Install Firedrill
+        run: go install github.com/sk1122/firedrill/cmd/firedrill@latest
+      - name: Check out the records
+        run: |
+          if git fetch origin firedrill-tags; then
+            git worktree add records FETCH_HEAD
+          else
+            git worktree add --orphan -b firedrill-tags records
+          fi
+      - name: Run drills
+        id: drills
+        env:
+          FIREDRILL_GITHUB_TOKEN: ${{ secrets.FIREDRILL_GITHUB_TOKEN }}
+          FIREDRILL_SALT: ${{ secrets.FIREDRILL_SALT }}
+        run: |
+          set +e
+          firedrill run --records records --json result.json
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+      - name: Push the records
+        run: |
+          cd records
+          git config user.name "firedrill"
+          git config user.email "firedrill@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No new records."
+          else
+            git commit -m "Firedrill records"
+            git push origin HEAD:firedrill-tags
+          fi
+      - name: Write the step summary
+        run: |
+          if [ -f result.json ]; then
+            firedrill report --summary result.json >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Open and close issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -f result.json ] || exit 0
+          default_owner=$(jq -r '.default_owner // ""' result.json)
+          default_owner=${default_owner#@}
+          issue_number() {
+            gh issue list --state open --limit 200 --json number,title \
+              --jq "map(select(.title == \"$1\"))[0].number // empty"
+          }
+          jq -c '.newly_open[]' result.json | while read -r f; do
+            drill=$(jq -r '.drill' <<< "$f")
+            target=$(jq -r '.target // ""' <<< "$f")
+            owner=$(jq -r '.owner // ""' <<< "$f")
+            owner=${owner#@}
+            title="Firedrill: $drill on ${target:-global}"
+            failing=$(jq -r '(.failing_conditions // [])[] | "- `" + . + "`"' <<< "$f")
+            fix=$(jq -r '.fix // ""' <<< "$f")
+            body=$(printf 'Safeguard is open.\n\n**Drill:** %s\n**Target:** %s\n\n**Failing conditions:**\n%s\n\n**Fix:** %s\n\n[CI run](%s)\n\nThis closes only when a run passes.' "$drill" "${target:-global}" "$failing" "$fix" "$RUN_URL")
+            existing=$(issue_number "$title")
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "Still open. [CI run]($RUN_URL)"
+              continue
+            fi
+            if [ -n "$owner" ] && gh issue create --title "$title" --body "$body" --assignee "$owner"; then
+              continue
+            fi
+            if [ -n "$owner" ]; then
+              body=$(printf '%s\n\nOwner: @%s, who has no access to this repo.' "$body" "$owner")
+            fi
+            if [ -n "$default_owner" ]; then
+              gh issue create --title "$title" --body "$body" --assignee "$default_owner"
+            else
+              gh issue create --title "$title" --body "$body"
+            fi
+          done
+          jq -c '.newly_closed[], .retired[]' result.json | while read -r f; do
+            drill=$(jq -r '.drill' <<< "$f")
+            target=$(jq -r '.target // ""' <<< "$f")
+            retired=$(jq -r '.retired // ""' <<< "$f")
+            title="Firedrill: $drill on ${target:-global}"
+            existing=$(issue_number "$title")
+            [ -n "$existing" ] || continue
+            if [ -n "$retired" ]; then
+              gh issue close "$existing" --comment "Target retired: $retired"
+            else
+              gh issue close "$existing" --comment "Closed by a passing run. [CI run]($RUN_URL)"
+            fi
+          done
+      - name: Write the board
+        if: always()
+        run: firedrill report --records records --out report
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: firedrill-board
+          path: report
+      - name: Finish with the run's exit code
+        env:
+          CODE: ${{ steps.drills.outputs.code }}
+        run: exit "${CODE:-2}"

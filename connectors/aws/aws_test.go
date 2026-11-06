@@ -69,15 +69,6 @@ func TestParseReport(t *testing.T) {
 	}
 }
 
-type rewrite struct{ server *httptest.Server }
-
-func (r rewrite) Do(req *http.Request) (*http.Response, error) {
-	u, _ := url.Parse(r.server.URL)
-	c := req.Clone(req.Context())
-	c.URL.Scheme, c.URL.Host = u.Scheme, u.Host
-	return http.DefaultTransport.RoundTrip(c)
-}
-
 const authXML = `<GetAccountAuthorizationDetailsResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><GetAccountAuthorizationDetailsResult><IsTruncated>false</IsTruncated>
 <UserDetailList><member><UserName>ci</UserName><Arn>arn:aws:iam::111111111111:user/ci</Arn><CreateDate>2020-01-01T00:00:00Z</CreateDate><UserPolicyList><member><PolicyName>p</PolicyName><PolicyDocument>%7B%22Statement%22%3A%5B%7B%22Effect%22%3A%22Allow%22%2C%22Action%22%3A%22s3%3ADeleteObject%22%2C%22Resource%22%3A%22%2A%22%7D%5D%7D</PolicyDocument></member></UserPolicyList></member></UserDetailList>
 <RoleDetailList>

@@ -483,7 +483,7 @@ func TestUnownedHostFails(t *testing.T) {
 }
 
 func TestCrtShDownGivesWarn(t *testing.T) {
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "down", 503) }))
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "down", http.StatusServiceUnavailable) }))
 	defer s.Close()
 	var seen []string
 	ct := ctlog.New()

@@ -146,10 +146,8 @@ func WalkLocal(root string) ([]File, error) {
 		for _, e := range entries {
 			rel := path.Join(relDir, e.Name())
 			if e.IsDir() {
-				if skipDirs[e.Name()] || ignored(rules, rel, true) {
-					if !(rel == ".claude") {
-						continue
-					}
+				if (skipDirs[e.Name()] || ignored(rules, rel, true)) && rel != ".claude" {
+					continue
 				}
 				if err := walk(filepath.Join(dir, e.Name()), rules); err != nil {
 					return err
