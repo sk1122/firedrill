@@ -85,7 +85,8 @@ func registerGitHub() {
 			if !ok {
 				return Result{}, notCollected("github.branch_rules", id)
 			}
-			src := strAttr(n, "bypass_source")
+			// An admin export carries the commit and who made it into the tag.
+			src := strAttr(n, "bypass_detail")
 			if src == "" {
 				src = "api"
 			}
