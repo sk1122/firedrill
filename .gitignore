@@ -1,0 +1,6 @@
+/firedrill
+/dist/
+.firedrill/local/
+*.test
+coverage.out
+.DS_Store
