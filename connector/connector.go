@@ -16,6 +16,9 @@ import (
 	"github.com/sk1122/firedrill/internal/graph"
 )
 
+// Version is the Firedrill version sent in the user agent. It is set at build time.
+var Version = "0.0.1"
+
 // Collection is one thing a connector can fetch.
 type Collection struct {
 	Name       string
@@ -26,20 +29,21 @@ type Collection struct {
 
 // Scope is what a run asks a connector to cover.
 type Scope struct {
-	Project     *config.Project
-	Hasher      graph.Hasher
-	Now         time.Time
-	Log         *CallLog
-	Paths       []string // local checkouts from --path
-	IncludeHome bool     // read user-level agent files
-	HomeDir     string   // where user-level files live
-	Token       string   // GitHub token, in memory only
-	Getenv      func(string) string
-	Tarball     func(ctx context.Context, repo string) (io.ReadCloser, error)
-	FilePaths   []string    // paths named through files.json and files.yaml
-	DNSHosts    []string    // hosts named through dns.records
-	WebGets     [][2]string // host and path named through web.get
-	RepoTargets []string    // every repo name in scope
+	Project         *config.Project
+	Hasher          graph.Hasher
+	Now             time.Time
+	Log             *CallLog
+	Paths           []string // local checkouts from --path
+	IncludeHome     bool     // read user-level agent files
+	HomeDir         string   // where user-level files live
+	Token           string   // GitHub token, in memory only
+	Getenv          func(string) string
+	Tarball         func(ctx context.Context, repo string) (io.ReadCloser, error)
+	FilePaths       []string    // paths named through files.json and files.yaml
+	DNSHosts        []string    // hosts named through dns.records
+	WebGets         [][2]string // host and path named through web.get
+	VerifiedDomains []string
+	RepoTargets     []string // every repo name in scope
 }
 
 // Connector is one system Firedrill can read.
