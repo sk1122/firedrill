@@ -81,3 +81,36 @@ func TestRebuildSkipsSnapshotsOlderThanAYear(t *testing.T) {
 		t.Fatalf("%v %v", err, est.Items)
 	}
 }
+
+func TestCompactFoldsOldSnapshotsAndKeepsThem(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	for i, at := range []time.Time{now.AddDate(-3, 0, 0), now.AddDate(-2, 0, 0), now.AddDate(0, -1, 0)} {
+		g := New()
+		g.Node(Node{ID: "always", Kind: "k", Attrs: map[string]any{"run": float64(i)}, SeenAt: at})
+		if i == 0 {
+			g.Node(Node{ID: "oldest", Kind: "k", SeenAt: at})
+		}
+		if _, err := WriteSnapshot(dir, TakeSnapshot(g, at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := Compact(dir, now)
+	if err != nil || n != 2 {
+		t.Fatalf("%d %v", n, err)
+	}
+	files, _ := SnapshotFiles(dir)
+	if len(files) != 2 || !strings.HasSuffix(files[0], CompactedName) {
+		t.Fatalf("%v", files)
+	}
+	est, err := RebuildEstate(dir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if est.Items["oldest"] == nil || est.Items["always"].Attrs["run"] != float64(2) {
+		t.Fatalf("compaction must keep every item: %+v", est.Items)
+	}
+	if n, _ := Compact(dir, now); n != 0 {
+		t.Fatalf("nothing new to compact, got %d", n)
+	}
+}

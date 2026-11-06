@@ -30,19 +30,23 @@ func WriteSnapshot(dir string, s Snapshot) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, s.Time.Format("2006-01-02T15-04-05Z")+".json.gz")
+	return path, writeSnapshotFile(path, s)
+}
+
+func writeSnapshotFile(path string, s Snapshot) error {
 	f, err := os.Create(path)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer func() { _ = f.Close() }()
 	z := gzip.NewWriter(f)
 	if err := json.NewEncoder(z).Encode(s); err != nil {
-		return "", err
+		return err
 	}
 	if err := z.Close(); err != nil {
-		return "", err
+		return err
 	}
-	return path, f.Close()
+	return f.Close()
 }
 
 // ReadSnapshot loads one snapshot file.
@@ -143,8 +147,72 @@ func (e *Estate) Sorted() []*EstateItem {
 	return out
 }
 
-// RebuildEstate merges every snapshot under dir newer than a year ago, oldest
-// first.
+// CompactedName holds snapshots older than a year. It sorts first, so it merges
+// before anything newer.
+const CompactedName = "0000-compacted.json.gz"
+
+const yearOfSnapshots = 366 * 24 * time.Hour
+
+// Compact folds snapshots older than a year into one, keeping the latest state
+// of each item, then removes the originals. It returns how many it folded.
+func Compact(dir string, now time.Time) (int, error) {
+	files, err := SnapshotFiles(dir)
+	if err != nil {
+		return 0, err
+	}
+	merged := Snapshot{}
+	nodes := map[ID]Node{}
+	edges := map[Edge]struct{}{}
+	var old []string
+	for _, f := range files {
+		s, err := ReadSnapshot(f)
+		if err != nil {
+			return 0, err
+		}
+		base := filepath.Base(f)
+		if base != CompactedName && now.Sub(s.Time) <= yearOfSnapshots {
+			continue
+		}
+		for _, n := range s.Nodes {
+			nodes[n.ID] = n
+		}
+		for _, e := range s.Edges {
+			edges[e] = struct{}{}
+		}
+		if s.Time.After(merged.Time) {
+			merged.Time = s.Time
+		}
+		if base != CompactedName {
+			old = append(old, f)
+		}
+	}
+	if len(old) == 0 {
+		return 0, nil
+	}
+	for _, n := range nodes {
+		merged.Nodes = append(merged.Nodes, n)
+	}
+	sort.Slice(merged.Nodes, func(i, j int) bool { return merged.Nodes[i].ID < merged.Nodes[j].ID })
+	for e := range edges {
+		merged.Edges = append(merged.Edges, e)
+	}
+	sort.Slice(merged.Edges, func(i, j int) bool {
+		a, b := merged.Edges[i], merged.Edges[j]
+		return string(a.From)+string(a.To)+a.Kind < string(b.From)+string(b.To)+b.Kind
+	})
+	if err := writeSnapshotFile(filepath.Join(dir, CompactedName), merged); err != nil {
+		return 0, err
+	}
+	for _, f := range old {
+		if err := os.Remove(f); err != nil {
+			return 0, err
+		}
+	}
+	return len(old), nil
+}
+
+// RebuildEstate merges the compacted snapshot, then every snapshot newer than a
+// year ago, oldest first.
 func RebuildEstate(dir string, now time.Time) (*Estate, error) {
 	files, err := SnapshotFiles(dir)
 	if err != nil {
@@ -156,7 +224,7 @@ func RebuildEstate(dir string, now time.Time) (*Estate, error) {
 		if err != nil {
 			return nil, err
 		}
-		if now.Sub(s.Time) > 366*24*time.Hour {
+		if filepath.Base(f) != CompactedName && now.Sub(s.Time) > yearOfSnapshots {
 			continue
 		}
 		est.Merge(s)

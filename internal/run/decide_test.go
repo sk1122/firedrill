@@ -441,3 +441,31 @@ func TestEvidenceIsTrimmed(t *testing.T) {
 		t.Fatal("evidence lost a used field")
 	}
 }
+
+func TestFailReasonNamesTheRealFinding(t *testing.T) {
+	g := graph.New()
+	targetRepo(g)
+	scan(g, "secrets", "acme/api", 3)
+	secret(g, "a-fixture.env", "example", "fake", true)
+	secret(g, "z-real.sh", "prod", "real", true)
+	got := Decide(loadDrill(t, "agent/no-prod-secrets-in-agent-reach"), g, Options{Now: testNow})
+	if !strings.Contains(got[0].Reason, "z-real.sh") || !strings.Contains(got[0].Reason, "1 failing") {
+		t.Fatalf("reason must name the real leak, got %q", got[0].Reason)
+	}
+}
+
+func TestTargetIsCountedAsRead(t *testing.T) {
+	g := graph.New()
+	targetRepo(g)
+	scan(g, "secrets", "acme/api", 1)
+	got := Decide(loadDrill(t, "access/no-shared-prod-keys"), g, Options{Now: testNow})
+	found := false
+	for _, id := range got[0].Read {
+		if id == "repo:acme/api" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("read: %v", got[0].Read)
+	}
+}

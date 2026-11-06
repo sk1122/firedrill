@@ -122,7 +122,7 @@ func (s *Store) Sync(ctx context.Context, dir string, now time.Time) (int, error
 		if err != nil {
 			return merged, err
 		}
-		if now.Sub(snap.Time) > 366*24*time.Hour {
+		if name != graph.CompactedName && now.Sub(snap.Time) > 366*24*time.Hour {
 			continue
 		}
 		if newest != nil && snap.Time.Before(*newest) {

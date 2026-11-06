@@ -74,10 +74,16 @@ type ItemVerdict struct {
 	DrillID, Target, Verdict, Class, Date string
 }
 
+// AttentionRow is one change the board leads with.
+type AttentionRow struct {
+	Kind, DrillID, Target, Class string
+}
+
 // Board is everything the templates need.
 type Board struct {
 	Generated string
 	Counts    Counts
+	Attention []AttentionRow
 	Packs     []Pack
 	Untouched []Item
 	Unowned   []Item
@@ -141,6 +147,9 @@ func Build(store tag.Store, est *graph.Estate, drills []*drill.Drill, now time.T
 		case st.Redacted > 0:
 			sg.Chain = fmt.Sprintf("%d redacted", st.Redacted)
 		}
+		if row, ok := attentionOf(hist, sg); ok {
+			b.Attention = append(b.Attention, row)
+		}
 		pack, _, _ := strings.Cut(k.DrillID, "/")
 		packs[pack] = append(packs[pack], sg)
 		count(&b.Counts, last)
@@ -161,6 +170,9 @@ func Build(store tag.Store, est *graph.Estate, drills []*drill.Drill, now time.T
 	for _, n := range names {
 		list := packs[n]
 		sort.Slice(list, func(i, j int) bool {
+			if a, b := list[i].State == tag.Open, list[j].State == tag.Open; a != b {
+				return a
+			}
 			if list[i].DrillID != list[j].DrillID {
 				return list[i].DrillID < list[j].DrillID
 			}
@@ -168,6 +180,13 @@ func Build(store tag.Store, est *graph.Estate, drills []*drill.Drill, now time.T
 		})
 		b.Packs = append(b.Packs, Pack{Name: n, Safeguards: list})
 	}
+	sort.SliceStable(b.Attention, func(i, j int) bool {
+		a, c := attentionRank[b.Attention[i].Kind], attentionRank[b.Attention[j].Kind]
+		if a != c {
+			return a < c
+		}
+		return b.Attention[i].DrillID+b.Attention[i].Target < b.Attention[j].DrillID+b.Attention[j].Target
+	})
 	if est != nil {
 		owned := ownersOf(est)
 		for _, it := range est.Sorted() {
@@ -189,6 +208,31 @@ func Build(store tag.Store, est *graph.Estate, drills []*drill.Drill, now time.T
 		}
 	}
 	return b, nil
+}
+
+var attentionRank = map[string]int{"Newly open": 0, "Open, unverified": 1, "Newly closed": 2, "Closed, unverified": 3}
+
+// attentionOf says what changed in a safeguard's latest run.
+func attentionOf(hist []*tag.Tag, sg Safeguard) (AttentionRow, bool) {
+	prev := ""
+	if len(hist) > 1 {
+		prev = hist[len(hist)-2].Header.State
+	}
+	row := AttentionRow{DrillID: sg.DrillID, Target: sg.Target}
+	last := hist[len(hist)-1].Header
+	switch {
+	case sg.State == tag.Open && !last.Waived && prev != tag.Open:
+		row.Kind, row.Class = "Newly open", "fail"
+	case sg.State == tag.Open && sg.Unverified:
+		row.Kind, row.Class = "Open, unverified", "fail"
+	case sg.State == tag.Closed && prev == tag.Open:
+		row.Kind, row.Class = "Newly closed", "pass"
+	case sg.State == tag.Closed && sg.Unverified:
+		row.Kind, row.Class = "Closed, unverified", "warn"
+	default:
+		return row, false
+	}
+	return row, true
 }
 
 func count(c *Counts, h tag.Header) {

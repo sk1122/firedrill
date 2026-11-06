@@ -44,10 +44,11 @@ h2{font-size:30px;margin:40px 0 14px}
 .flag{font-size:12px;font-weight:600}
 table{width:100%;border-collapse:collapse}
 td,th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--dim);font-size:14px;overflow-wrap:anywhere}
-th{color:var(--muted);font-weight:400;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+th{color:var(--muted);font-weight:400;font-size:12px;text-transform:uppercase;letter-spacing:.06em;overflow-wrap:normal}
 a{color:var(--stock)}
 td.mono{font-family:"IBM Plex Mono",monospace;font-size:13px}
 .empty{color:var(--muted)}
+.att{font-weight:600}.att.fail{color:#ff6a5e}.att.pass{color:#3cc986}.att.warn{color:var(--amber)}
 </style>
 </head>
 <body>
@@ -64,6 +65,10 @@ td.mono{font-family:"IBM Plex Mono",monospace;font-size:13px}
 <div class="count"><b>{{.Counts.Skip}}</b><span>Skip</span></div>
 <div class="count"><b>{{.Counts.Error}}</b><span>Error</span></div>
 </section>
+<h2>Needs attention</h2>
+{{if .Attention}}<table><thead><tr><th>Change</th><th>Drill</th><th>Target</th></tr></thead><tbody>
+{{range .Attention}}<tr><td class="att {{.Class}}">{{.Kind}}</td><td class="mono">{{.DrillID}}</td><td class="mono">{{if .Target}}{{.Target}}{{else}}global{{end}}</td></tr>{{end}}
+</tbody></table>{{else}}<p class="empty">Nothing changed in the latest run.</p>{{end}}
 {{range .Packs}}
 <h2>{{.Name}}</h2>
 <section class="panel">

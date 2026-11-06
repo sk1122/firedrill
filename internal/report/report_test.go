@@ -62,6 +62,9 @@ func TestBoardCoverageStateAndPages(t *testing.T) {
 	if b.Counts.Open != 1 {
 		t.Fatalf("%+v", b.Counts)
 	}
+	if len(b.Attention) != 1 || b.Attention[0].Kind != "Open, unverified" {
+		t.Fatalf("the board leads with what needs attention: %+v", b.Attention)
+	}
 	names := func(items []Item) string {
 		var out []string
 		for _, it := range items {

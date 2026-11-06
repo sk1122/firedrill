@@ -70,9 +70,14 @@ func Decide(d *drill.Drill, g graph.Reader, o Options) []*Outcome {
 		return []*Outcome{{Drill: d, Verdict: tag.Skip, Reason: "needs a target from " + d.ForEach}}
 	}
 	out := make([]*Outcome, 0, len(targets))
-	for _, t := range targets {
+	for i, t := range targets {
 		attrs, _ := t.(map[string]any)
-		out = append(out, decideTarget(d, g, o, targetName(attrs), attrs))
+		oc := decideTarget(d, g, o, targetName(attrs), attrs)
+		// The target itself was read, so its page lists this verdict.
+		if i < len(res.Read) {
+			oc.Read = append(oc.Read, res.Read[i])
+		}
+		out = append(out, oc)
 	}
 	return out
 }
@@ -175,7 +180,7 @@ func decideTarget(d *drill.Drill, g graph.Reader, o Options, target string, attr
 	}
 	switch {
 	case failed:
-		out.Verdict, out.Reason = tag.Fail, failReason(failing, raw)
+		out.Verdict, out.Reason = tag.Fail, failReason(d, ev, vars, failing, raw)
 		applyWaivers(out, d, ev, vars, raw, target, o)
 	default:
 		out.Verdict = tag.Pass
@@ -226,26 +231,70 @@ func evalAll(d *drill.Drill, ev *drill.Evaluator, vars map[string]any, record *[
 	return failed, failing, ""
 }
 
-func failReason(failing []string, raw map[string]facts.Result) string {
-	for _, r := range raw {
-		m, _ := r.Data.(map[string]any)
-		found, _ := m["found"].([]any)
-		if len(found) == 0 {
+// failReason names what actually failed. A row is to blame when the drill still
+// fails with only that row in its list, so a harmless finding beside a real one
+// is never the one reported.
+func failReason(d *drill.Drill, ev *drill.Evaluator, vars map[string]any, failing []string, raw map[string]facts.Result) string {
+	aliases := make([]string, 0, len(raw))
+	for a := range raw {
+		aliases = append(aliases, a)
+	}
+	sort.Strings(aliases)
+	for _, alias := range aliases {
+		m, ok := raw[alias].Data.(map[string]any)
+		if !ok {
 			continue
 		}
-		row, _ := found[0].(map[string]any)
-		if f, _ := row["file"].(string); f != "" {
-			cls, _ := row["env_class"].(string)
-			if cls != "" {
-				return fmt.Sprintf("%d found, first: %s credential in %s", len(found), cls, f)
+		found, ok := m["found"].([]any)
+		if !ok || len(found) == 0 {
+			continue
+		}
+		var blamed []map[string]any
+		for _, item := range found {
+			if len(blamed) >= maxBlameRows {
+				break
 			}
-			return fmt.Sprintf("%d found, first in %s", len(found), f)
+			trial := map[string]any{}
+			for k, v := range vars {
+				trial[k] = v
+			}
+			cp := map[string]any{}
+			for k, v := range m {
+				cp[k] = v
+			}
+			cp["found"] = []any{item}
+			trial[alias] = cp
+			if stillFails, _, errMsg := evalAll(d, ev, trial, nil); errMsg == "" && stillFails {
+				row, _ := item.(map[string]any)
+				blamed = append(blamed, row)
+			}
 		}
-		if h, _ := row["host"].(string); h != "" {
-			return fmt.Sprintf("%d found, first on %s", len(found), h)
+		if len(blamed) == 0 {
+			continue
 		}
+		return describeRow(blamed[0], len(blamed))
 	}
 	return "failed: " + strings.Join(strings.Fields(failing[0]), " ")
+}
+
+// maxBlameRows bounds how many rows are tried, so a huge list stays cheap.
+const maxBlameRows = 200
+
+func describeRow(row map[string]any, n int) string {
+	count := fmt.Sprintf("%d failing", n)
+	if n >= maxBlameRows {
+		count = fmt.Sprintf("%d+ failing", maxBlameRows)
+	}
+	if f, _ := row["file"].(string); f != "" {
+		if cls, _ := row["env_class"].(string); cls != "" {
+			return fmt.Sprintf("%s, first: %s credential in %s", count, cls, f)
+		}
+		return fmt.Sprintf("%s, first in %s", count, f)
+	}
+	if h, _ := row["host"].(string); h != "" {
+		return fmt.Sprintf("%s, first on %s", count, h)
+	}
+	return count
 }
 
 // applyWaivers decides whether a FAIL is waived. A drill-wide waiver covers it.

@@ -5,6 +5,7 @@ package connectors_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -564,5 +565,105 @@ func TestHRCSV(t *testing.T) {
 	p3.Config.HR.LeaversCSV = "missing.csv"
 	if ok, _ := c.Available(connector.Scope{Project: p3}); ok {
 		t.Fatal("a missing file gives SKIP")
+	}
+}
+
+func TestDrillReadingAConfigFileCannotStoreARawSecret(t *testing.T) {
+	yaml := `firedrill: v0
+id: custom/config-rule
+safeguard: "The app config names a password."
+severity: low
+for_each: repos
+fetch:
+  app: { fact: files.yaml, args: { path: app.yaml } }
+pass_when:
+  - app.db.password == "nope"
+`
+	d, issues := drill.Load("custom", []byte(yaml))
+	if drill.HasErrors(issues) {
+		t.Fatal(issues)
+	}
+	raw := "Zx8mQ2pL9vT4rW7yB1nC6dF3"
+	root := writeRepo(t, "r", map[string]string{"app.yaml": "db:\n  password: " + raw + "\n  host: localhost\n"})
+	p := &config.Project{Dir: filepath.Join(root, ".firedrill")}
+	records := t.TempDir()
+	c := run.Config{Project: p, Drills: []*drill.Drill{d}, Connectors: []connector.Connector{configsrc.New(), files.New()},
+		Scope:  connector.Scope{Project: p, Now: now, Log: &connector.CallLog{}, Hasher: graph.NewHasher("s"), Paths: []string{root}},
+		Stream: "local", Records: records, WriteRecords: true}
+	res, err := run.Run(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcomes[0].Verdict != tag.Fail {
+		t.Fatalf("got %s: %s", res.Outcomes[0].Verdict, res.Outcomes[0].Reason)
+	}
+	_ = filepath.WalkDir(records, func(p string, e os.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return nil
+		}
+		b, _ := os.ReadFile(p)
+		if strings.Contains(string(b), raw) {
+			t.Errorf("%s holds the raw secret", p)
+		}
+		return nil
+	})
+	h, _ := tag.Store{Root: records}.History(d.ID, "r")
+	if len(h) != 1 || len(h[0].Header.ScannerNotes) == 0 {
+		t.Fatalf("the tag must carry a scanner note: %+v", h[0].Header)
+	}
+}
+
+func TestWebOverLimitGivesWarn(t *testing.T) {
+	var scripts strings.Builder
+	for i := 0; i < 30; i++ {
+		fmt.Fprintf(&scripts, `<script src="/b%d.js"></script>`, i)
+	}
+	h := site(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, scripts.String())
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, ".js") {
+			_, _ = io.WriteString(w, "code")
+			return
+		}
+		http.NotFound(w, nil)
+	})
+	o, seen := doorsRun(t, "doors/no-public-source-maps", h, fakeDNS{})
+	if o.Verdict != tag.Warn || !strings.Contains(o.Reason, "over the limit") {
+		t.Fatalf("got %s: %s", o.Verdict, o.Reason)
+	}
+	perHost := map[string]int{}
+	for _, s := range seen {
+		// The source-map drill's own requests: home pages and bundles. API doc
+		// paths belong to the other drill, which has its own budget.
+		if !strings.Contains(s, "crt.sh") && !strings.HasSuffix(s, "/env.js") && (strings.HasSuffix(s, ".js") || strings.HasSuffix(s, ".com/")) {
+			perHost[strings.SplitN(strings.TrimPrefix(s, "GET "), "/", 2)[0]]++
+		}
+	}
+	for host, n := range perHost {
+		if n > web.PerHostLimit {
+			t.Errorf("%s got %d requests", host, n)
+		}
+	}
+}
+
+func TestWebRefusesUnverifiedHostAndWontFollowOffDomainRedirects(t *testing.T) {
+	h := site(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/swagger.json" {
+			http.Redirect(w, r, "https://evil.example/steal", http.StatusFound)
+			return
+		}
+		http.NotFound(w, nil)
+	})
+	o, seen := doorsRun(t, "doors/no-public-api-docs", h, fakeDNS{})
+	if o.Verdict != tag.Pass {
+		t.Fatalf("a redirect is not an exposed file, got %s: %s", o.Verdict, o.Reason)
+	}
+	for _, s := range seen {
+		if strings.Contains(s, "evil.example") {
+			t.Fatal("followed a redirect off the verified domain")
+		}
 	}
 }

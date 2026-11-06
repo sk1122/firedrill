@@ -148,8 +148,12 @@ func Run(ctx context.Context, c Config) (*Result, error) {
 	}
 	snap := graph.TakeSnapshot(res.Graph, scope.Now)
 	tag.ScanSnapshot(&snap, scope.Hasher)
-	if _, err := graph.WriteSnapshot(filepath.Join(c.Records, "snapshots"), snap); err != nil {
+	dir := filepath.Join(c.Records, "snapshots")
+	if _, err := graph.WriteSnapshot(dir, snap); err != nil {
 		return nil, fmt.Errorf("write snapshot: %w", err)
+	}
+	if _, err := graph.Compact(dir, scope.Now); err != nil {
+		return nil, fmt.Errorf("compact snapshots: %w", err)
 	}
 	return res, nil
 }
