@@ -1,0 +1,508 @@
+package facts
+
+import (
+	"sort"
+	"strings"
+
+	"github.com/sk1122/firedrill/internal/graph"
+)
+
+func init() {
+	registerTargets()
+	registerGitHub()
+	registerIdentity()
+	registerAWS()
+	registerFiles()
+	registerDoors()
+}
+
+func registerTargets() {
+	Register(Def{
+		Name:  "repos",
+		Shape: List(Obj(map[string]*Shape{"name": Str, "local": Bool})),
+		Fn: func(g graph.Reader, _ Args) (Result, error) {
+			return listOf(g, graph.KindTargetRepo, "config", "name", "local"), nil
+		},
+	})
+	Register(Def{
+		Name:  "config.domains",
+		Shape: List(Obj(map[string]*Shape{"domain": Str, "verified": Bool})),
+		Fn: func(g graph.Reader, _ Args) (Result, error) {
+			r := Result{Source: "config"}
+			rows := []any{}
+			for _, n := range g.Nodes(graph.KindConfigDomain) {
+				if v, _ := n.Attrs["verified"].(bool); !v {
+					continue
+				}
+				rows = append(rows, attrsOf(n, "domain", "verified"))
+				r.Read = append(r.Read, n.ID)
+			}
+			r.Data = rows
+			return r, nil
+		},
+	})
+	Register(Def{
+		Name:  "config.hosts",
+		Shape: List(Obj(map[string]*Shape{"host": Str, "owner": Str})),
+		Fn: func(g graph.Reader, _ Args) (Result, error) {
+			return listOf(g, graph.KindConfigHost, "config", "host", "owner"), nil
+		},
+	})
+}
+
+func listOf(g graph.Reader, kind, source string, fields ...string) Result {
+	r := Result{Source: source}
+	rows := []any{}
+	for _, n := range g.Nodes(kind) {
+		rows = append(rows, attrsOf(n, fields...))
+		r.Read = append(r.Read, n.ID)
+	}
+	r.Data = rows
+	return r
+}
+
+func registerGitHub() {
+	Register(Def{
+		Name: "github.repos", Connector: "github",
+		Shape: List(Obj(map[string]*Shape{"name": Str, "private": Bool, "plan": Str, "protection_available": Bool})),
+		Fn: func(g graph.Reader, _ Args) (Result, error) {
+			return listOf(g, graph.KindGitHubRepo, "api", "name", "private", "plan", "protection_available"), nil
+		},
+	})
+	Register(Def{
+		Name: "github.branch_rules", Connector: "github", Args: []string{"branch"},
+		Shape: Obj(map[string]*Shape{
+			"required_approvals": Int, "dismiss_stale": Bool, "code_owner_review": Bool,
+			"bypass": Str, "bypass_source": Str, "force_push_allowed": Bool, "deletion_allowed": Bool,
+		}),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			branch := a.String("branch")
+			if branch == "" {
+				branch = "default"
+			}
+			id := "github:branch-rule/" + a.TargetName() + "/" + branch
+			n, ok := g.Get(graph.ID(id))
+			if !ok {
+				return Result{}, notCollected("github.branch_rules", id)
+			}
+			src := strAttr(n, "bypass_source")
+			if src == "" {
+				src = "api"
+			}
+			return Result{Read: []graph.ID{n.ID}, Source: src, Data: attrsOf(n,
+				"required_approvals", "dismiss_stale", "code_owner_review", "bypass", "bypass_source",
+				"force_push_allowed", "deletion_allowed")}, nil
+		},
+	})
+	Register(Def{
+		Name: "github.environment", Connector: "github", Args: []string{"name"},
+		Shape: Obj(map[string]*Shape{
+			"exists": Bool, "reviewers_available": Bool, "required_reviewers": List(Str),
+			"prevent_self_review": Bool, "admin_bypass": Bool, "protected_branches_only": Bool,
+		}),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			repo := a.TargetName()
+			repoNode, ok := g.Get(graph.ID("github:repo/" + repo))
+			if !ok {
+				return Result{}, notCollected("github.environment", repo)
+			}
+			reviewers := reviewersAvailable(repoNode)
+			id := graph.ID("github:env/" + repo + "/" + a.String("name"))
+			n, ok := g.Get(id)
+			if !ok {
+				return Result{Read: []graph.ID{repoNode.ID}, Source: "api", Data: map[string]any{
+					"exists": false, "reviewers_available": reviewers, "required_reviewers": []any{},
+					"prevent_self_review": false, "admin_bypass": false, "protected_branches_only": false,
+				}}, nil
+			}
+			row := attrsOf(n, "required_reviewers", "prevent_self_review", "admin_bypass", "protected_branches_only")
+			row["exists"] = true
+			row["reviewers_available"] = reviewers
+			return Result{Read: []graph.ID{n.ID, repoNode.ID}, Source: "api", Data: row}, nil
+		},
+	})
+	Register(Def{
+		Name: "github.actions_permissions", Connector: "github",
+		Shape: Obj(map[string]*Shape{"can_approve_pull_requests": Bool, "default_token_permission": Str}),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			id := "github:actions/" + a.TargetName()
+			n, ok := g.Get(graph.ID(id))
+			if !ok {
+				return Result{}, notCollected("github.actions_permissions", id)
+			}
+			return Result{Read: []graph.ID{n.ID}, Source: "api",
+				Data: attrsOf(n, "can_approve_pull_requests", "default_token_permission")}, nil
+		},
+	})
+}
+
+// reviewersAvailable says whether the plan offers required reviewers on
+// environments. Public repos always have them. Private repos need Enterprise.
+func reviewersAvailable(repo graph.Node) bool {
+	private, _ := repo.Attrs["private"].(bool)
+	return !private || strAttr(repo, "plan") == "enterprise"
+}
+
+func registerIdentity() {
+	Register(Def{
+		Name: "identity.users", Connector: "google",
+		Shape: List(Obj(map[string]*Shape{
+			"email": Str, "suspended": Bool, "is_admin": Bool, "is_delegated_admin": Bool,
+			"mfa_enrolled": Bool, "mfa_enforced": Bool, "last_login": Str,
+			"days_since_login": Int, "days_since_created": Int,
+		})),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			r := Result{Source: "api"}
+			rows := []any{}
+			for _, n := range g.Nodes(graph.KindIdentityUser) {
+				row := attrsOf(n, "suspended", "is_admin", "is_delegated_admin", "mfa_enrolled", "mfa_enforced", "last_login")
+				row["email"], _ = n.Private["email"].(string)
+				row["days_since_login"] = daysSince(strAttr(n, "last_login"), a.Now)
+				row["days_since_created"] = daysSince(strAttr(n, "created"), a.Now)
+				rows = append(rows, row)
+				r.Read = append(r.Read, n.ID)
+			}
+			r.Data = rows
+			return r, nil
+		},
+	})
+	Register(Def{
+		Name: "hr.leavers", Connector: "hr",
+		Shape: List(Obj(map[string]*Shape{"email": Str, "leave_date": Str})),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			r := Result{Source: "file"}
+			rows := []any{}
+			today := a.Now.UTC().Format("2006-01-02")
+			for _, n := range g.Nodes(graph.KindLeaver) {
+				date := strAttr(n, "leave_date")
+				// An account is due to be locked once the leave date has passed,
+				// compared by UTC date. Future dates wait until they arrive.
+				if date >= today {
+					continue
+				}
+				email, _ := n.Private["email"].(string)
+				rows = append(rows, map[string]any{"email": strings.ToLower(email), "leave_date": date})
+				r.Read = append(r.Read, n.ID)
+			}
+			r.Data = rows
+			return r, nil
+		},
+	})
+}
+
+func registerAWS() {
+	Register(Def{
+		Name: "aws.principals", Connector: "aws",
+		Shape: List(Obj(map[string]*Shape{
+			"account": Str, "kind": Str, "name": Str, "last_used": Str, "keys": List(Str),
+			"is_admin": Bool, "destructive_actions": List(Str), "excluded": Bool,
+			"days_since_used": Int, "days_since_created": Int,
+		})),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			r := Result{Source: "api"}
+			rows := []any{}
+			for _, n := range g.Nodes(graph.KindAWSPrincipal) {
+				row := attrsOf(n, "account", "name", "last_used", "keys", "is_admin", "destructive_actions", "excluded")
+				row["kind"] = strAttr(n, "principal_kind")
+				row["days_since_used"] = daysSince(strAttr(n, "last_used"), a.Now)
+				row["days_since_created"] = daysSince(strAttr(n, "created"), a.Now)
+				rows = append(rows, row)
+				r.Read = append(r.Read, n.ID)
+			}
+			r.Data = rows
+			return r, nil
+		},
+	})
+	Register(Def{
+		Name: "aws.agent_keys", Connector: "aws",
+		Shape: List(Obj(map[string]*Shape{
+			"key_id": Str, "files": List(Str), "agents": List(Str), "account": Str, "user": Str,
+			"unknown_account": Bool, "is_admin": Bool, "destructive_actions": List(Str),
+		})),
+		Fn: agentKeys,
+	})
+}
+
+func agentKeys(g graph.Reader, _ Args) (Result, error) {
+	r := Result{Source: "api"}
+	type seen struct {
+		files  map[string]bool
+		agents map[string]bool
+	}
+	keys := map[string]*seen{}
+	agentsByRepo := map[string][]string{}
+	for _, c := range g.Nodes(graph.KindAgentConfig) {
+		repo := strAttr(c, "repo")
+		agentsByRepo[repo] = append(agentsByRepo[repo], strAttr(c, "tool"))
+	}
+	for _, n := range g.Nodes(graph.KindSecretSeen) {
+		id := strAttr(n, "key_id")
+		readable, _ := n.Attrs["agent_readable"].(bool)
+		if id == "" || !readable {
+			continue
+		}
+		s := keys[id]
+		if s == nil {
+			s = &seen{files: map[string]bool{}, agents: map[string]bool{}}
+			keys[id] = s
+		}
+		repo := strAttr(n, "repo")
+		s.files[repo+"/"+strAttr(n, "file")] = true
+		for _, a := range agentsByRepo[repo] {
+			s.agents[a] = true
+		}
+		r.Read = append(r.Read, n.ID)
+	}
+	ids := make([]string, 0, len(keys))
+	for id := range keys {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	rows := []any{}
+	for _, id := range ids {
+		row := map[string]any{"key_id": id, "files": sortedKeys(keys[id].files), "agents": sortedKeys(keys[id].agents),
+			"account": "", "user": "", "unknown_account": true, "is_admin": false, "destructive_actions": []any{}}
+		if kn, ok := g.Get(graph.ID("aws:key/" + id)); ok {
+			r.Read = append(r.Read, kn.ID)
+			row["account"], row["user"] = strAttr(kn, "account"), strAttr(kn, "user")
+			row["unknown_account"] = false
+			pid := graph.ID("aws:iam-user/" + strAttr(kn, "account") + "/" + strAttr(kn, "user"))
+			if pn, ok := g.Get(pid); ok {
+				r.Read = append(r.Read, pn.ID)
+				row["is_admin"], _ = pn.Attrs["is_admin"].(bool)
+				if d, ok := pn.Attrs["destructive_actions"]; ok {
+					row["destructive_actions"] = d
+				}
+			}
+		}
+		rows = append(rows, row)
+	}
+	r.Data = rows
+	return r, nil
+}
+
+func sortedKeys(m map[string]bool) []any {
+	s := make([]string, 0, len(m))
+	for k := range m {
+		s = append(s, k)
+	}
+	sort.Strings(s)
+	out := make([]any, len(s))
+	for i, v := range s {
+		out[i] = v
+	}
+	return out
+}
+
+// repoScan builds a scanning fact over nodes of one kind in the target repo.
+func repoScan(g graph.Reader, a Args, scanner, kind string, fields ...string) (Result, map[string]any) {
+	repo := a.TargetName()
+	r := Result{Source: "file"}
+	rows := []any{}
+	for _, n := range g.Nodes(kind) {
+		if strAttr(n, "repo") != repo {
+			continue
+		}
+		rows = append(rows, attrsOf(n, fields...))
+		r.Read = append(r.Read, n.ID)
+	}
+	inspected, partial, scanID, ok := scanOf(g, scanner, repo)
+	if ok {
+		r.Read = append(r.Read, scanID)
+	}
+	r.Inspected, r.Partial = inspected, partial
+	data := map[string]any{"found": rows, "inspected": int64(inspected)}
+	r.Data = data
+	return r, data
+}
+
+func foundShape(elem map[string]*Shape, extra map[string]*Shape) *Shape {
+	fields := map[string]*Shape{"found": List(Obj(elem)), "inspected": Int}
+	for k, v := range extra {
+		fields[k] = v
+	}
+	return Obj(fields)
+}
+
+func registerFiles() {
+	Register(Def{
+		Name: "files.secrets", Scanning: true,
+		Shape: foundShape(map[string]*Shape{
+			"kind": Str, "file": Str, "line": Int, "env_class": Str, "hash": Str, "agent_readable": Bool, "key_id": Str,
+		}, map[string]*Shape{"shared_prod_staging": List(Str)}),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			r, data := repoScan(g, a, "secrets", graph.KindSecretSeen,
+				"kind", "file", "line", "env_class", "hash", "agent_readable", "key_id")
+			data["shared_prod_staging"] = sharedProdStaging(g)
+			return r, nil
+		},
+	})
+	Register(Def{
+		Name: "files.agent_configs", Scanning: true,
+		Shape: foundShape(map[string]*Shape{
+			"tool": Str, "scope": Str, "file": Str, "allowed_commands": List(Str), "denied_commands": List(Str),
+			"deny_read_paths": List(Str), "unguarded_destructive": List(Str),
+			"mcp_servers": List(Obj(map[string]*Shape{"name": Str, "credentials": List(Str)})),
+		}, map[string]*Shape{"shared_credentials": List(Str)}),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			r, data := repoScan(g, a, "agent_configs", graph.KindAgentConfig,
+				"tool", "scope", "file", "allowed_commands", "denied_commands", "deny_read_paths",
+				"unguarded_destructive", "mcp_servers")
+			data["shared_credentials"] = sharedCredentials(data["found"].([]any))
+			return r, nil
+		},
+	})
+	Register(Def{
+		Name: "files.workflows", Scanning: true,
+		Shape: foundShape(map[string]*Shape{
+			"file": Str, "permissions": Str, "unpinned_actions": List(Str), "pull_request_target_checkout": Bool,
+		}, nil),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			r, _ := repoScan(g, a, "workflows", graph.KindWorkflow, "file", "permissions", "unpinned_actions", "pull_request_target_checkout")
+			return r, nil
+		},
+	})
+	Register(Def{
+		Name: "files.terraform", Scanning: true,
+		Shape: foundShape(map[string]*Shape{
+			"name": Str, "file": Str, "public_acl": Bool, "public_policy": Bool, "public_access_block": Bool,
+		}, nil),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			r, _ := repoScan(g, a, "terraform", graph.KindTFBucket, "name", "file", "public_acl", "public_policy", "public_access_block")
+			return r, nil
+		},
+	})
+	for _, name := range []string{"files.json", "files.yaml"} {
+		Register(Def{Name: name, Scanning: true, Args: []string{"path"}, Shape: Any,
+			Fn: func(g graph.Reader, a Args) (Result, error) {
+				id := graph.ID("file:" + a.TargetName() + "/" + a.String("path"))
+				r := Result{Source: "file"}
+				n, ok := g.Get(id)
+				if !ok {
+					r.Data = map[string]any{}
+					return r, nil
+				}
+				r.Inspected = 1
+				r.Read = []graph.ID{id}
+				r.Data = n.Private["content"]
+				return r, nil
+			}})
+	}
+	Register(Def{
+		Name: "semgrep.results", Connector: "semgrep", Scanning: true,
+		Shape: foundShape(map[string]*Shape{"rule": Str, "severity": Str, "file": Str, "line": Int}, nil),
+		Fn: func(g graph.Reader, _ Args) (Result, error) {
+			r := listOf(g, graph.KindSemgrep, "file", "rule", "severity", "file", "line")
+			inspected, partial, id, ok := scanOf(g, "semgrep", "")
+			if ok {
+				r.Read = append(r.Read, id)
+			}
+			r.Inspected, r.Partial = inspected, partial
+			r.Data = map[string]any{"found": r.Data, "inspected": int64(inspected)}
+			return r, nil
+		},
+	})
+}
+
+// sharedProdStaging lists secret hashes seen in both a production and a staging
+// file, across every repo.
+func sharedProdStaging(g graph.Reader) []any {
+	classes := map[string]map[string]bool{}
+	for _, n := range g.Nodes(graph.KindSecretSeen) {
+		h := strAttr(n, "hash")
+		if classes[h] == nil {
+			classes[h] = map[string]bool{}
+		}
+		classes[h][strAttr(n, "env_class")] = true
+	}
+	shared := map[string]bool{}
+	for h, c := range classes {
+		if c["prod"] && c["staging"] {
+			shared[h] = true
+		}
+	}
+	return sortedKeys(shared)
+}
+
+// sharedCredentials lists credentials passed to more than one MCP server.
+func sharedCredentials(configs []any) []any {
+	count := map[string]int{}
+	for _, c := range configs {
+		cfg, _ := c.(map[string]any)
+		servers, _ := cfg["mcp_servers"].([]any)
+		for _, s := range servers {
+			srv, _ := s.(map[string]any)
+			creds, _ := srv["credentials"].([]any)
+			for _, cr := range creds {
+				if v, ok := cr.(string); ok {
+					count[v]++
+				}
+			}
+		}
+	}
+	shared := map[string]bool{}
+	for k, n := range count {
+		if n > 1 {
+			shared[k] = true
+		}
+	}
+	return sortedKeys(shared)
+}
+
+// domainScan builds a scanning fact over nodes of one kind on a verified domain.
+func domainScan(scanner, kind, source string, fields ...string) Func {
+	return func(g graph.Reader, a Args) (Result, error) {
+		domain := a.String("domain")
+		r := Result{Source: source}
+		rows := []any{}
+		for _, n := range g.Nodes(kind) {
+			if strAttr(n, "domain") != domain {
+				continue
+			}
+			rows = append(rows, attrsOf(n, fields...))
+			r.Read = append(r.Read, n.ID)
+		}
+		inspected, partial, id, ok := scanOf(g, scanner, domain)
+		if ok {
+			r.Read = append(r.Read, id)
+		}
+		r.Inspected, r.Partial = inspected, partial
+		r.Data = map[string]any{"found": rows, "inspected": int64(inspected)}
+		return r, nil
+	}
+}
+
+func registerDoors() {
+	Register(Def{Name: "ctlog.hosts", Connector: "ctlog", Scanning: true, Args: []string{"domain"},
+		Shape: foundShape(map[string]*Shape{"host": Str}, nil),
+		Fn:    domainScan("ctlog", graph.KindHost, "api", "host")})
+	Register(Def{Name: "dns.cnames", Connector: "dns", Scanning: true, Args: []string{"domain"},
+		Shape: foundShape(map[string]*Shape{"host": Str, "target": Str, "target_resolves": Bool}, nil),
+		Fn:    domainScan("dns", graph.KindCNAME, "api", "host", "target", "target_resolves")})
+	Register(Def{Name: "web.source_maps", Connector: "web", Scanning: true, Args: []string{"domain"},
+		Shape: foundShape(map[string]*Shape{"host": Str, "bundle": Str, "map_url": Str}, nil),
+		Fn:    domainScan("web_source_maps", graph.KindSourceMap, "api", "host", "bundle", "map_url")})
+	Register(Def{Name: "web.api_docs", Connector: "web", Scanning: true, Args: []string{"domain"},
+		Shape: foundShape(map[string]*Shape{"host": Str, "path": Str, "status": Int}, nil),
+		Fn:    domainScan("web_api_docs", graph.KindAPIDoc, "api", "host", "path", "status")})
+	Register(Def{Name: "dns.records", Connector: "dns", Args: []string{"host"},
+		Shape: Obj(map[string]*Shape{"cname": Str, "resolves": Bool, "txt": List(Str)}),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			id := "dns:" + a.String("host")
+			n, ok := g.Get(graph.ID(id))
+			if !ok {
+				return Result{}, notCollected("dns.records", id)
+			}
+			return Result{Read: []graph.ID{n.ID}, Source: "api", Data: attrsOf(n, "cname", "resolves", "txt")}, nil
+		}})
+	Register(Def{Name: "web.get", Connector: "web", Args: []string{"host", "path"},
+		Shape: Obj(map[string]*Shape{"status": Int, "headers": Any, "head": Str, "tail": Str}),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			id := "web:" + a.String("host") + a.String("path")
+			n, ok := g.Get(graph.ID(id))
+			if !ok {
+				return Result{}, notCollected("web.get", id)
+			}
+			return Result{Read: []graph.ID{n.ID}, Source: "api", Data: attrsOf(n, "status", "headers", "head", "tail")}, nil
+		}})
+}

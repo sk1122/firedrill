@@ -1,0 +1,23 @@
+firedrill: v0
+id: change/no-solo-ship
+safeguard: "Nobody can merge to main and deploy to production alone."
+severity: critical
+for_each: github.repos
+fetch:
+  rules: { fact: github.branch_rules, args: { branch: default } }
+  env:   { fact: github.environment, args: { name: production } }
+  bots:  { fact: github.actions_permissions }
+applies_when: target.protection_available && env.exists
+na_reason: "no production environment in GitHub, or the plan has no branch protection on private repos"
+pass_when:
+  - rules.required_approvals >= 1
+  - rules.bypass != "allowed"
+  - bots.can_approve_pull_requests == false
+  - >-
+    env.reviewers_available
+    ? (env.required_reviewers.size() >= 1 && env.prevent_self_review && !env.admin_bypass)
+    : env.protected_branches_only
+warn_when:
+  - rules.bypass == "unknown"
+fix: "Turn off bypass on main, then add a production reviewer with Prevent self-review, or limit production deploys to protected branches."
+maps_to: [SOC2:CC8.1, ISO27001:A.8.32]

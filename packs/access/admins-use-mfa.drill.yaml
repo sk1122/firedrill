@@ -1,0 +1,12 @@
+firedrill: v0
+id: access/admins-use-mfa
+safeguard: "Every admin has MFA enforced, beyond merely enrolled."
+severity: critical
+fetch:
+  users: { fact: identity.users }
+applies_when: users.size() > 0
+na_reason: "the directory returned no users"
+pass_when:
+  - users.filter(u, (u.is_admin || u.is_delegated_admin) && !u.suspended && !u.mfa_enforced).size() == 0
+fix: "Enforce 2-Step Verification for the organizational unit holding these admins."
+maps_to: [SOC2:CC6.1, ISO27001:A.8.5]

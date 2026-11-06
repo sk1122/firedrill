@@ -1,0 +1,10 @@
+firedrill: v0
+id: doors/no-dangling-dns
+safeguard: "No CNAME points at a name that no longer resolves, the usual start of a subdomain takeover."
+severity: high
+for_each: config.domains
+fetch:
+  cnames: { fact: dns.cnames, args: { domain: target.domain } }
+pass_when:
+  - cnames.found.filter(c, !c.target_resolves).size() == 0
+fix: "Delete the CNAME, or reclaim the target it points to."

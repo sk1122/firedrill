@@ -1,0 +1,10 @@
+firedrill: v0
+id: doors/no-public-source-maps
+safeguard: "Production JavaScript serves no source maps."
+severity: medium
+for_each: config.domains
+fetch:
+  maps: { fact: web.source_maps, args: { domain: target.domain } }
+pass_when:
+  - maps.found.size() == 0
+fix: "Stop publishing .map files in production, or restrict them to internal networks."

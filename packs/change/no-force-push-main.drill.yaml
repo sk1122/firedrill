@@ -1,0 +1,17 @@
+firedrill: v0
+id: change/no-force-push-main
+safeguard: "History on main cannot be rewritten or deleted, by anyone."
+severity: high
+for_each: github.repos
+fetch:
+  rules: { fact: github.branch_rules, args: { branch: default } }
+applies_when: target.protection_available
+na_reason: "the plan has no branch protection on private repos"
+pass_when:
+  - rules.force_push_allowed == false
+  - rules.deletion_allowed == false
+  - rules.bypass != "allowed"
+warn_when:
+  - rules.bypass == "unknown"
+fix: "Block force pushes and deletion on main, and remove bypass."
+maps_to: [SOC2:CC8.1]

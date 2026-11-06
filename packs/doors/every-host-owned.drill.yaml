@@ -1,0 +1,11 @@
+firedrill: v0
+id: doors/every-host-owned
+safeguard: "Every host in the company's public certificates has a named owner."
+severity: medium
+for_each: config.domains
+fetch:
+  hosts: { fact: ctlog.hosts, args: { domain: target.domain } }
+  owned: { fact: config.hosts }
+pass_when:
+  - hosts.found.filter(h, !owned.exists(o, o.host == h.host)).size() == 0
+fix: "Add each host to .firedrill/hosts.yaml with its owner, or shut it down."

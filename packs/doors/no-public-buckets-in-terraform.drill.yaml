@@ -1,0 +1,10 @@
+firedrill: v0
+id: doors/no-public-buckets-in-terraform
+safeguard: "No S3 bucket defined in Terraform is public."
+severity: high
+for_each: repos
+fetch:
+  terraform: { fact: files.terraform }
+pass_when:
+  - terraform.found.all(b, !b.public_acl && !b.public_policy)
+fix: "Remove the public ACL or policy, and add a public access block."

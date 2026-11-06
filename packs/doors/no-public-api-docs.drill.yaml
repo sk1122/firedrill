@@ -1,0 +1,10 @@
+firedrill: v0
+id: doors/no-public-api-docs
+safeguard: "Swagger, OpenAPI and runtime config files are not public in production."
+severity: high
+for_each: config.domains
+fetch:
+  docs: { fact: web.api_docs, args: { domain: target.domain } }
+pass_when:
+  - docs.found.size() == 0
+fix: "Put these paths behind authentication, or remove them from production builds."
