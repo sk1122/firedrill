@@ -16,7 +16,7 @@ brew install sk1122/tap/firedrill
 go install github.com/sk1122/firedrill/cmd/firedrill@latest
 ```
 
-Or download a release binary. Every release lists checksums and an SBOM.
+Or download a release binary. Every release lists checksums and an SBOM. Homebrew installs on macOS.
 
 ## Five minutes to the first failure
 

@@ -1,0 +1,49 @@
+version: 2
+project_name: firedrill
+before:
+  hooks:
+    - go mod tidy
+builds:
+  - id: firedrill
+    main: ./cmd/firedrill
+    binary: firedrill
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+checksum:
+  name_template: checksums.txt
+sboms:
+  - id: gomod
+    documents:
+      - "{{ .ProjectName }}_{{ .Version }}.sbom.json"
+    cmd: cyclonedx-gomod
+    args: ["mod", "-licenses", "-json", "-output", "$document", ".."]
+    artifacts: any
+homebrew_casks:
+  - name: firedrill
+    repository:
+      owner: sk1122
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/sk1122/firedrill
+    description: Your rules, drilled weekly, with proof.
+    license: Apache-2.0
+release:
+  github:
+    owner: sk1122
+    name: firedrill
