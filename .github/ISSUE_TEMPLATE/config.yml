@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Propose or contribute a drill
+    url: https://github.com/sk1122/firedrill-drills
+    about: Drills live in the drill hub, with their test cases.
+  - name: Report a security problem
+    url: https://github.com/sk1122/firedrill/security/advisories/new
+    about: Privately, never in a public issue.

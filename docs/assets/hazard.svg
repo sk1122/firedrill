@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 12" preserveAspectRatio="none" role="presentation">
+  <defs><pattern id="h" width="32" height="12" patternUnits="userSpaceOnUse" patternTransform="skewX(-45)">
+    <rect width="32" height="12" fill="#16161A"/><rect width="16" height="12" fill="#E8A317"/></pattern></defs>
+  <rect width="640" height="12" fill="url(#h)"/>
+</svg>

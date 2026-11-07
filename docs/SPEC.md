@@ -1,6 +1,6 @@
 # Firedrill Spec
 
-Technical copy of the product spec. Choices it leaves open are recorded in [DECISIONS.md](../DECISIONS.md).
+The design of Firedrill: what it does, how it works, and why.
 
 Nov 6, 2026 · @Satyam
 

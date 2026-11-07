@@ -32,3 +32,4 @@ th{color:var(--muted);font-weight:400;font-size:12px;text-transform:uppercase;le
 .v{font-weight:600;white-space:nowrap}.v.pass{color:#3cc986}.v.fail{color:#ff6a5e}.v.na{color:var(--muted)}.v.warn{color:var(--amber)}
 a{color:var(--stock)}
 .foot{color:var(--muted);font-size:13px;margin-top:48px}
+.brand{display:flex;align-items:center;gap:16px}.brand .mark{flex:none}

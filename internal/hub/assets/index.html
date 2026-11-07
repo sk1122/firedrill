@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' role='img' aria-label='Firedrill'%3E %3Cpath d='M64 20h128l32 32v184H32V52z' fill='%23F4F2EA' stroke='%2316161A' stroke-width='8' stroke-linejoin='round'/%3E %3Ccircle cx='128' cy='56' r='13' fill='%2324272C'/%3E%3Ccircle cx='128' cy='56' r='6' fill='%23F4F2EA'/%3E %3Cpath d='M32 92h192v14H32z' fill='%2316161A'/%3E %3Cg fill='%2316161A'%3E %3Crect x='82' y='124' width='22' height='88'/%3E %3Crect x='110' y='124' width='64' height='20'/%3E %3Crect x='110' y='160' width='46' height='18'/%3E %3C/g%3E %3Ccircle cx='190' cy='200' r='15' fill='%23D3261A'/%3E %3C/svg%3E">
 <title>Firedrill Drill Hub</title>
 <meta name="description" content="Open, tested drills for Firedrill: each one checks that a company safeguard actually holds.">
 <style>{{.Fonts}}{{.CSS}}</style>
 </head>
 <body>
 <main>
-<h1>Drill Hub</h1>
+<div class="brand"><svg width="72" height="72" class="mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Firedrill"> <path d="M64 20h128l32 32v184H32V52z" fill="#F4F2EA" stroke="#16161A" stroke-width="8" stroke-linejoin="round"/> <circle cx="128" cy="56" r="13" fill="#24272C"/><circle cx="128" cy="56" r="6" fill="#F4F2EA"/> <path d="M32 92h192v14H32z" fill="#16161A"/> <g fill="#16161A"> <rect x="82" y="124" width="22" height="88"/> <rect x="110" y="124" width="64" height="20"/> <rect x="110" y="160" width="46" height="18"/> </g> <circle cx="190" cy="200" r="15" fill="#D3261A"/> </svg><h1>Drill Hub</h1></div>
 <p class="lede">Open, tested drills for Firedrill. Each drill checks one safeguard against real systems, read-only, and ships passing, failing and not-applicable test cases.</p>
 <p class="meta">{{len .Entries}} drills in {{len .Packs}} packs{{if .Commit}} · hub commit {{.Commit}}{{end}} · built {{.Generated}}</p>
 <div class="hazard"></div>

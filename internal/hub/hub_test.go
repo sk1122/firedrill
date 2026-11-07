@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -151,6 +152,9 @@ func TestDiff(t *testing.T) {
 	}
 }
 
+// netLoad matches anything a browser would fetch over the network.
+var netLoad = regexp.MustCompile(`(?i)(src|href)\s*=\s*["']?https?:|url\(\s*["']?https?:|@import`)
+
 func TestSiteWritesIndexAndPages(t *testing.T) {
 	h, _ := LoadDir(writeHub(t, hubFiles(t)))
 	out := t.TempDir()
@@ -172,7 +176,7 @@ func TestSiteWritesIndexAndPages(t *testing.T) {
 			t.Errorf("page lacks %q", want)
 		}
 	}
-	if strings.Contains(string(idx), "<script") || strings.Contains(string(idx), "http://") || strings.Contains(string(idx), "https://") {
+	if strings.Contains(string(idx), "<script") || netLoad.MatchString(string(idx)) || netLoad.MatchString(string(page)) {
 		t.Error("the site loads no script and nothing from the network")
 	}
 }
