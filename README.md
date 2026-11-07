@@ -76,7 +76,11 @@ Exit codes: `0` by default. `1` when an unwaived critical or high safeguard turn
 | `firedrill list` | Every drill with owner, state, last verdict and waiver |
 | `firedrill explain <drill>` | What it checks, what it saw and why it failed |
 | `firedrill report` | Writes the HTML board |
-| `firedrill validate [file]` | Checks drill files |
+| `firedrill validate [file or folder]` | Checks drill files |
+| `firedrill test [folder]` | Runs each drill's test cases from `<slug>.test.yaml` |
+| `firedrill hub search [words]` | Lists open drills from the drill hub |
+| `firedrill hub add <drill>` | Copies a hub drill into `.firedrill/drills` and records it in `.firedrill/hub.lock` |
+| `firedrill hub update` | Shows what changed in the hub for your drills, asks before replacing, and offers new official drills |
 
 ## Weekly in CI
 
@@ -88,6 +92,10 @@ Copy [docs/firedrill-workflow.yml](docs/firedrill-workflow.yml) to `.github/work
 Each Monday it runs the drills, pushes records to the `firedrill-tags` branch, writes a step summary, and opens one issue per newly open safeguard, assigned to its owner. Protect `firedrill-tags` against force pushes and deletion, and require a reviewer on `main`, so changes to drills and waivers get reviewed. Owners need read access to the repo to be assigned.
 
 CI sees committed files only, and its results say so. Run on a laptop with `--path` and `--include-home` to also read `.env*` files and user-level agent settings.
+
+## The drill hub
+
+[sk1122/firedrill-drills](https://github.com/sk1122/firedrill-drills) holds open drills, each with passing, failing and not-applicable test cases. `hub add` copies a drill into your repo as a file you review and commit; `hub update` shows each change as a diff and asks first, and leaves drills you edited alone. To add your own, see that repo's CONTRIBUTING.
 
 ## Accepting a risk
 
