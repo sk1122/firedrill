@@ -544,3 +544,23 @@ func TestHubInstallUpdateAndRefusals(t *testing.T) {
 		t.Fatal(out)
 	}
 }
+
+func TestConnectLinksEveryGuide(t *testing.T) {
+	for name, file := range guides {
+		if _, err := os.Stat(filepath.Join("..", "..", "docs", "connect", file)); err != nil {
+			t.Errorf("connect %s links to a guide that doesn't exist: %s", name, file)
+		}
+	}
+	for name := range setupNotes {
+		if guides[name] == "" {
+			t.Errorf("connect %s has no guide", name)
+		}
+	}
+	e := newEnv(t)
+	e.vars = append(e.vars, "FIREDRILL_SALT="+strings.Repeat("a", 64))
+	e.mustRun("init", "--yes", "--owner", "@me")
+	out, _ := e.run("connect", "gcp")
+	if !strings.Contains(out, guideBase+"gcp.md") || !strings.Contains(out, "policyanalyzer") {
+		t.Fatalf("connect gcp names the APIs and links its guide:\n%s", out)
+	}
+}

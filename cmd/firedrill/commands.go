@@ -152,6 +152,16 @@ func copyPacks(dest string) (int, error) {
 	return count, hub.WriteLock(filepath.Dir(dest), lock)
 }
 
+// guideBase is where the connector guides are published.
+const guideBase = "https://github.com/sk1122/firedrill/blob/main/docs/connect/"
+
+// guides names each system's guide.
+var guides = map[string]string{
+	"github": "github.md", "gcp": "gcp.md", "google": "google-workspace.md", "aws": "aws.md",
+	"files": "repo-files.md", "hr": "hr.md", "semgrep": "semgrep.md",
+	"dns": "domains.md", "ctlog": "domains.md", "web": "domains.md",
+}
+
 var setupNotes = map[string]string{
 	"github": `GitHub needs read access: Metadata, Administration, Environments and Contents.
 On a laptop the GitHub CLI's login is reused. A gh token acts as whoever is logged in.
@@ -167,7 +177,8 @@ Attach this read policy to each:
   iam:GetAccountAuthorizationDetails, iam:GetAccessKeyLastUsed, iam:ListAccessKeys,
   iam:GenerateCredentialReport, iam:GetCredentialReport`,
 	"gcp": `Google Cloud reads through a reader service account with read roles only, and no key:
-1. Create a service account, for example firedrill-reader, in one project.
+1. Turn on the iam, iamcredentials, cloudresourcemanager and policyanalyzer APIs in one
+   project, and create a service account, for example firedrill-reader, there.
 2. On each project, grant it Viewer, Security Reviewer and Activity Analysis Viewer
    (roles/viewer, roles/iam.securityReviewer, roles/policyanalyzer.activityAnalysisViewer).
 3. Grant yourself Service Account Token Creator on it, then log in as it:
@@ -204,6 +215,9 @@ func connectCmd() *cobra.Command {
 				return fmt.Errorf("unknown system %q. Systems: %s", name, strings.Join(names, ", "))
 			}
 			fmt.Fprintln(out, note)
+			if g := guides[name]; g != "" {
+				fmt.Fprintf(out, "\nStep by step: %s%s\n", guideBase, g)
+			}
 			ctx := cmd.Context()
 			rc, err := prepare(ctx, nil, false)
 			if err != nil {
