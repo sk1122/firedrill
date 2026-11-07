@@ -31,7 +31,7 @@ Every decision below was confirmed before code was written. New decisions found 
 | A6 | Review stops | After milestones 1 and 4 / after every milestone / only at the end | After every milestone | Only at the end, but new decisions are still asked when they come up |
 | A7 | Spec in the repo | Technical sections only | Technical sections only | Technical sections only |
 | A8 | If the name "firedrill" is taken | Decide after the check / pick a backup name now | Decide after the check | Keep "firedrill", no recheck. Checked Nov 2026: free on Homebrew and under sk1122; FourCoreLabs/firedrill exists; AttackIQ mark cancelled |
-| A9 | Minimum Go version | 1.25 / 1.24 | 1.25 | Go 1.25 |
+| A9 | Minimum Go version | 1.25 / 1.24 | 1.25 | Go 1.25, then changed in Nov 2026 to the latest: `go 1.27.0` in go.mod, CI on the latest 1.27.x, on a separate `go-1.27` branch |
 | A10 | Project CI | GitHub Actions / other | GitHub Actions | GitHub Actions |
 | A11 | Install `gh` with Homebrew | Yes / you install it / no | Yes, you log in | Not now. Ask at milestone 5 |
 | A12 | How milestones close with local commits only (the spec says checks pass in CI) | Same checks run locally, CI workflow written and first runs when you push / you push at each milestone | Run locally | Same checks run locally; workflow first runs when you push |
@@ -106,6 +106,37 @@ You asked me to implement everything while you slept, so I could not ask. Each c
 | # | Decision | What I chose | Why |
 | --- | --- | --- | --- |
 | N1 | Reason text for N/A | Optional drill field `na_reason` | The spec's sample N/A messages can't be produced from a CEL condition alone |
+| N2 | CEL library path | `cel.dev/cel-go`, not `github.com/google/cel-go` | The project moved. The old path no longer installs |
+| N3 | Dependency versions | Held at what Go 1.25 allows (A9). Superseded: with Go 1.27 you chose all newest, so `go-github` is v93 | Newer ones needed Go 1.26 |
+| N4 | Extra fact fields | `days_since_login`, `days_since_created`, `days_since_used`, `unguarded_destructive`, `shared_credentials`, `shared_prod_staging`, `unknown_account`, `inspected` | CEL has no easy date maths or joins here, and 90 days stays in the drill file (C14) |
+| N5 | Only the default branch is read | `github.branch_rules` collects `branch: default`. Any other value gives ERROR | All library drills use it. Other branches can come later |
+| N6 | Fact interface | Returns a `Result` struct, not the four values in the spec's sketch | It also needs to carry partial reads and the source |
+| N7 | Extra flag `run --records <dir>` | Where records live, default `.firedrill/local` | CI needs to point at the checked-out `firedrill-tags` branch |
+| N8 | Extra flag `report --summary <file>` | Prints the step summary from a `--json` file | The binary never writes to GitHub, so the workflow pipes it |
+| N9 | Verify-domain record | TXT at `_firedrill.<domain>`, value derived from the salt | No stored state, and it matches on every machine holding the salt |
+| N10 | DNS CNAME lookups | Direct UDP query with `golang.org/x/net/dns/dnsmessage`, falling back to 1.1.1.1 where there is no resolv.conf, as on Windows | Go's standard lookup fails on a CNAME whose target is gone, which is exactly the case to find |
+| N11 | Web redirects | Not followed | A verified host redirecting off-domain would otherwise trip the guard and stop the whole run |
+| N12 | Hosts that do not answer | Not counted as a partial read | Old certificates name dead hosts, which would hold drills on WARN forever |
+| N13 | HTML catch-all sites | A 200 HTML reply to a doc path is not an exposed file, except the Swagger UI and Redoc pages, which match on content | Single-page apps answer every path with their home page |
+| N14 | Terraform files that fail to parse | Skipped, and counted as inspected | A template is not a reason to stop a run. A bucket in one would be missed |
+| N15 | Broken agent settings file | ERROR | Treating it as absent would hide what it says |
+| N16 | Unknown GitHub plan | Protection assumed available, required reviewers assumed not | Never N/A on a guess, and asks only for fixes every plan has |
+| N17 | Workflow permission rule | `read` if top-level is read, or every job declares its own | Matches the spec's "unless a job needs more" |
+| N18 | Skipped or removed targets | A target with history stays listed and open, and writes a tag with SKIP or N/A | Spec's rule that a failure cannot disappear |
+| N19 | Homebrew packaging | Cask, not formula | GoReleaser deprecated formulas. A cask covers macOS, so Linux users use the binary or `go install` |
+| N20 | SBOM scope | Module level, so it lists test-only dependencies such as testcontainers | Overstates rather than misses |
+| N21 | Tag file names | Time to the second, moved forward a second on a clash | Keeps two runs in one second ordered |
+| N22 | Secret-looking evidence fields left alone | Exempt: `id`, `hash`, `key_id`, `read`, `keys`, `credentials`, and the two shared lists | Spec's structured fields |
+| N23 | Local demo preview config | `.claude/launch.json`, excluded from git through `.git/info/exclude` | Only for checking the board |
+| N24 | When the estate is built | At `report` and when syncing Postgres, not at the start of each run as the spec's step 1 says | No v0 drill reads history, so a run doesn't need it. Path drills in v0.1 may change this |
+| N25 | Where JSON comes from | `run --json <file>` only. `report` writes just the board | Spec lists JSON under both. The result only exists at run time |
+
+## Questions for you
+
+| # | Question | Rec | Answer |
+| --- | --- | --- | --- |
+| Q1 | Dogfooding on this repo flagged 19 fake keys in Go test files. Add `*_test.*`, `test/` and `tests/` to the `example` paths? Your list has only `testdata/`, `fixtures/`, `__tests__/`, `*.example`, `*.sample`, `*.template` | Yes, and config can still narrow it | OPEN |
+| Q2 | Should a laptop-only run with no GitHub connection trust that records stay local, as it does now? They go to a gitignored folder | Yes | OPEN |
 
 ## Approved lists (C4 and C9)
 

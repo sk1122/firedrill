@@ -1,0 +1,11 @@
+firedrill: v0
+id: access/no-shared-prod-keys
+safeguard: "Staging and production never share a secret."
+severity: high
+for_each: repos
+fetch:
+  secrets: { fact: files.secrets }
+pass_when:
+  - secrets.found.filter(s, s.hash in secrets.shared_prod_staging).size() == 0
+fix: "Rotate the shared secret and issue a separate one for each environment."
+maps_to: [SOC2:CC6.1]

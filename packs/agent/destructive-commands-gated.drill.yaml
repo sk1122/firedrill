@@ -1,0 +1,12 @@
+firedrill: v0
+id: agent/destructive-commands-gated
+safeguard: "Committed agent settings require approval for destructive commands."
+severity: high
+for_each: repos
+fetch:
+  agents: { fact: files.agent_configs }
+na_reason: "agents run with their defaults; check laptops with --include-home"
+pass_when:
+  - agents.found.all(a, a.unguarded_destructive.size() == 0)
+fix: "Remove destructive commands from the allow list, or move them to the deny list."
+maps_to: [SOC2:CC8.1]

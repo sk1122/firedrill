@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Firedrill Item</title>
+<style>
+{{.Fonts}}
+:root{--stock:#F4F2EA;--red:#D3261A;--green:#0B8A4E;--amber:#E8A317;--grey:#8A877C;--enamel:#24272C;--dim:#3A3E45;--muted:#B9B6AB}
+*{box-sizing:border-box}
+body{margin:0;background:var(--enamel);color:var(--stock);font:400 15px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+main{max-width:900px;margin:0 auto;padding:32px 16px 64px}
+h1{font:700 clamp(30px,6vw,44px)/1.05 "Big Shoulders Stencil",Impact,sans-serif;letter-spacing:.03em;margin:8px 0;overflow-wrap:anywhere}
+.meta{color:var(--muted);font:400 13px/1.5 "IBM Plex Mono",monospace;overflow-wrap:anywhere}
+table{width:100%;border-collapse:collapse;margin-top:18px}
+td,th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--dim);font-size:14px;overflow-wrap:anywhere}
+th{color:var(--muted);font-weight:400;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+td{font-family:"IBM Plex Mono",monospace;font-size:13px}
+a{color:var(--stock)}
+.pass{color:#3cc986}.fail{color:#ff6a5e}.warn,.err{color:var(--amber)}.na,.skip{color:var(--grey)}
+</style>
+</head>
+<body>
+<main>
+<a href="../index.html">Back to the board</a>
+<h1>{{.Item.Name}}</h1>
+<p class="meta">{{.Item.Kind}} · {{.Item.ID}} · last seen {{.Item.Seen}}{{if not .Item.Live}} · gone{{end}}</p>
+{{if .Item.Verdicts}}
+<table><thead><tr><th>Date</th><th>Drill</th><th>Target</th><th>Verdict</th></tr></thead><tbody>
+{{range .Item.Verdicts}}<tr><td>{{.Date}}</td><td>{{.DrillID}}</td><td>{{.Target}}</td><td class="{{.Class}}">{{.Verdict}}</td></tr>{{end}}
+</tbody></table>
+{{else}}<p>No drill has read this item.</p>{{end}}
+</main>
+</body>
+</html>

@@ -1,0 +1,11 @@
+firedrill: v0
+id: change/actions-pinned
+safeguard: "Third-party GitHub Actions are pinned to a commit."
+severity: medium
+for_each: repos
+fetch:
+  workflows: { fact: files.workflows }
+pass_when:
+  - workflows.found.all(w, w.unpinned_actions.size() == 0)
+fix: "Replace each tag or branch reference with the full commit SHA of that action."
+maps_to: [SOC2:CC8.1]

@@ -1,0 +1,15 @@
+firedrill: v0
+id: change/prod-deploy-gated
+safeguard: "Production deploys come only from protected branches, with a reviewer wherever the plan offers one."
+severity: high
+for_each: github.repos
+fetch:
+  env: { fact: github.environment, args: { name: production } }
+applies_when: env.exists
+na_reason: "no production environment in GitHub"
+pass_when:
+  - env.protected_branches_only
+  - >-
+    !env.reviewers_available || (env.required_reviewers.size() >= 1 && !env.admin_bypass)
+fix: "Limit the production environment to protected branches, and add a required reviewer if the plan offers one."
+maps_to: [SOC2:CC8.1, ISO27001:A.8.32]

@@ -114,6 +114,7 @@ A drill is one YAML file that reads like the rule it tests. Anyone who can read 
 | `for_each` | no | Run once per target, such as every repo in the config. Each target is available to conditions as `target` |
 | `fetch` | yes | Named facts, each with its arguments |
 | `applies_when` | no | A CEL condition. When false, the verdict is N/A with the reason |
+| `na_reason` | no | The words printed when the verdict is N/A |
 | `pass_when` | yes | CEL conditions over the facts. All must hold |
 | `warn_when` | no | CEL conditions that turn a PASS into WARN |
 | `fix` | no | What to change when it fails |
@@ -173,8 +174,8 @@ Connectors write everything they see into one graph (see Architecture), and each
 | `github.branch_rules(branch)` | Effective rules from branch protection and rulesets merged: `required_approvals`, `dismiss_stale`, `code_owner_review`, `bypass` (`none`, `allowed`, `unknown`), `bypass_source` (`api`, `admin_export`), `force_push_allowed`, `deletion_allowed` | GitHub |
 | `github.environment(name)` | `exists`, `reviewers_available`, `required_reviewers`, `prevent_self_review`, `admin_bypass`, `protected_branches_only` | GitHub |
 | `github.actions_permissions` | `can_approve_pull_requests`, `default_token_permission` | GitHub |
-| `identity.users` | `email`, `suspended`, `is_admin`, `is_delegated_admin`, `mfa_enrolled`, `mfa_enforced`, `last_login` | Google Workspace (Okta in v0.1, same fields) |
-| `aws.principals` | IAM users and roles in every connected account: `account`, `kind`, `name`, `last_used`, `keys`, `is_admin`, `destructive_actions`, `excluded` (AWS-reserved SSO roles and config-listed break-glass roles) | AWS |
+| `identity.users` | `email`, `suspended`, `is_admin`, `is_delegated_admin`, `mfa_enrolled`, `mfa_enforced`, `last_login`, `days_since_login`, `days_since_created` | Google Workspace (Okta in v0.1, same fields) |
+| `aws.principals` | IAM users and roles in every connected account: `account`, `kind`, `name`, `last_used`, `keys`, `is_admin`, `destructive_actions`, `excluded` (AWS-reserved SSO roles and config-listed break-glass roles), `days_since_used`, `days_since_created` | AWS |
 | `aws.agent_keys` | Every AWS access key ID found in agent-readable files or agent configs, joined to its owner: `key_id`, `files`, `agents`, `account` (or `unknown_account` when the key belongs to an account that is not connected), `user`, `is_admin`, `destructive_actions` | AWS |
 | `hr.leavers` | `email`, `leave_date` | HR CSV |
 
@@ -182,8 +183,8 @@ Connectors write everything they see into one graph (see Architecture), and each
 
 | Fact | Returns | `inspected` counts | Connector |
 | --- | --- | --- | --- |
-| `files.secrets` | `found`: each secret with `kind`, `file`, `line`, `env_class` (`prod`, `staging`, `example`, `unknown`), `hash`, `agent_readable`, and `key_id` for AWS keys (an identifier, never the secret) | Text files scanned | Repo files |
-| `files.agent_configs` | `found`: each config with `tool`, `scope` (repo or user), `allowed_commands`, `denied_commands`, `deny_read_paths`, `mcp_servers` and the secrets or variable names passed to each | Agent config files found | Repo files |
+| `files.secrets` | `found`: each secret with `kind`, `file`, `line`, `env_class` (`prod`, `staging`, `example`, `unknown`), `hash`, `agent_readable`, and `key_id` for AWS keys (an identifier, never the secret). Also `shared_prod_staging`, the hashes seen in both | Text files scanned | Repo files |
+| `files.agent_configs` | `found`: each config with `tool`, `scope` (repo or user), `allowed_commands`, `denied_commands`, `deny_read_paths`, `mcp_servers` and the secrets or variable names passed to each, `unguarded_destructive`. Also `shared_credentials`, those given to more than one server | Agent config files found | Repo files |
 | `files.workflows` | `found`: each workflow with `file`, `permissions`, `unpinned_actions`, `pull_request_target_checkout` | Workflow files read | Repo files |
 | `files.terraform` | `found`: each S3 bucket with `public_acl`, `public_policy`, `public_access_block` | `.tf` files read | Repo files |
 | `files.json(path)`, `files.yaml(path)` | The parsed content of one JSON or YAML file, for rules no built-in fact covers | 1 if the file exists | Repo files |
@@ -295,13 +296,13 @@ retired: []
 | --- | --- |
 | `firedrill init` | Creates `.firedrill/`, reads the git remote, asks which repos and systems to cover and who the default owner is, generates the secret salt, copies the starter packs. `--yes` skips questions |
 | `firedrill connect <system>` | Checks access to GitHub, Google, AWS or a keyless source and prints the exact permissions and setup steps |
-| `firedrill run` | Runs every drill. Flags: `--drill`, `--pack`, `--path` (local checkouts to read), `--dry-run`, `--json <file>`, `--include-home`, `--fail-on open` or `--fail-on any`, `--public-ok` |
+| `firedrill run` | Runs every drill. Flags: `--drill`, `--pack`, `--path` (local checkouts to read), `--dry-run`, `--json <file>`, `--include-home`, `--fail-on open` or `--fail-on any`, `--public-ok`, `--records <dir>` |
 | `firedrill verify <drill>` | Reruns one drill and reports whether its safeguard is now closed |
 | `firedrill verify-domain <domain>` | Issues a DNS TXT value and confirms it, so web checks may reach hosts under that domain |
 | `firedrill export rulesets` | Run by a repo admin: writes the ruleset bypass lists to `.firedrill/evidence/rulesets.json` |
 | `firedrill list` | Every drill with owner, state, last verdict and waiver |
 | `firedrill explain <drill>` | What the drill checks, the data it saw and why it failed, from a template |
-| `firedrill report` | Writes the HTML board and JSON |
+| `firedrill report` | Writes the HTML board. `--summary <file>` prints the step summary from a `--json` result |
 | `firedrill validate [file]` | Checks drill files against the format and the list of facts |
 
 **Workflow 1: the first five minutes.** `init`, `connect github`, `run`. If the GitHub CLI is logged in, `connect github` reuses its token, so there is nothing to create. With GitHub alone, 11 of the 20 drills run. The rest appear as one line: *9 drills waiting: connect google (about 10 minutes, needs a super admin), connect aws (about 2 minutes), verify-domain acme.com (one DNS record), an HR leavers CSV, a Semgrep results file.*
@@ -478,11 +479,11 @@ type Writer interface {
 
 // A fact is a named, tested query. It returns data, how many sources it
 // inspected, and the node IDs it read; those IDs go into the tag.
-type FactFunc func(g graph.Reader, args Args) (data any, inspected int, read []graph.ID, err error)
+type Func func(g graph.Reader, a Args) (Result, error) // Result holds Data, Inspected, Read, Partial and Source
 
 func init() {
     connector.Register(github.New())
-    facts.Register("github.environment", github.EnvironmentFact)
+    // Facts are registered in internal/facts, one tested query each.
 }
 ```
 
@@ -494,7 +495,7 @@ Every dependency is pure Go, so releases build with `CGO_ENABLED=0` as one stati
 
 | Need | Choice |
 | --- | --- |
-| Conditions | `cel-go` |
+| Conditions | `cel.dev/cel-go` |
 | YAML with line numbers | `yaml.v3` |
 | Terraform | `hashicorp/hcl/v2` |
 | GitHub REST | `go-github` |
@@ -528,8 +529,8 @@ Firedrill reads files and runs nothing: no build step, no script, no package ins
 | --- | --- |
 | `cmd/firedrill` | CLI, flags, terminal output |
 | `connector/` | The interface, `Base`, the registry |
-| `connectors/github`, `google`, `aws`, `files`, `hrcsv`, `semgrep`, `dns`, `ctlog`, `web` | One package per connector |
-| `internal/graph` | Node and edge model, stable IDs, the run graph, snapshots, the estate merge |
+| `connectors/github`, `google`, `aws`, `files`, `hrcsv`, `semgrep`, `dns`, `ctlog`, `web`, `configsrc` | One package per connector |
+| `internal/graph` | Node and edge model, stable IDs, the run graph, snapshots, the estate merge; `internal/graph/pg` for optional Postgres |
 | `internal/facts` | One tested query per fact |
 | `internal/drill` | Format, validation, CEL environment |
 | `internal/run` | Planner, collect scheduler, linking, verdicts, safeguard state, waivers |

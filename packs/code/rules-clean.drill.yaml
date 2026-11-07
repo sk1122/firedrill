@@ -1,0 +1,9 @@
+firedrill: v0
+id: code/rules-clean
+safeguard: "The team's own Semgrep rules report no error-level findings."
+severity: high
+fetch:
+  semgrep: { fact: semgrep.results }
+pass_when:
+  - semgrep.found.filter(f, f.severity == "ERROR").size() == 0
+fix: "Fix or suppress each finding in the code."

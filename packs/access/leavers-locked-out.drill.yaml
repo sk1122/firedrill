@@ -1,0 +1,13 @@
+firedrill: v0
+id: access/leavers-locked-out
+safeguard: "People who left have no active account."
+severity: critical
+fetch:
+  leavers: { fact: hr.leavers }
+  users:   { fact: identity.users }
+applies_when: leavers.size() > 0
+na_reason: "no leave dates have passed in the HR file"
+pass_when:
+  - users.filter(u, !u.suspended && leavers.exists(l, l.email == u.email)).size() == 0
+fix: "Suspend each account listed in the evidence, then rerun."
+maps_to: [SOC2:CC6.2, ISO27001:A.5.18]

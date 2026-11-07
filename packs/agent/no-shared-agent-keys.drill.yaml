@@ -1,0 +1,12 @@
+firedrill: v0
+id: agent/no-shared-agent-keys
+safeguard: "Each agent and MCP server has its own credential."
+severity: medium
+for_each: repos
+fetch:
+  agents: { fact: files.agent_configs }
+na_reason: "agents run with their defaults; check laptops with --include-home"
+pass_when:
+  - agents.shared_credentials.size() == 0
+fix: "Issue a separate credential for each MCP server."
+maps_to: [SOC2:CC6.1]

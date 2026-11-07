@@ -1,0 +1,12 @@
+firedrill: v0
+id: change/workflow-tokens-read-only
+safeguard: "Every workflow declares read-only token permissions unless a job needs more, and no pull_request_target job checks out pull request code."
+severity: high
+for_each: repos
+fetch:
+  workflows: { fact: files.workflows }
+pass_when:
+  - workflows.found.all(w, w.permissions == "read")
+  - workflows.found.all(w, !w.pull_request_target_checkout)
+fix: "Add a top-level read-only permissions block, grant more only on the job that needs it, and do not check out pull request code in pull_request_target jobs."
+maps_to: [SOC2:CC8.1]

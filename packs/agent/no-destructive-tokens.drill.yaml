@@ -1,0 +1,14 @@
+firedrill: v0
+id: agent/no-destructive-tokens
+safeguard: "AWS keys within an agent's reach cannot delete or run as admin."
+severity: critical
+fetch:
+  keys: { fact: aws.agent_keys }
+applies_when: keys.size() > 0
+na_reason: "no AWS access key was found in an agent-readable file"
+pass_when:
+  - keys.filter(k, k.is_admin || k.destructive_actions.size() > 0).size() == 0
+warn_when:
+  - keys.exists(k, k.unknown_account)
+fix: "Rotate the key, remove it from the file, and give the agent a role limited to read actions."
+maps_to: [SOC2:CC6.3]

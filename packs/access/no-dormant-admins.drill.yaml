@@ -1,0 +1,18 @@
+firedrill: v0
+id: access/no-dormant-admins
+safeguard: "No admin user or role unused for 90 days, apart from excluded break-glass roles."
+severity: high
+fetch:
+  users:      { fact: identity.users }
+  principals: { fact: aws.principals }
+applies_when: users.size() > 0 || principals.size() > 0
+na_reason: "no users or principals were returned"
+pass_when:
+  - >-
+    users.filter(u, (u.is_admin || u.is_delegated_admin) && !u.suspended &&
+    (u.days_since_login > 90 || (u.days_since_login < 0 && u.days_since_created > 90))).size() == 0
+  - >-
+    principals.filter(p, p.is_admin && !p.excluded &&
+    (p.days_since_used > 90 || (p.days_since_used < 0 && p.days_since_created > 90))).size() == 0
+fix: "Remove admin rights from these accounts, or list a real break-glass role under aws.break_glass."
+maps_to: [SOC2:CC6.3, ISO27001:A.5.18]

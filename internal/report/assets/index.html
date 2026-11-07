@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Firedrill Board</title>
+<style>
+{{.Fonts}}
+:root{--stock:#F4F2EA;--ink:#16161A;--red:#D3261A;--green:#0B8A4E;--amber:#E8A317;--grey:#8A877C;--enamel:#24272C;--dim:#3A3E45;--muted:#B9B6AB}
+*{box-sizing:border-box}
+body{margin:0;background:var(--enamel);color:var(--stock);font:400 15px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:32px 16px 64px}
+h1,h2{font-family:"Big Shoulders Stencil",Impact,sans-serif;font-weight:700;letter-spacing:.03em;margin:0;text-transform:uppercase}
+h1{font-size:clamp(44px,8vw,72px);line-height:1}
+h2{font-size:30px;margin:40px 0 14px}
+.meta{color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:13px;margin-top:6px}
+.hazard{height:12px;margin:22px 0 26px;background:repeating-linear-gradient(135deg,var(--amber) 0 16px,var(--ink) 16px 32px)}
+.counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:10px}
+.count{border:1px solid var(--dim);padding:10px 12px}
+.count b{display:block;font:700 34px/1 "Big Shoulders Stencil",Impact,sans-serif}
+.count span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+.count.alert b{color:var(--red)}
+.panel{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:12px}
+.tag{background:var(--stock);color:var(--ink);padding:14px 14px 12px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.head{display:flex;align-items:center;gap:10px;min-width:0}
+.lamp{flex:none;width:22px;height:22px;border-radius:50%;background:#15171a;box-shadow:inset 0 0 0 2px #0006}
+.lamp.pass{background:var(--green);box-shadow:0 0 10px var(--green)}
+.lamp.fail{background:var(--red);box-shadow:0 0 12px var(--red)}
+.lamp.warn{background:var(--amber);box-shadow:0 0 10px var(--amber)}
+.lamp.na{background:var(--grey)}
+.lamp.skip{background:#15171a}
+.lamp.err{background:transparent;box-shadow:inset 0 0 0 3px var(--amber)}
+@media (prefers-reduced-motion:no-preference){.lamp{animation:light .5s ease-out}}
+@keyframes light{from{filter:brightness(.25)}to{filter:brightness(1)}}
+.id{font:400 13px/1.3 "IBM Plex Mono",monospace;overflow-wrap:anywhere;min-width:0}
+.stamp{margin-left:auto;font-weight:600;font-size:12px;letter-spacing:.05em;white-space:nowrap}
+.stamp.fail{color:var(--red)}
+.rule{margin:0;font-size:14px;line-height:1.4}
+.info{margin:0;font:400 12px/1.5 "IBM Plex Mono",monospace;color:#44434a;overflow-wrap:anywhere}
+.reason{overflow-wrap:anywhere}
+.runs{display:flex;gap:4px;margin-top:auto;padding-top:4px}
+.run{width:14px;height:14px;border:1px solid #16161a55;background:#d9d6cb}
+.run.pass{background:var(--green)}.run.fail{background:var(--red)}.run.warn{background:var(--amber)}.run.na{background:var(--grey)}.run.skip{background:#55565b}.run.err{background:var(--stock);box-shadow:inset 0 0 0 2px var(--amber)}
+.flag{font-size:12px;font-weight:600}
+table{width:100%;border-collapse:collapse}
+td,th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--dim);font-size:14px;overflow-wrap:anywhere}
+th{color:var(--muted);font-weight:400;font-size:12px;text-transform:uppercase;letter-spacing:.06em;overflow-wrap:normal}
+a{color:var(--stock)}
+td.mono{font-family:"IBM Plex Mono",monospace;font-size:13px}
+.empty{color:var(--muted)}
+.att{font-weight:600}.att.fail{color:#ff6a5e}.att.pass{color:#3cc986}.att.warn{color:var(--amber)}
+</style>
+</head>
+<body>
+<main>
+<h1>Firedrill</h1>
+<p class="meta">Board generated {{.Generated}}</p>
+<div class="hazard"></div>
+<section class="counts" aria-label="Summary">
+<div class="count{{if .Counts.Open}} alert{{end}}"><b>{{.Counts.Open}}</b><span>Open</span></div>
+<div class="count"><b>{{.Counts.Closed}}</b><span>Closed</span></div>
+<div class="count"><b>{{.Counts.Unknown}}</b><span>Unknown</span></div>
+<div class="count"><b>{{.Counts.Warn}}</b><span>Warn</span></div>
+<div class="count"><b>{{.Counts.NA}}</b><span>N/A</span></div>
+<div class="count"><b>{{.Counts.Skip}}</b><span>Skip</span></div>
+<div class="count"><b>{{.Counts.Error}}</b><span>Error</span></div>
+</section>
+<h2>Needs attention</h2>
+{{if .Attention}}<table><thead><tr><th>Change</th><th>Drill</th><th>Target</th></tr></thead><tbody>
+{{range .Attention}}<tr><td class="att {{.Class}}">{{.Kind}}</td><td class="mono">{{.DrillID}}</td><td class="mono">{{if .Target}}{{.Target}}{{else}}global{{end}}</td></tr>{{end}}
+</tbody></table>{{else}}<p class="empty">Nothing changed in the latest run.</p>{{end}}
+{{range .Packs}}
+<h2>{{.Name}}</h2>
+<section class="panel">
+{{range .Safeguards}}
+<article class="tag">
+<div class="head"><span class="lamp {{.Lamp}}" role="img" aria-label="{{.Label}}"></span><span class="id">{{.DrillID}}</span><span class="stamp {{.Lamp}}">{{.Label}}</span></div>
+{{if .Rule}}<p class="rule">{{.Rule}}</p>{{end}}
+<p class="info">{{if .Target}}{{.Target}} · {{end}}{{.Severity}}{{if .Owner}} · {{.Owner}}{{else}} · no owner{{end}}</p>
+{{if .Reason}}<p class="info reason">{{.Reason}}</p>{{end}}
+{{if .Unverified}}<p class="info flag">Latest verdict: {{.Verdict}}. Unverified this run.</p>{{end}}
+{{if .Waived}}<p class="info flag">Waived.</p>{{end}}
+{{if .Chain}}<p class="info flag">{{.Chain}}</p>{{end}}
+<div class="runs" aria-label="Last runs">{{range .Runs}}<span class="run {{.Class}}" title="{{.Date}} {{.Verdict}}"></span>{{end}}</div>
+</article>
+{{end}}
+</section>
+{{else}}
+<p class="empty">No runs yet. Run firedrill run.</p>
+{{end}}
+<h2>No drill touched these</h2>
+{{if .Untouched}}<table><thead><tr><th>Item</th><th>Kind</th><th>Last seen</th></tr></thead><tbody>
+{{range .Untouched}}<tr><td class="mono"><a href="items/{{.Slug}}.html">{{.Name}}</a></td><td>{{.Kind}}</td><td class="mono">{{.Seen}}</td></tr>{{end}}
+</tbody></table>{{else}}<p class="empty">Every item was read by a drill.</p>{{end}}
+<h2>No owner</h2>
+{{if .Unowned}}<table><thead><tr><th>Item</th><th>Kind</th><th>Last seen</th></tr></thead><tbody>
+{{range .Unowned}}<tr><td class="mono"><a href="items/{{.Slug}}.html">{{.Name}}</a></td><td>{{.Kind}}</td><td class="mono">{{.Seen}}</td></tr>{{end}}
+</tbody></table>{{else}}<p class="empty">Every repo, host and admin account has an owner.</p>{{end}}
+<h2>All items</h2>
+{{if .Items}}<table><thead><tr><th>Item</th><th>Kind</th><th>Verdicts</th><th>Status</th></tr></thead><tbody>
+{{range .Items}}<tr><td class="mono"><a href="items/{{.Slug}}.html">{{.Name}}</a></td><td>{{.Kind}}</td><td class="mono">{{len .Verdicts}}</td><td>{{if .Live}}Current{{else}}Gone{{end}}</td></tr>{{end}}
+</tbody></table>{{else}}<p class="empty">No items recorded yet.</p>{{end}}
+</main>
+</body>
+</html>
