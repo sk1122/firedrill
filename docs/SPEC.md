@@ -44,10 +44,8 @@ AI made claims nearly free: code, approvals, "done" statuses, compliance answers
 | --- | --- | --- | --- |
 | [PocketOS, Apr 2026](https://www.tomshardware.com/tech-industry/artificial-intelligence/claude-powered-ai-coding-agent-deletes-entire-company-database-in-9-seconds-backups-zapped-after-cursor-tool-powered-by-anthropics-claude-goes-rogue) | The agent works in dev | A coding agent found a Railway token in an unrelated file. The token had full account access, and production and backups went in 9 seconds. | `agent/no-prod-secrets-in-agent-reach` |
 | [South Korean banks, Sep to Oct 2026](https://labs.cloudsecurityalliance.org/research/csa-research-note-artex-agentic-pentest-bank-breaches-202610/) | Exposed services are looked after | Attackers reportedly used an AI attack agent on forgotten inquiry and employee portals. About 68,000 people's data was exposed. | `doors/every-host-owned`, `doors/no-public-api-docs` |
-| [Indian lenders, Sep to Nov 2026](https://www.cert-in.org.in/s2cMainServlet?pageid=PUBVLNOTES02&VLCODE=CIAD-2026-0058) | Remediated after the first advisory | Firms that patched were hit again. Fixes were incomplete. | The fix loop: a safeguard closes only on a passing run |
-| [Faros, 2026](https://faros.ai/blog/ai-acceleration-whiplash-takeaways) | Every change is reviewed | Merges with no review rose 31.3%. | `change/human-review-required` |
 
-Each incident is cited from public reporting; before the spec goes public, every figure is checked against a primary source.
+Each incident is cited from public reporting.
 
 Existing tools check pieces. OpenSSF Scorecard and legitify score GitHub settings, Prowler and Steampipe query cloud configuration, Vanta maps settings to compliance frameworks. None of them starts from a company's own written rules, keeps a record of each rule over time, or checks what AI agents can reach. Firedrill does that, in the open, with a format anyone can extend.
 
