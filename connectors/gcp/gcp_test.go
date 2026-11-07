@@ -51,6 +51,7 @@ func newConn(srv *httptest.Server) *Connector {
 type fake struct {
 	t            *testing.T
 	analyzerCode int
+	logs403      bool
 	calls        []string
 }
 
@@ -106,6 +107,12 @@ func (f *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			{"name":"logs","iamConfiguration":{"publicAccessPrevention":"enforced"}}]}`)
 	case host == storageHost && r.Method == http.MethodGet && r.URL.Path == "/storage/v1/b/site/iam":
 		_, _ = io.WriteString(w, `{"bindings":[{"role":"roles/storage.objectViewer","members":["allUsers","projectViewer:acme-prod"]}]}`)
+	case host == crmHost && r.Method == http.MethodPost && r.URL.Path == "/v3/projects/acme-dev:getIamPolicy":
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"error":{"code":403,"message":"denied","status":"PERMISSION_DENIED"}}`)
+	case host == storageHost && r.Method == http.MethodGet && r.URL.Path == "/storage/v1/b/logs/iam" && f.logs403:
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"error":{"code":403,"message":"no storage.buckets.getIamPolicy"}}`)
 	case host == storageHost && r.Method == http.MethodGet && r.URL.Path == "/storage/v1/b/logs/iam":
 		_, _ = io.WriteString(w, `{"bindings":[{"role":"roles/storage.objectViewer","members":["projectViewer:acme-prod"]}]}`)
 	default:
@@ -340,6 +347,43 @@ func TestUnexpectedImpersonationURLIsRefused(t *testing.T) {
 		return []byte(strings.Replace(impCreds, "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/reader@acme-ops.iam.gserviceaccount.com:generateAccessToken", "https://evil.example/steal", 1)), nil
 	}
 	if err := c.Collect(context.Background(), c.Collections()[0], scope("acme-prod"), graph.New()); err == nil || !strings.Contains(err.Error(), "unexpected impersonation URL") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestUnreadableBucketIsPartial(t *testing.T) {
+	g := collect(t, &fake{t: t, logs403: true}, scope("acme-prod"))
+	logs, _ := g.Get("gcp:bucket/logs")
+	if logs.Attrs["policy_readable"] != false {
+		t.Fatalf("logs: %+v", logs.Attrs)
+	}
+	site, _ := g.Get("gcp:bucket/site")
+	if site.Attrs["policy_readable"] != true {
+		t.Fatalf("site: %+v", site.Attrs)
+	}
+	proj, _ := g.Get("gcp:project/acme-prod")
+	if p := proj.Attrs["partial"].([]any); len(p) != 1 || !strings.Contains(p[0].(string), "logs") {
+		t.Fatalf("partial: %v", p)
+	}
+}
+
+func TestOneUnreadableProjectDoesNotStopTheOthers(t *testing.T) {
+	g := collect(t, &fake{t: t}, scope("acme-dev", "acme-prod"))
+	dev, ok := g.Get("gcp:project/acme-dev")
+	if !ok || !strings.Contains(dev.Attrs["error"].(string), "403") {
+		t.Fatalf("dev: %+v", dev)
+	}
+	if _, ok := g.Get("gcp:bucket/site"); !ok {
+		t.Fatal("acme-prod must still be read")
+	}
+}
+
+func TestEveryProjectUnreadableFails(t *testing.T) {
+	srv := httptest.NewServer(&fake{t: t})
+	defer srv.Close()
+	c := newConn(srv)
+	err := c.Collect(context.Background(), c.Collections()[0], scope("acme-dev"), graph.New())
+	if err == nil || !strings.Contains(err.Error(), "acme-dev") {
 		t.Fatalf("got %v", err)
 	}
 }

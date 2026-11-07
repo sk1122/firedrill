@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"fmt"
 	"maps"
 	"sort"
 	"strings"
@@ -226,9 +227,15 @@ func registerAWS() {
 	})
 }
 
-// gcpRows lists one target project's nodes of a kind.
-func gcpRows(g graph.Reader, kind, project string, fields ...string) ([]graph.Node, Result) {
+// gcpRows lists one target project's nodes of a kind. A project that could not
+// be read is an error, so its drills give ERROR rather than a clean result.
+func gcpRows(g graph.Reader, kind, project string, fields ...string) ([]graph.Node, Result, error) {
 	r := Result{Source: "api"}
+	if p, ok := g.Get(graph.ID("gcp:project/" + project)); ok {
+		if msg := strAttr(p, "error"); msg != "" {
+			return nil, r, fmt.Errorf("could not read %s: %s", project, msg)
+		}
+	}
 	var nodes []graph.Node
 	for _, n := range g.Nodes(kind) {
 		if strAttr(n, "project") != project {
@@ -237,7 +244,7 @@ func gcpRows(g graph.Reader, kind, project string, fields ...string) ([]graph.No
 		nodes = append(nodes, n)
 		r.Read = append(r.Read, n.ID)
 	}
-	return nodes, r
+	return nodes, r, nil
 }
 
 func registerGCP() {
@@ -255,7 +262,10 @@ func registerGCP() {
 			"google_managed": Bool, "default_account": Bool, "conditional": Bool,
 		})),
 		Fn: func(g graph.Reader, a Args) (Result, error) {
-			nodes, r := gcpRows(g, graph.KindGCPBinding, a.TargetName())
+			nodes, r, err := gcpRows(g, graph.KindGCPBinding, a.TargetName())
+			if err != nil {
+				return Result{}, err
+			}
 			rows := []any{}
 			for _, n := range nodes {
 				rows = append(rows, attrsOf(n, "role", "member_type", "member_domain", "member",
@@ -271,10 +281,16 @@ func registerGCP() {
 			"name": Str, "public_grants": List(Str), "public_access_prevention": Str, "uniform_access": Bool,
 		})),
 		Fn: func(g graph.Reader, a Args) (Result, error) {
-			nodes, r := gcpRows(g, graph.KindGCPBucket, a.TargetName())
+			nodes, r, err := gcpRows(g, graph.KindGCPBucket, a.TargetName())
+			if err != nil {
+				return Result{}, err
+			}
 			rows := []any{}
 			for _, n := range nodes {
 				rows = append(rows, attrsOf(n, "name", "public_grants", "public_access_prevention", "uniform_access"))
+				if readable, ok := n.Attrs["policy_readable"].(bool); ok && !readable {
+					r.Partial = "the access policy of some buckets could not be read"
+				}
 			}
 			r.Data = rows
 			return r, nil
@@ -287,7 +303,10 @@ func registerGCP() {
 			"days_since_created": Int, "days_since_used": Int,
 		})),
 		Fn: func(g graph.Reader, a Args) (Result, error) {
-			nodes, r := gcpRows(g, graph.KindGCPKey, a.TargetName())
+			nodes, r, err := gcpRows(g, graph.KindGCPKey, a.TargetName())
+			if err != nil {
+				return Result{}, err
+			}
 			rows := []any{}
 			for _, n := range nodes {
 				row := attrsOf(n, "service_account", "key_id", "disabled", "last_use_known")

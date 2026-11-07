@@ -258,10 +258,22 @@ func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s conne
 		return err
 	}
 	a := &api{cl: cl, quota: quota}
+	// One project that cannot be read gives ERROR on that project's drills;
+	// the others still run. Only when none can be read does the connector fail.
+	var errs []error
 	for _, p := range s.Project.Config.GCP.Projects {
 		if err := c.collectProject(ctx, a, p, s, out); err != nil {
-			return fmt.Errorf("gcp project %s: %w", p, err)
+			if errors.Is(err, connector.ErrBlocked) {
+				return err
+			}
+			errs = append(errs, fmt.Errorf("gcp project %s: %w", p, err))
+			out.Node(graph.Node{ID: graph.ID("gcp:project/" + p), Kind: graph.KindGCPProject, Source: "gcp", SeenAt: s.Now,
+				Attrs: map[string]any{"name": p, "number": "", "member_domains": memberDomains(s), "partial": []any{},
+					"error": err.Error()}})
 		}
+	}
+	if len(errs) == len(s.Project.Config.GCP.Projects) {
+		return errors.Join(errs...)
 	}
 	return nil
 }
@@ -316,7 +328,7 @@ func (c *Connector) collectProject(ctx context.Context, a *api, project string, 
 	if err := c.collectKeys(ctx, a, project, s, out, &partial); err != nil {
 		return err
 	}
-	if err := c.collectBuckets(ctx, a, project, s, out); err != nil {
+	if err := c.collectBuckets(ctx, a, project, s, out, &partial); err != nil {
 		return err
 	}
 	out.Node(graph.Node{ID: projID, Kind: graph.KindGCPProject, Source: "gcp", SeenAt: s.Now, Attrs: map[string]any{
@@ -476,7 +488,7 @@ func (c *Connector) keyLastUse(ctx context.Context, a *api, project string) (map
 	}
 }
 
-func (c *Connector) collectBuckets(ctx context.Context, a *api, project string, s connector.Scope, out graph.Writer) error {
+func (c *Connector) collectBuckets(ctx context.Context, a *api, project string, s connector.Scope, out graph.Writer, partial *[]any) error {
 	tok := ""
 	for {
 		var page struct {
@@ -505,8 +517,15 @@ func (c *Connector) collectBuckets(ctx context.Context, a *api, project string, 
 					Members []string `json:"members"`
 				} `json:"bindings"`
 			}
+			readable := true
 			if err := a.do(ctx, http.MethodGet, "https://"+storageHost+"/storage/v1/b/"+url.PathEscape(b.Name)+"/iam", nil, &pol); err != nil {
-				return fmt.Errorf("read the IAM policy of bucket %s: %w", b.Name, err)
+				var ae *apiError
+				if !errors.As(err, &ae) || (ae.Status != http.StatusForbidden && ae.Status != http.StatusNotFound) {
+					return fmt.Errorf("read the IAM policy of bucket %s: %w", b.Name, err)
+				}
+				// One bucket we may not read makes the result partial, not a failure.
+				readable = false
+				*partial = append(*partial, "bucket "+b.Name+": access policy not readable")
 			}
 			public := []any{}
 			for _, bind := range pol.Bindings {
@@ -524,6 +543,7 @@ func (c *Connector) collectBuckets(ctx context.Context, a *api, project string, 
 				Attrs: map[string]any{
 					"project": project, "name": b.Name, "public_grants": public,
 					"public_access_prevention": pap, "uniform_access": b.IAMConfig.Uniform.Enabled,
+					"policy_readable": readable,
 				}})
 		}
 		if page.Next == "" {

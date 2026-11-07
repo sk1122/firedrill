@@ -569,6 +569,23 @@ func TestFailReasonNamesPlainListItems(t *testing.T) {
 	}
 }
 
+func TestGCPPartialAndUnreadableProjects(t *testing.T) {
+	all := map[string]bool{"gcp": true}
+	g := graph.New()
+	gcpProject(g)
+	gcpBucket(g, "logs", []any{}, "enforced")
+	node(g, "gcp:bucket/hidden", graph.KindGCPBucket, map[string]any{"project": "acme-prod", "name": "hidden",
+		"public_grants": []any{}, "public_access_prevention": "enforced", "uniform_access": true, "policy_readable": false})
+	if got := Decide(loadDrill(t, "gcp/no-public-buckets"), g, Options{Now: testNow, Available: all}); got[0].Verdict != tag.Warn {
+		t.Fatalf("an unreadable bucket gives WARN, got %s %s", got[0].Verdict, got[0].Reason)
+	}
+	g = graph.New()
+	node(g, "gcp:project/acme-prod", graph.KindGCPProject, map[string]any{"name": "acme-prod", "number": "", "member_domains": []any{}, "error": "HTTP 403"})
+	if got := Decide(loadDrill(t, "gcp/no-editor-service-accounts"), g, Options{Now: testNow, Available: all}); len(got) != 1 || got[0].Verdict != tag.Error {
+		t.Fatalf("an unreadable project gives ERROR on that project, got %+v", got)
+	}
+}
+
 func TestTargetIsCountedAsRead(t *testing.T) {
 	g := graph.New()
 	targetRepo(g)
