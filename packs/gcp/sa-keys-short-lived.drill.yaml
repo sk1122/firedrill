@@ -1,0 +1,14 @@
+firedrill: v0
+id: gcp/sa-keys-short-lived
+safeguard: "No user-managed service account key is older than 90 days or unused for 90 days."
+severity: high
+for_each: gcp.projects
+fetch:
+  keys: { fact: gcp.sa_keys }
+applies_when: keys.size() > 0
+na_reason: "the project has no user-managed service account keys"
+pass_when:
+  - keys.filter(k, !k.disabled && k.days_since_created > 90).size() == 0
+  - keys.filter(k, !k.disabled && k.last_use_known && k.days_since_used > 90).size() == 0
+fix: "Delete keys that are not used. Replace the rest with workload identity federation or an attached service account; if a key must stay, rotate it every 90 days."
+maps_to: [SOC2:CC6.1, ISO27001:A.5.17]

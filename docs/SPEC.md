@@ -1,6 +1,6 @@
 # Firedrill Spec
 
-Technical copy of the product spec. Choices it leaves open are recorded in [DECISIONS.md](../DECISIONS.md).
+The design of Firedrill: what it does, how it works, and why.
 
 Nov 6, 2026 · @Satyam
 
@@ -44,10 +44,8 @@ AI made claims nearly free: code, approvals, "done" statuses, compliance answers
 | --- | --- | --- | --- |
 | [PocketOS, Apr 2026](https://www.tomshardware.com/tech-industry/artificial-intelligence/claude-powered-ai-coding-agent-deletes-entire-company-database-in-9-seconds-backups-zapped-after-cursor-tool-powered-by-anthropics-claude-goes-rogue) | The agent works in dev | A coding agent found a Railway token in an unrelated file. The token had full account access, and production and backups went in 9 seconds. | `agent/no-prod-secrets-in-agent-reach` |
 | [South Korean banks, Sep to Oct 2026](https://labs.cloudsecurityalliance.org/research/csa-research-note-artex-agentic-pentest-bank-breaches-202610/) | Exposed services are looked after | Attackers reportedly used an AI attack agent on forgotten inquiry and employee portals. About 68,000 people's data was exposed. | `doors/every-host-owned`, `doors/no-public-api-docs` |
-| [Indian lenders, Sep to Nov 2026](https://www.cert-in.org.in/s2cMainServlet?pageid=PUBVLNOTES02&VLCODE=CIAD-2026-0058) | Remediated after the first advisory | Firms that patched were hit again. Fixes were incomplete. | The fix loop: a safeguard closes only on a passing run |
-| [Faros, 2026](https://faros.ai/blog/ai-acceleration-whiplash-takeaways) | Every change is reviewed | Merges with no review rose 31.3%. | `change/human-review-required` |
 
-Each incident is cited from public reporting; before the spec goes public, every figure is checked against a primary source.
+Each incident is cited from public reporting.
 
 Existing tools check pieces. OpenSSF Scorecard and legitify score GitHub settings, Prowler and Steampipe query cloud configuration, Vanta maps settings to compliance frameworks. None of them starts from a company's own written rules, keeps a record of each rule over time, or checks what AI agents can reach. Firedrill does that, in the open, with a format anyone can extend.
 
@@ -178,6 +176,10 @@ Connectors write everything they see into one graph (see Architecture), and each
 | `aws.principals` | IAM users and roles in every connected account: `account`, `kind`, `name`, `last_used`, `keys`, `is_admin`, `destructive_actions`, `excluded` (AWS-reserved SSO roles and config-listed break-glass roles), `days_since_used`, `days_since_created` | AWS |
 | `aws.agent_keys` | Every AWS access key ID found in agent-readable files or agent configs, joined to its owner: `key_id`, `files`, `agents`, `account` (or `unknown_account` when the key belongs to an account that is not connected), `user`, `is_admin`, `destructive_actions` | AWS |
 | `hr.leavers` | `email`, `leave_date` | HR CSV |
+| `gcp.projects` | Target list for GCP drills: the projects under `gcp.projects` in config, with `name`, `number`, `member_domains` (from `gcp.member_domains`, or `google.domain`) | Google Cloud |
+| `gcp.iam_bindings` | Each project IAM binding per member: `role`, `member_type` (`user`, `group`, `domain`, `service_account`, `allUsers`, `allAuthenticatedUsers`, or `deleted_` and the type), `member_domain`, `member` (blank for people), `google_managed`, `default_account`, `conditional` | Google Cloud |
+| `gcp.buckets` | Each Cloud Storage bucket: `name`, `public_grants`, `public_access_prevention`, `uniform_access` | Google Cloud |
+| `gcp.sa_keys` | Each user-managed service account key: `service_account`, `key_id`, `disabled`, `days_since_created`, `days_since_used`, `last_use_known` | Google Cloud |
 
 **Keyless facts.** These need no account or API key, except that remote repos are read through the GitHub connection.
 
@@ -215,6 +217,10 @@ Library drills over a system's object lists, such as `identity.users`, declare a
 | Access | `access/admins-use-mfa` | Every admin has MFA enforced, beyond merely enrolled | `identity.users` |
 | Access | `access/no-dormant-admins` | No admin user or role unused for 90 days, apart from excluded break-glass roles | `identity.users`, `aws.principals` |
 | Agent | `agent/no-destructive-tokens` | AWS keys within an agent's reach cannot delete or run as admin | `aws.agent_keys` |
+| GCP | `gcp/no-public-buckets` | No Cloud Storage bucket is open to everyone; WARN where public access prevention is not enforced | `gcp.buckets` |
+| GCP | `gcp/no-outside-owners` | Only accounts in the company's own domains hold Owner or Editor on a project | `gcp.iam_bindings` |
+| GCP | `gcp/no-editor-service-accounts` | No service account holds Owner or Editor, including the default Compute account. Google-managed service agents are left out | `gcp.iam_bindings` |
+| GCP | `gcp/sa-keys-short-lived` | No user-managed service account key is older than 90 days or unused for 90 days | `gcp.sa_keys` |
 
 **Keyless drills.** These run with no API key, so most teams get them on the first run.
 
@@ -240,7 +246,7 @@ Library drills over a system's object lists, such as `identity.users`, declare a
 **How the PocketOS case is caught.**
 
 - Every text file in the repo is scanned for secrets, up to 1 MB per file, skipping binaries.
-- Secrets are found by known prefix (`AKIA`, `sk_live_`, `ghp_`, `rzp_live_`) and also by any `*_TOKEN`, `*_KEY`, `*_SECRET` or `*PASSWORD*` assignment with a high-entropy value, which catches providers with no prefix, such as Railway.
+- Secrets are found by known prefix (`AKIA`, `sk_live_`, `ghp_`, `rzp_live_`) and also by any `*_TOKEN`, `*_KEY`, `*_SECRET` or `*PASSWORD*` assignment with a high-entropy value, which catches providers with no prefix, such as Railway. A quoted literal given as a default or fallback on a line naming such a variable counts too (`.default('…')`, `?? '…'`, `|| '…'`, `getenv('X', '…')`). Code references are not values (`env.X`, `process.env.X`, `this.config.y`, calls), except JWTs; a value ends at a backslash escape; and values with a placeholder word (`your`, `placeholder`, `xxx`, `replace`, `changeme`, `example`), lowercase word names joined by `-`, `_`, `:` or `/`, and paths starting with `/` are skipped.
 - A secret whose file names no environment is `unknown`, and Agent drills treat `unknown` as in scope.
 - Every file counts as `agent_readable` unless an agent setting denies it (Claude Code `permissions.deny` read rules, `.cursorignore`), because agents read files with no config at all.
 - A token with no readable scope is treated as full access.
@@ -305,7 +311,7 @@ retired: []
 | `firedrill report` | Writes the HTML board. `--summary <file>` prints the step summary from a `--json` result |
 | `firedrill validate [file]` | Checks drill files against the format and the list of facts |
 
-**Workflow 1: the first five minutes.** `init`, `connect github`, `run`. If the GitHub CLI is logged in, `connect github` reuses its token, so there is nothing to create. With GitHub alone, 11 of the 20 drills run. The rest appear as one line: *9 drills waiting: connect google (about 10 minutes, needs a super admin), connect aws (about 2 minutes), verify-domain acme.com (one DNS record), an HR leavers CSV, a Semgrep results file.*
+**Workflow 1: the first five minutes.** `init`, `connect github`, `run`. If the GitHub CLI is logged in, `connect github` reuses its token, so there is nothing to create. With GitHub alone, 11 of the 24 drills run. The rest appear as one line: *9 drills waiting: connect google (about 10 minutes, needs a super admin), connect aws (about 2 minutes), verify-domain acme.com (one DNS record), an HR leavers CSV, a Semgrep results file.*
 
 ```text
 $ firedrill run
@@ -343,6 +349,7 @@ next: fix, then  firedrill verify change/no-solo-ship
 | --- | --- | --- | --- |
 | GitHub | `gh auth token` on a laptop; `FIREDRILL_GITHUB_TOKEN` in CI | Metadata, Administration, Environments and Contents, read | 1 minute |
 | Google Workspace | A service account with domain-wide delegation, approved once by a super admin | `admin.directory.user.readonly` | About 10 minutes |
+| Google Cloud | A reader service account with read roles only, used through gcloud's application default login with impersonation, so no key exists. Tokens ask for `cloud-platform`, the only scope the IAM API accepts, so the reader's roles and the guard keep it to reads. Or a credentials file in `FIREDRILL_GCP_CREDENTIALS`. Projects under `gcp.projects` | Viewer and Security Reviewer on each project; Activity Analysis Viewer for key last use, which is evidence only | About 2 minutes |
 | AWS | The default credential chain, one profile per account | A custom read policy that `connect aws` prints: `GetAccountAuthorizationDetails`, `GetAccessKeyLastUsed`, `ListAccessKeys`, `GenerateCredentialReport`, `GetCredentialReport` | About 2 minutes per account |
 | Repo files | Remote repos through the GitHub connection, one tarball per repo per run; local checkouts with `--path` | Contents read, for remote repos | None |
 | HR CSV | A file with `email,leave_date`, exported from the HR system | None | One export |
@@ -389,7 +396,7 @@ A ticket or chat message saying "fixed" changes nothing here. Only a passing run
 Firedrill holds credentials to sensitive systems, so it is designed as if it will be attacked.
 
 - **Credential scope is the real control.** Every connector asks for read access only, and `connect` prints the exact permissions before anything is granted.
-- **A guard backs it up.** GitHub and Google calls go through an HTTP client that allows only GET and HEAD, plus Google's OAuth token exchange and GitHub's tarball redirect to `codeload.github.com`, each allowed by exact host. AWS calls are checked by action name against a fixed list, whatever HTTP method the SDK uses, so broad reads such as `secretsmanager:GetSecretValue` or `s3:GetObject` are refused even if the credential allows them. A call outside the guard stops the run with ERROR.
+- **A guard backs it up.** GitHub and Google calls go through an HTTP client that allows only GET and HEAD, plus Google's OAuth token exchange and GitHub's tarball redirect to `codeload.github.com`, each allowed by exact host. Google Cloud returns a project's IAM policy only through `POST …/v3/projects/{id}:getIamPolicy`, a read; it is allowed by exact URL for each project listed in config, and no other POST is. AWS calls are checked by action name against a fixed list, whatever HTTP method the SDK uses, so broad reads such as `secretsmanager:GetSecretValue` or `s3:GetObject` are refused even if the credential allows them. A call outside the guard stops the run with ERROR.
 - **Every outbound call is logged** locally with endpoint, method and time, and `--dry-run` prints every call before making any.
 - **The binary never writes to any system you drill.** Its only writes are local record files and the optional Postgres you configured. In CI, the workflow's own steps push records and manage issues, using the Firedrill repo's `GITHUB_TOKEN`.
 - **Secrets are never stored.** A secret found in a file is replaced by an HMAC keyed with a salt that `init` generates. There is one salt per org. Whoever runs `init` stores it in the team's password manager and as the `FIREDRILL_SALT` secret in CI; teammates set the same value with `FIREDRILL_SALT` or in `~/.config/firedrill/`. A CI run without it stops with ERROR. Every tag records a short fingerprint of the salt, and a laptop whose salt does not match the latest canonical tag gets a warning, since its hashes, and waivers written from them, would not match CI.

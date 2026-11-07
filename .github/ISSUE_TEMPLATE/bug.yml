@@ -1,0 +1,19 @@
+name: Bug
+description: Something Firedrill did wrong, such as a wrong verdict or an error
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Don't paste tokens, secrets, emails or records with real data. Report security problems privately, through SECURITY.md.
+  - type: input
+    id: version
+    attributes: { label: Version, description: Output of firedrill --version }
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: The command you ran, and what it printed }
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: What you expected }
+    validations: { required: true }

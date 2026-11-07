@@ -43,6 +43,14 @@ homebrew_casks:
     homepage: https://github.com/sk1122/firedrill
     description: Your rules, drilled weekly, with proof.
     license: Apache-2.0
+    # The binaries are not signed with an Apple Developer ID, so macOS would
+    # refuse to run a downloaded one. Clear the download quarantine on install.
+    hooks:
+      post:
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/firedrill"]
+          end
 release:
   github:
     owner: sk1122

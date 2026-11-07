@@ -1,0 +1,37 @@
+firedrill: v0
+drill: doors/no-public-api-docs
+cases:
+    - name: clean
+      expect: PASS
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        docs:
+            found: []
+            inspected: 3
+      inspected:
+        docs: 3
+    - name: public
+      expect: FAIL
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        docs:
+            found:
+                - host: a
+                  path: /swagger.json
+                  status: 200
+            inspected: 3
+      inspected:
+        docs: 3
+    - name: nothing
+      expect: N/A
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        docs:
+            found: []
+            inspected: 0

@@ -133,3 +133,61 @@ func TestEmptyBoardRenders(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func writeFor(t *testing.T, s tag.Store, drillID, target, sev, verdict, state, reason string, waived bool, at time.Time) {
+	t.Helper()
+	tg := &tag.Tag{Header: tag.Header{DrillID: drillID, Target: target, Verdict: verdict, State: state, Time: at,
+		Severity: sev, Owner: "@a", Reason: reason, Waived: waived}}
+	if _, err := s.Write(tg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStillOpenStaysOnTopAndNAFolds(t *testing.T) {
+	s := tag.Store{Root: t.TempDir()}
+	day1, day2 := now.AddDate(0, 0, -7), now
+	// Open in both runs: nothing changed, but it must still lead the board.
+	writeFor(t, s, "gcp/keys", "p1", "high", tag.Fail, tag.Open, "old key", false, day1)
+	writeFor(t, s, "gcp/keys", "p1", "high", tag.Fail, tag.Open, "old key", false, day2)
+	writeFor(t, s, "gcp/buckets", "p1", "critical", tag.Fail, tag.Open, "bucket site", false, day1)
+	writeFor(t, s, "gcp/buckets", "p1", "critical", tag.Fail, tag.Open, "bucket site", false, day2)
+	// Waived and open: not listed.
+	writeFor(t, s, "gcp/owners", "p1", "critical", tag.Fail, tag.Open, "", true, day2)
+	// N/A and not open: folded away.
+	writeFor(t, s, "gcp/editors", "p2", "high", tag.NA, tag.Unknown, "no bindings", false, day2)
+	// N/A but still open: stays shown.
+	writeFor(t, s, "gcp/editors", "p3", "high", tag.Fail, tag.Open, "", false, day1)
+	writeFor(t, s, "gcp/editors", "p3", "high", tag.NA, tag.Open, "", false, day2)
+
+	b, err := Build(s, nil, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range b.Attention {
+		got = append(got, r.Kind+" "+r.DrillID+" "+r.Target+" "+r.Severity)
+	}
+	want := []string{"Open, unverified gcp/editors p3 high", "Still open gcp/buckets p1 critical", "Still open gcp/keys p1 high"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("attention:\n got %q\nwant %q", got, want)
+	}
+	if b.Attention[1].Reason != "bucket site" {
+		t.Fatalf("the reason is listed: %+v", b.Attention[1])
+	}
+	pk := b.Packs[0]
+	if len(pk.NotApplicable) != 1 || pk.NotApplicable[0].Target != "p2" {
+		t.Fatalf("N/A folds: %+v", pk.NotApplicable)
+	}
+	if len(pk.Shown) != 4 {
+		t.Fatalf("shown: %d", len(pk.Shown))
+	}
+
+	path, err := Write(t.TempDir(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html, _ := os.ReadFile(path)
+	if !strings.Contains(string(html), "<summary>1 not applicable</summary>") || !strings.Contains(string(html), "Still open") {
+		t.Fatal("the board folds N/A and lists still-open safeguards")
+	}
+}

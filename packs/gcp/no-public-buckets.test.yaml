@@ -1,0 +1,48 @@
+firedrill: v0
+drill: gcp/no-public-buckets
+cases:
+    - name: private and enforced
+      expect: PASS
+      target:
+        member_domains: []
+        name: acme-prod
+        number: "123"
+      facts:
+        buckets:
+            - name: logs
+              public_access_prevention: enforced
+              public_grants: []
+              uniform_access: true
+    - name: allUsers can read
+      expect: FAIL
+      target:
+        member_domains: []
+        name: acme-prod
+        number: "123"
+      facts:
+        buckets:
+            - name: site
+              public_access_prevention: inherited
+              public_grants:
+                - allUsers roles/storage.objectViewer
+              uniform_access: true
+    - name: private but prevention not enforced
+      expect: WARN
+      target:
+        member_domains: []
+        name: acme-prod
+        number: "123"
+      facts:
+        buckets:
+            - name: logs
+              public_access_prevention: inherited
+              public_grants: []
+              uniform_access: true
+    - name: no buckets
+      expect: N/A
+      target:
+        member_domains: []
+        name: acme-prod
+        number: "123"
+      facts:
+        buckets: []

@@ -34,7 +34,39 @@ var prefixes = []struct {
 	{"razorpay_live", regexp.MustCompile(`\brzp_live_[0-9A-Za-z]{10,}\b`)},
 }
 
-var assignment = regexp.MustCompile(`(?i)\b([A-Z0-9_.-]*(?:_TOKEN|_KEY|_SECRET|PASSWORD[A-Z0-9_]*))["']?\s*(?:[:=]|:=)\s*["']?([^\s"'#,;]+)`)
+var assignment = regexp.MustCompile(`(?i)\b([A-Z0-9_.-]*(?:_TOKEN|_KEY|_SECRET|PASSWORD[A-Z0-9_]*))["']?\s*(?:[:=]|:=)\s*(["'` + "`" + `]?)([^\s"'` + "`" + `#,;\\]+)`)
+
+// credName finds a credential-named variable anywhere on a line.
+var credName = regexp.MustCompile(`(?i)[A-Z0-9_.-]*(?:_TOKEN|_KEY|_SECRET|PASSWORD)`)
+
+// fallback is a quoted literal used as a default or fallback value:
+// .default('v'), ?? 'v', || 'v', getenv('X', 'v'), .get('X', 'v').
+var fallback = regexp.MustCompile(`(?:\.default\(\s*|\?\?\s*|\|\|\s*|(?:getenv|\.get)\(\s*["'][^"']*["']\s*,\s*)["'` + "`" + `]([^"'` + "`" + `\\]+)["'` + "`" + `]`)
+
+// placeholderWords mark a value someone is meant to replace.
+var placeholderWords = []string{"your", "placeholder", "xxx", "replace", "changeme", "example"}
+
+// wordShaped is a name rather than a secret: lowercase words joined by - _ : /
+// with no digits or capitals, such as a Redis key or a KMS alias, or a path.
+var wordShaped = regexp.MustCompile(`^[a-z]+([-_:/][a-z]+)+$`)
+
+// placeholder reports a value that is a stand-in or a name, not a secret.
+func placeholder(v string) bool {
+	if strings.HasPrefix(v, "/") || wordShaped.MatchString(v) {
+		return true
+	}
+	lv := strings.ToLower(v)
+	for _, w := range placeholderWords {
+		if strings.Contains(lv, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// codeRef is an unquoted value that names something in code rather than holding
+// a secret: env.X, process.env.X, this.config.clientSecret, a call.
+var codeRef = regexp.MustCompile(`^[A-Za-z_$][\w$]*((\??\.[A-Za-z_$][\w$]*)+[!?]*(\(.*)?|[!?]*\(.*)$`)
 
 // Entropy returns the Shannon entropy of a string in bits per character.
 func Entropy(s string) float64 {
@@ -65,8 +97,10 @@ func HighEntropy(v string) bool {
 	return Entropy(v) >= MinEntropy
 }
 
-// Scan finds credentials in a file's text, by known prefix and by variable name
-// with a high-entropy value.
+// Scan finds credentials in a file's text, by known prefix, and by variable name
+// with a high-entropy value assigned or given as a default. Code references such
+// as env.X and calls are not values, a value ends at a backslash escape, and
+// values with a placeholder word are skipped.
 func Scan(text string) []Finding {
 	var out []Finding
 	for i, line := range strings.Split(text, "\n") {
@@ -82,8 +116,22 @@ func Scan(text string) []Finding {
 			}
 		}
 		for _, m := range assignment.FindAllStringSubmatch(line, -1) {
-			v := m[2]
-			if seen[v] || !HighEntropy(v) {
+			quoted, v := m[2] != "", m[3]
+			if !quoted && codeRef.MatchString(v) && !strings.HasPrefix(v, "eyJ") {
+				continue
+			}
+			if seen[v] || placeholder(v) || !HighEntropy(v) {
+				continue
+			}
+			seen[v] = true
+			out = append(out, Finding{Kind: "generic", Line: i + 1, Value: v})
+		}
+		if !credName.MatchString(line) {
+			continue
+		}
+		for _, m := range fallback.FindAllStringSubmatch(line, -1) {
+			v := m[1]
+			if seen[v] || placeholder(v) || !HighEntropy(v) {
 				continue
 			}
 			seen[v] = true

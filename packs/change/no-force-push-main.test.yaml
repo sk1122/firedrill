@@ -1,0 +1,51 @@
+firedrill: v0
+drill: change/no-force-push-main
+cases:
+    - name: pass
+      expect: PASS
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        rules:
+            bypass: none
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: force allowed
+      expect: FAIL
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        rules:
+            bypass: none
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: true
+            dismiss_stale: true
+            force_push_allowed: true
+            required_approvals: 1
+    - name: free
+      expect: N/A
+      target:
+        name: acme/api
+        plan: free
+        private: true
+        protection_available: false
+      facts:
+        rules:
+            bypass: none
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: true
+            dismiss_stale: false
+            force_push_allowed: true
+            required_approvals: 0

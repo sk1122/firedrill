@@ -1,0 +1,40 @@
+firedrill: v0
+drill: doors/no-dangling-dns
+cases:
+    - name: resolves
+      expect: PASS
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        cnames:
+            found:
+                - host: a
+                  target: t
+                  target_resolves: true
+            inspected: 1
+      inspected:
+        cnames: 1
+    - name: dangling
+      expect: FAIL
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        cnames:
+            found:
+                - host: a
+                  target: t
+                  target_resolves: false
+            inspected: 1
+      inspected:
+        cnames: 1
+    - name: nothing
+      expect: N/A
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        cnames:
+            found: []
+            inspected: 0

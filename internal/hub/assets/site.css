@@ -1,0 +1,35 @@
+:root{--stock:#F4F2EA;--ink:#16161A;--red:#D3261A;--green:#0B8A4E;--amber:#E8A317;--enamel:#24272C;--dim:#3A3E45;--muted:#B9B6AB}
+*{box-sizing:border-box}
+body{margin:0;background:var(--enamel);color:var(--stock);font:400 15px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:32px 16px 64px}
+h1,h2{font-family:"Big Shoulders Stencil",Impact,sans-serif;font-weight:700;letter-spacing:.03em;margin:0;text-transform:uppercase}
+h1{font-size:clamp(40px,7vw,64px);line-height:1}
+h2{font-size:28px;margin:40px 0 14px}
+h3{font:600 15px/1.3 "IBM Plex Sans",sans-serif;margin:24px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+p{margin:0}
+.lede{color:var(--muted);max-width:62ch;margin-top:10px}
+.meta{color:var(--muted);font:400 13px/1.5 "IBM Plex Mono",monospace;margin-top:6px}
+.hazard{height:12px;margin:22px 0 26px;background:repeating-linear-gradient(135deg,var(--amber) 0 16px,var(--ink) 16px 32px)}
+.install{background:#1a1c20;border:1px solid var(--dim);padding:12px 14px;font:400 13px/1.6 "IBM Plex Mono",monospace;overflow-x:auto;white-space:pre;margin-top:10px}
+.panel{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:12px}
+.card{background:var(--stock);color:var(--ink);padding:14px;display:flex;flex-direction:column;gap:8px;text-decoration:none;min-width:0}
+.card:hover,.card:focus-visible{outline:3px solid var(--amber);outline-offset:0}
+.card .id{font:400 13px/1.3 "IBM Plex Mono",monospace;overflow-wrap:anywhere}
+.card .rule{font-size:14px;line-height:1.4}
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto;padding-top:4px}
+.chip{font:600 11px/1 "IBM Plex Sans",sans-serif;text-transform:uppercase;letter-spacing:.05em;padding:5px 7px;border:1px solid #16161a40}
+.chip.critical{background:var(--red);color:var(--stock);border-color:var(--red)}
+.chip.high{background:#f0c9c4;border-color:#f0c9c4}
+.chip.official{background:var(--ink);color:var(--stock);border-color:var(--ink)}
+.facts{font:400 12px/1.4 "IBM Plex Mono",monospace;color:#44434a;overflow-wrap:anywhere}
+.back{color:var(--stock);font-size:14px}
+.detail{display:grid;gap:4px;max-width:78ch}
+.detail .rule{font-size:20px;line-height:1.35;margin-top:10px}
+pre.src{background:#1a1c20;border:1px solid var(--dim);padding:14px;font:400 13px/1.55 "IBM Plex Mono",monospace;overflow-x:auto;margin:0}
+table{width:100%;border-collapse:collapse;max-width:78ch}
+td,th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--dim);font-size:14px;overflow-wrap:anywhere}
+th{color:var(--muted);font-weight:400;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+.v{font-weight:600;white-space:nowrap}.v.pass{color:#3cc986}.v.fail{color:#ff6a5e}.v.na{color:var(--muted)}.v.warn{color:var(--amber)}
+a{color:var(--stock)}
+.foot{color:var(--muted);font-size:13px;margin-top:48px}
+.brand{display:flex;align-items:center;gap:16px}.brand .mark{flex:none}

@@ -44,6 +44,8 @@ type Drill struct {
 	WarnWhen    []Condition
 	Fix         string
 	MapsTo      []string
+	Author      string // who wrote it, for hub drills
+	Requires    string // the oldest Firedrill it runs on, as ">= x.y.z"
 	File        string
 	Hash        string
 }
@@ -78,7 +80,45 @@ var idPattern = regexp.MustCompile(`^[a-z0-9-]+/[a-z0-9-]+$`)
 var knownFields = map[string]bool{
 	"firedrill": true, "id": true, "safeguard": true, "source": true, "owner": true, "severity": true,
 	"for_each": true, "fetch": true, "applies_when": true, "na_reason": true, "pass_when": true,
-	"warn_when": true, "fix": true, "maps_to": true,
+	"warn_when": true, "fix": true, "maps_to": true, "author": true, "requires": true,
+}
+
+var requiresPattern = regexp.MustCompile(`^>=\s*v?(\d+)\.(\d+)\.(\d+)$`)
+
+// MinVersion returns the version a requires field names, or "" when absent.
+func (d *Drill) MinVersion() string {
+	m := requiresPattern.FindStringSubmatch(strings.TrimSpace(d.Requires))
+	if m == nil {
+		return ""
+	}
+	return m[1] + "." + m[2] + "." + m[3]
+}
+
+// VersionAtLeast reports whether version v is at least min. Both are x.y.z,
+// with an optional leading v and any suffix after the patch number ignored.
+func VersionAtLeast(v, min string) bool {
+	parse := func(s string) [3]int {
+		var out [3]int
+		s = strings.TrimPrefix(strings.TrimSpace(s), "v")
+		for i, part := range strings.SplitN(s, ".", 3) {
+			n := 0
+			for _, r := range part {
+				if r < '0' || r > '9' {
+					break
+				}
+				n = n*10 + int(r-'0')
+			}
+			out[i] = n
+		}
+		return out
+	}
+	a, b := parse(v), parse(min)
+	for i := range 3 {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return true
 }
 
 var severities = map[string]bool{"critical": true, "high": true, "medium": true, "low": true}
@@ -143,6 +183,13 @@ func Parse(file string, data []byte) (*Drill, []Issue) {
 			d.PassWhen = conditions(k.Value, v, lines, add)
 		case "warn_when":
 			d.WarnWhen = conditions(k.Value, v, lines, add)
+		case "author":
+			d.Author = v.Value
+		case "requires":
+			d.Requires = v.Value
+			if !requiresPattern.MatchString(strings.TrimSpace(v.Value)) {
+				add(v.Line, "requires must look like \">= 0.2.0\"")
+			}
 		case "maps_to":
 			if v.Kind != yaml.SequenceNode {
 				add(v.Line, "maps_to must be a list")

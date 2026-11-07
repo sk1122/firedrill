@@ -1,0 +1,49 @@
+firedrill: v0
+drill: access/leavers-locked-out
+cases:
+    - name: suspended
+      expect: PASS
+      facts:
+        leavers:
+            - email: a@x.com
+              leave_date: "2026-10-01"
+        users:
+            - days_since_created: 2502
+              days_since_login: 6
+              email: a@x.com
+              is_admin: false
+              is_delegated_admin: false
+              last_login: "2026-11-01T00:00:00Z"
+              mfa_enforced: true
+              mfa_enrolled: true
+              suspended: true
+    - name: active
+      expect: FAIL
+      facts:
+        leavers:
+            - email: a@x.com
+              leave_date: "2026-10-01"
+        users:
+            - days_since_created: 2502
+              days_since_login: 6
+              email: a@x.com
+              is_admin: false
+              is_delegated_admin: false
+              last_login: "2026-11-01T00:00:00Z"
+              mfa_enforced: true
+              mfa_enrolled: true
+              suspended: false
+    - name: future date ignored
+      expect: N/A
+      facts:
+        leavers: []
+        users:
+            - days_since_created: 2502
+              days_since_login: 6
+              email: a@x.com
+              is_admin: false
+              is_delegated_admin: false
+              last_login: "2026-11-01T00:00:00Z"
+              mfa_enforced: true
+              mfa_enrolled: true
+              suspended: false

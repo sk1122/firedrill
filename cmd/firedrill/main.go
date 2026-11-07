@@ -14,6 +14,7 @@ import (
 	_ "github.com/sk1122/firedrill/connectors/ctlog"
 	_ "github.com/sk1122/firedrill/connectors/dns"
 	_ "github.com/sk1122/firedrill/connectors/files"
+	_ "github.com/sk1122/firedrill/connectors/gcp"
 	_ "github.com/sk1122/firedrill/connectors/github"
 	_ "github.com/sk1122/firedrill/connectors/google"
 	_ "github.com/sk1122/firedrill/connectors/hrcsv"
@@ -41,7 +42,7 @@ func rootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVar(&projectDir, "dir", ".firedrill", "the Firedrill folder")
-	root.AddCommand(initCmd(), connectCmd(), runCmd(), verifyCmd(), verifyDomainCmd(), exportCmd(), listCmd(), explainCmd(), reportCmd(), validateCmd())
+	root.AddCommand(initCmd(), connectCmd(), runCmd(), verifyCmd(), verifyDomainCmd(), exportCmd(), listCmd(), explainCmd(), reportCmd(), validateCmd(), testCmd(), hubCmd())
 	return root
 }
 

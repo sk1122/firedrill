@@ -26,9 +26,17 @@ type Config struct {
 		} `yaml:"accounts"`
 		BreakGlass []string `yaml:"break_glass"`
 	} `yaml:"aws"`
+	GCP struct {
+		Projects      []string `yaml:"projects"`
+		MemberDomains []string `yaml:"member_domains"`
+	} `yaml:"gcp"`
 	HR struct {
 		LeaversCSV string `yaml:"leavers_csv"`
 	} `yaml:"hr"`
+	Hub struct {
+		Repo string `yaml:"repo"` // owner/name of the drill hub
+		Ref  string `yaml:"ref"`  // branch, tag or commit
+	} `yaml:"hub"`
 	Semgrep struct {
 		Results string `yaml:"results"`
 	} `yaml:"semgrep"`

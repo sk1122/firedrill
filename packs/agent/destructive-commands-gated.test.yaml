@@ -1,0 +1,54 @@
+firedrill: v0
+drill: agent/destructive-commands-gated
+cases:
+    - name: guarded
+      expect: PASS
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  file: .mcp.json
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        agents: 1
+    - name: allowed
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  file: .mcp.json
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive:
+                    - Bash(rm -rf *)
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        agents: 1
+    - name: no configs
+      expect: N/A
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found: []
+            inspected: 0
+            shared_credentials: []

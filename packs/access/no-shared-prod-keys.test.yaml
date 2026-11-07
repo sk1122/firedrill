@@ -1,0 +1,52 @@
+firedrill: v0
+drill: access/no-shared-prod-keys
+cases:
+    - name: clean scan
+      expect: PASS
+      target:
+        local: true
+        name: acme/api
+      facts:
+        secrets:
+            found: []
+            inspected: 5
+            shared_prod_staging: []
+      inspected:
+        secrets: 5
+    - name: shared
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        secrets:
+            found:
+                - agent_readable: true
+                  env_class: prod
+                  file: .env.production
+                  hash: h1
+                  key_id: ""
+                  kind: generic
+                  line: 1
+                - agent_readable: true
+                  env_class: staging
+                  file: .env.staging
+                  hash: h1
+                  key_id: ""
+                  kind: generic
+                  line: 1
+            inspected: 5
+            shared_prod_staging:
+                - h1
+      inspected:
+        secrets: 5
+    - name: empty scan
+      expect: N/A
+      target:
+        local: true
+        name: acme/api
+      facts:
+        secrets:
+            found: []
+            inspected: 0
+            shared_prod_staging: []

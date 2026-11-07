@@ -98,13 +98,44 @@ func domain(g *graph.Graph) {
 	node(g, "domain:acme.com", graph.KindConfigDomain, map[string]any{"domain": "acme.com", "verified": true})
 }
 
-func TestEveryDrillGoesGreenRedAndNA(t *testing.T) {
+func gcpProject(g *graph.Graph, domains ...string) {
+	ds := []any{}
+	for _, d := range domains {
+		ds = append(ds, d)
+	}
+	node(g, "gcp:project/acme-prod", graph.KindGCPProject, map[string]any{"name": "acme-prod", "number": "123", "member_domains": ds})
+}
+
+func gcpBinding(g *graph.Graph, role, kind, domain string, googleManaged bool) {
+	node(g, "gcp:binding/acme-prod/"+role+"/"+kind+domain, graph.KindGCPBinding, map[string]any{
+		"project": "acme-prod", "role": role, "member_type": kind, "member_domain": domain, "member": "",
+		"google_managed": googleManaged, "default_account": false, "conditional": false})
+}
+
+func gcpBucket(g *graph.Graph, name string, public []any, pap string) {
+	node(g, "gcp:bucket/"+name, graph.KindGCPBucket, map[string]any{
+		"project": "acme-prod", "name": name, "public_grants": public, "public_access_prevention": pap, "uniform_access": true})
+}
+
+func gcpKey(g *graph.Graph, id, created, lastUsed string, known bool) {
+	node(g, "gcp:key/acme-prod/"+id, graph.KindGCPKey, map[string]any{
+		"project": "acme-prod", "service_account": "ci@acme-prod.iam.gserviceaccount.com", "key_id": id,
+		"created": created, "last_used": lastUsed, "last_use_known": known, "disabled": false})
+}
+
+type drillCase struct {
+	id, verdictWant string
+	name            string
+	setup           func(g *graph.Graph)
+}
+
+var allConnectors = map[string]bool{"github": true, "google": true, "aws": true, "hr": true, "semgrep": true, "dns": true, "ctlog": true, "web": true, "gcp": true}
+
+// drillCases are a passing, a failing and a not-applicable setup for every
+// starter drill. They also generate the drills' fixture files.
+func drillCases() []drillCase {
 	recent := "2026-11-01T00:00:00Z"
-	cases := []struct {
-		id, verdictWant string
-		name            string
-		setup           func(g *graph.Graph)
-	}{
+	return []drillCase{
 		{"change/no-solo-ship", tag.Pass, "pass on enterprise", func(g *graph.Graph) {
 			ghRepo(g, "enterprise", true)
 			branchRule(g, 1, "none", false)
@@ -187,6 +218,64 @@ func TestEveryDrillGoesGreenRedAndNA(t *testing.T) {
 		{"access/no-dormant-admins", tag.Fail, "old login", func(g *graph.Graph) { user(g, "a@x.com", true, false, true, "2026-01-01T00:00:00Z") }},
 		{"access/no-dormant-admins", tag.Fail, "never logged in, old account", func(g *graph.Graph) { user(g, "a@x.com", true, false, true, "") }},
 		{"access/no-dormant-admins", tag.NA, "empty", func(g *graph.Graph) {}},
+		{"gcp/no-public-buckets", tag.Pass, "private and enforced", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpBucket(g, "logs", []any{}, "enforced")
+		}},
+		{"gcp/no-public-buckets", tag.Fail, "allUsers can read", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpBucket(g, "site", []any{"allUsers roles/storage.objectViewer"}, "inherited")
+		}},
+		{"gcp/no-public-buckets", tag.Warn, "private but prevention not enforced", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpBucket(g, "logs", []any{}, "inherited")
+		}},
+		{"gcp/no-public-buckets", tag.NA, "no buckets", func(g *graph.Graph) { gcpProject(g) }},
+		{"gcp/no-outside-owners", tag.Pass, "owner in own domain", func(g *graph.Graph) {
+			gcpProject(g, "acme.com")
+			gcpBinding(g, "roles/owner", "user", "acme.com", false)
+			gcpBinding(g, "roles/viewer", "user", "gmail.com", false)
+		}},
+		{"gcp/no-outside-owners", tag.Fail, "gmail editor", func(g *graph.Graph) {
+			gcpProject(g, "acme.com")
+			gcpBinding(g, "roles/editor", "user", "gmail.com", false)
+		}},
+		{"gcp/no-outside-owners", tag.Fail, "owner granted to everyone", func(g *graph.Graph) {
+			gcpProject(g, "acme.com")
+			gcpBinding(g, "roles/owner", "allAuthenticatedUsers", "", false)
+		}},
+		{"gcp/no-outside-owners", tag.Fail, "deleted outside owner", func(g *graph.Graph) {
+			gcpProject(g, "acme.com")
+			gcpBinding(g, "roles/owner", "deleted_user", "contractor.io", false)
+		}},
+		{"gcp/no-outside-owners", tag.NA, "no domains configured", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpBinding(g, "roles/editor", "user", "gmail.com", false)
+		}},
+		{"gcp/no-editor-service-accounts", tag.Pass, "only Google's agent has Editor", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpBinding(g, "roles/editor", "service_account", "cloudservices.gserviceaccount.com", true)
+			gcpBinding(g, "roles/storage.admin", "service_account", "acme-prod.iam.gserviceaccount.com", false)
+		}},
+		{"gcp/no-editor-service-accounts", tag.Fail, "default compute account has Editor", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpBinding(g, "roles/editor", "service_account", "developer.gserviceaccount.com", false)
+		}},
+		{"gcp/no-editor-service-accounts", tag.NA, "no bindings", func(g *graph.Graph) { gcpProject(g) }},
+		{"gcp/sa-keys-short-lived", tag.Pass, "new and used", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpKey(g, "k1", "2026-10-01T00:00:00Z", "2026-11-06T00:00:00Z", true)
+		}},
+		{"gcp/sa-keys-short-lived", tag.Pass, "new, last use unknown", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpKey(g, "k1", "2026-10-01T00:00:00Z", "", false)
+		}},
+		{"gcp/sa-keys-short-lived", tag.Fail, "old key", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpKey(g, "k1", "2025-01-01T00:00:00Z", "2026-11-06T00:00:00Z", true)
+		}},
+		{"gcp/sa-keys-short-lived", tag.NA, "no keys", func(g *graph.Graph) { gcpProject(g) }},
+
 		{"access/no-shared-prod-keys", tag.Pass, "clean scan", func(g *graph.Graph) { targetRepo(g); scan(g, "secrets", "acme/api", 5) }},
 		{"access/no-shared-prod-keys", tag.Fail, "shared", func(g *graph.Graph) {
 			targetRepo(g)
@@ -294,9 +383,12 @@ func TestEveryDrillGoesGreenRedAndNA(t *testing.T) {
 		}},
 		{"code/rules-clean", tag.NA, "not read", func(g *graph.Graph) {}},
 	}
+}
+
+func TestEveryDrillGoesGreenRedAndNA(t *testing.T) {
 	covered := map[string]map[string]bool{}
-	all := map[string]bool{"github": true, "google": true, "aws": true, "hr": true, "semgrep": true, "dns": true, "ctlog": true, "web": true}
-	for _, c := range cases {
+	all := allConnectors
+	for _, c := range drillCases() {
 		t.Run(c.id+"/"+c.name, func(t *testing.T) {
 			g := graph.New()
 			c.setup(g)
@@ -310,8 +402,8 @@ func TestEveryDrillGoesGreenRedAndNA(t *testing.T) {
 		}
 		covered[c.id][c.verdictWant] = true
 	}
-	if len(covered) != 20 {
-		t.Errorf("covered %d drills, want 20", len(covered))
+	if len(covered) != 24 {
+		t.Errorf("covered %d drills, want 24", len(covered))
 	}
 	for id, v := range covered {
 		if !v[tag.Pass] || !v[tag.Fail] || !v[tag.NA] {
@@ -451,6 +543,55 @@ func TestFailReasonNamesTheRealFinding(t *testing.T) {
 	got := Decide(loadDrill(t, "agent/no-prod-secrets-in-agent-reach"), g, Options{Now: testNow})
 	if !strings.Contains(got[0].Reason, "z-real.sh") || !strings.Contains(got[0].Reason, "1 failing") {
 		t.Fatalf("reason must name the real leak, got %q", got[0].Reason)
+	}
+}
+
+func TestFailReasonNamesPlainListItems(t *testing.T) {
+	all := map[string]bool{"gcp": true}
+	cases := []struct {
+		id, want string
+		setup    func(g *graph.Graph)
+	}{
+		{"gcp/sa-keys-short-lived", "1 failing, first: key 0f3a9c1d2e4b of ci@acme-prod.iam.gserviceaccount.com, 455 days old", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpKey(g, "fresh", "2026-10-01T00:00:00Z", "", false)
+			gcpKey(g, "0f3a9c1d2e4b5a6c7d8e", "2025-08-09T00:00:00Z", "", false)
+		}},
+		{"gcp/no-outside-owners", "1 failing, first: a user in gmail.com has roles/editor", func(g *graph.Graph) {
+			gcpProject(g, "acme.com")
+			gcpBinding(g, "roles/owner", "user", "acme.com", false)
+			gcpBinding(g, "roles/editor", "user", "gmail.com", false)
+		}},
+		{"gcp/no-public-buckets", "1 failing, first: bucket site", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpBucket(g, "logs", []any{}, "enforced")
+			gcpBucket(g, "site", []any{"allUsers roles/storage.objectViewer"}, "enforced")
+		}},
+	}
+	for _, c := range cases {
+		g := graph.New()
+		c.setup(g)
+		got := Decide(loadDrill(t, c.id), g, Options{Now: testNow, Available: all})
+		if len(got) != 1 || got[0].Verdict != tag.Fail || got[0].Reason != c.want {
+			t.Errorf("%s: got %s %q, want %q", c.id, got[0].Verdict, got[0].Reason, c.want)
+		}
+	}
+}
+
+func TestGCPPartialAndUnreadableProjects(t *testing.T) {
+	all := map[string]bool{"gcp": true}
+	g := graph.New()
+	gcpProject(g)
+	gcpBucket(g, "logs", []any{}, "enforced")
+	node(g, "gcp:bucket/hidden", graph.KindGCPBucket, map[string]any{"project": "acme-prod", "name": "hidden",
+		"public_grants": []any{}, "public_access_prevention": "enforced", "uniform_access": true, "policy_readable": false})
+	if got := Decide(loadDrill(t, "gcp/no-public-buckets"), g, Options{Now: testNow, Available: all}); got[0].Verdict != tag.Warn {
+		t.Fatalf("an unreadable bucket gives WARN, got %s %s", got[0].Verdict, got[0].Reason)
+	}
+	g = graph.New()
+	node(g, "gcp:project/acme-prod", graph.KindGCPProject, map[string]any{"name": "acme-prod", "number": "", "member_domains": []any{}, "error": "HTTP 403"})
+	if got := Decide(loadDrill(t, "gcp/no-editor-service-accounts"), g, Options{Now: testNow, Available: all}); len(got) != 1 || got[0].Verdict != tag.Error {
+		t.Fatalf("an unreadable project gives ERROR on that project, got %+v", got)
 	}
 }
 
