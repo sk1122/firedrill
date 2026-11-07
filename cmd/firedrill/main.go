@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -23,8 +25,21 @@ import (
 	"github.com/sk1122/firedrill/internal/run"
 )
 
-// version is set at build time with -ldflags.
-var version = "0.0.1"
+// version is set by release builds with -ldflags. Otherwise resolveVersion
+// reads the module version Go records in the binary, which go install sets.
+var version = ""
+
+// resolveVersion returns the release version, the module version from go
+// install, or "dev" for a local build.
+func resolveVersion() string {
+	if version != "" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return strings.TrimPrefix(bi.Main.Version, "v")
+	}
+	return "dev"
+}
 
 // exitError carries a chosen exit code without printing a usage message.
 type exitError struct{ code int }
@@ -37,7 +52,7 @@ func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "firedrill",
 		Short:         "Your rules, drilled weekly, with proof.",
-		Version:       version,
+		Version:       resolveVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -47,8 +62,9 @@ func rootCmd() *cobra.Command {
 }
 
 func main() {
-	run.Version = version
-	connector.Version = version
+	v := resolveVersion()
+	run.Version = v
+	connector.Version = v
 	if err := rootCmd().Execute(); err != nil {
 		if ex, ok := errors.AsType[exitError](err); ok {
 			os.Exit(ex.code)
