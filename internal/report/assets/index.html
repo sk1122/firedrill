@@ -48,7 +48,20 @@ th{color:var(--muted);font-weight:400;font-size:12px;text-transform:uppercase;le
 a{color:var(--stock)}
 td.mono{font-family:"IBM Plex Mono",monospace;font-size:13px}
 .empty{color:var(--muted)}
-.att{font-weight:600}.att.fail{color:#ff6a5e}.att.pass{color:#3cc986}.att.warn{color:var(--amber)}
+.attn{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:8px}
+.attn li{border-left:4px solid var(--red);background:#2d3036;padding:10px 12px;min-width:0}
+.attn li.pass{border-color:var(--green)}.attn li.warn{border-color:var(--amber)}
+.attn p{margin:0}
+.attn-top{display:flex;gap:12px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.attn-id{font:400 13px/1.4 "IBM Plex Mono",monospace;margin-top:4px;overflow-wrap:anywhere}
+.attn-on{color:var(--muted)}
+.attn-why{font:400 12px/1.4 "IBM Plex Mono",monospace;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+@media (max-width:420px){.attn{grid-template-columns:1fr}}
+.na-fold{margin-top:12px}
+.na-fold summary{cursor:pointer;color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.06em;padding:8px 0}
+.na-fold summary:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.na-fold[open] summary{margin-bottom:10px}
+.att{font-weight:600;white-space:nowrap}.att.fail{color:#ff6a5e}.att.pass{color:#3cc986}.att.warn{color:var(--amber)}
 </style>
 </head>
 <body>
@@ -66,25 +79,20 @@ td.mono{font-family:"IBM Plex Mono",monospace;font-size:13px}
 <div class="count"><b>{{.Counts.Error}}</b><span>Error</span></div>
 </section>
 <h2>Needs attention</h2>
-{{if .Attention}}<table><thead><tr><th>Change</th><th>Drill</th><th>Target</th></tr></thead><tbody>
-{{range .Attention}}<tr><td class="att {{.Class}}">{{.Kind}}</td><td class="mono">{{.DrillID}}</td><td class="mono">{{if .Target}}{{.Target}}{{else}}global{{end}}</td></tr>{{end}}
-</tbody></table>{{else}}<p class="empty">Nothing changed in the latest run.</p>{{end}}
+{{if .Attention}}<ol class="attn">
+{{range .Attention}}<li class="{{.Class}}"><p class="attn-top"><span class="att {{.Class}}">{{.Kind}}</span>{{if .Severity}}<span>{{.Severity}}</span>{{end}}</p>
+<p class="attn-id">{{.DrillID}} <span class="attn-on">on</span> {{if .Target}}{{.Target}}{{else}}global{{end}}</p>
+{{if .Reason}}<p class="attn-why">{{.Reason}}</p>{{end}}</li>{{end}}
+</ol>{{else}}<p class="empty">Nothing is open, and nothing changed in the latest run.</p>{{end}}
 {{range .Packs}}
 <h2>{{.Name}}</h2>
+{{if .Shown}}<section class="panel">
+{{range .Shown}}{{template "card" .}}{{end}}
+</section>{{end}}
+{{if .NotApplicable}}<details class="na-fold"><summary>{{len .NotApplicable}} not applicable</summary>
 <section class="panel">
-{{range .Safeguards}}
-<article class="tag">
-<div class="head"><span class="lamp {{.Lamp}}" role="img" aria-label="{{.Label}}"></span><span class="id">{{.DrillID}}</span><span class="stamp {{.Lamp}}">{{.Label}}</span></div>
-{{if .Rule}}<p class="rule">{{.Rule}}</p>{{end}}
-<p class="info">{{if .Target}}{{.Target}} · {{end}}{{.Severity}}{{if .Owner}} · {{.Owner}}{{else}} · no owner{{end}}</p>
-{{if .Reason}}<p class="info reason">{{.Reason}}</p>{{end}}
-{{if .Unverified}}<p class="info flag">Latest verdict: {{.Verdict}}. Unverified this run.</p>{{end}}
-{{if .Waived}}<p class="info flag">Waived.</p>{{end}}
-{{if .Chain}}<p class="info flag">{{.Chain}}</p>{{end}}
-<div class="runs" aria-label="Last runs">{{range .Runs}}<span class="run {{.Class}}" title="{{.Date}} {{.Verdict}}"></span>{{end}}</div>
-</article>
-{{end}}
-</section>
+{{range .NotApplicable}}{{template "card" .}}{{end}}
+</section></details>{{end}}
 {{else}}
 <p class="empty">No runs yet. Run firedrill run.</p>
 {{end}}
@@ -103,3 +111,13 @@ td.mono{font-family:"IBM Plex Mono",monospace;font-size:13px}
 </main>
 </body>
 </html>
+{{define "card"}}<article class="tag">
+<div class="head"><span class="lamp {{.Lamp}}" role="img" aria-label="{{.Label}}"></span><span class="id">{{.DrillID}}</span><span class="stamp {{.Lamp}}">{{.Label}}</span></div>
+{{if .Rule}}<p class="rule">{{.Rule}}</p>{{end}}
+<p class="info">{{if .Target}}{{.Target}} · {{end}}{{.Severity}}{{if .Owner}} · {{.Owner}}{{else}} · no owner{{end}}</p>
+{{if .Reason}}<p class="info reason">{{.Reason}}</p>{{end}}
+{{if .Unverified}}<p class="info flag">Latest verdict: {{.Verdict}}. Unverified this run.</p>{{end}}
+{{if .Waived}}<p class="info flag">Waived.</p>{{end}}
+{{if .Chain}}<p class="info flag">{{.Chain}}</p>{{end}}
+<div class="runs" aria-label="Last runs">{{range .Runs}}<span class="run {{.Class}}" title="{{.Date}} {{.Verdict}}"></span>{{end}}</div>
+</article>{{end}}

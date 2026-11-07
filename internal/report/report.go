@@ -52,10 +52,13 @@ type Safeguard struct {
 	Slug       string
 }
 
-// Pack groups safeguards.
+// Pack groups safeguards. NotApplicable holds those whose latest verdict is N/A
+// and which are not open, so the board can fold them away.
 type Pack struct {
-	Name       string
-	Safeguards []Safeguard
+	Name          string
+	Safeguards    []Safeguard
+	Shown         []Safeguard
+	NotApplicable []Safeguard
 }
 
 // Item is one thing in the estate.
@@ -74,9 +77,10 @@ type ItemVerdict struct {
 	DrillID, Target, Verdict, Class, Date string
 }
 
-// AttentionRow is one change the board leads with.
+// AttentionRow is one safeguard the board leads with: a change in the latest
+// run, or one still open.
 type AttentionRow struct {
-	Kind, DrillID, Target, Class string
+	Kind, DrillID, Target, Class, Severity, Reason string
 }
 
 // Board is everything the templates need.
@@ -175,11 +179,22 @@ func Build(store tag.Store, est *graph.Estate, drills []*drill.Drill, now time.T
 			}
 			return list[i].Target < list[j].Target
 		})
-		b.Packs = append(b.Packs, Pack{Name: n, Safeguards: list})
+		pk := Pack{Name: n, Safeguards: list}
+		for _, sg := range list {
+			if sg.Verdict == tag.NA && sg.State != tag.Open {
+				pk.NotApplicable = append(pk.NotApplicable, sg)
+			} else {
+				pk.Shown = append(pk.Shown, sg)
+			}
+		}
+		b.Packs = append(b.Packs, pk)
 	}
 	sort.SliceStable(b.Attention, func(i, j int) bool {
 		a, c := attentionRank[b.Attention[i].Kind], attentionRank[b.Attention[j].Kind]
 		if a != c {
+			return a < c
+		}
+		if a, c := severityRank[b.Attention[i].Severity], severityRank[b.Attention[j].Severity]; a != c {
 			return a < c
 		}
 		return b.Attention[i].DrillID+b.Attention[i].Target < b.Attention[j].DrillID+b.Attention[j].Target
@@ -207,21 +222,26 @@ func Build(store tag.Store, est *graph.Estate, drills []*drill.Drill, now time.T
 	return b, nil
 }
 
-var attentionRank = map[string]int{"Newly open": 0, "Open, unverified": 1, "Newly closed": 2, "Closed, unverified": 3}
+var attentionRank = map[string]int{"Newly open": 0, "Open, unverified": 1, "Still open": 2, "Newly closed": 3, "Closed, unverified": 4}
 
-// attentionOf says what changed in a safeguard's latest run.
+var severityRank = map[string]int{"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+// attentionOf says what changed in a safeguard's latest run, or that it is
+// still open, so an open safeguard never drops off the top of the board.
 func attentionOf(hist []*tag.Tag, sg Safeguard) (AttentionRow, bool) {
 	prev := ""
 	if len(hist) > 1 {
 		prev = hist[len(hist)-2].Header.State
 	}
-	row := AttentionRow{DrillID: sg.DrillID, Target: sg.Target}
+	row := AttentionRow{DrillID: sg.DrillID, Target: sg.Target, Severity: sg.Severity, Reason: sg.Reason}
 	last := hist[len(hist)-1].Header
 	switch {
 	case sg.State == tag.Open && !last.Waived && prev != tag.Open:
 		row.Kind, row.Class = "Newly open", "fail"
 	case sg.State == tag.Open && sg.Unverified:
 		row.Kind, row.Class = "Open, unverified", "fail"
+	case sg.State == tag.Open && !last.Waived:
+		row.Kind, row.Class = "Still open", "fail"
 	case sg.State == tag.Closed && prev == tag.Open:
 		row.Kind, row.Class = "Newly closed", "pass"
 	case sg.State == tag.Closed && sg.Unverified:
