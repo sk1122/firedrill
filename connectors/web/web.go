@@ -41,7 +41,7 @@ type Connector struct {
 
 // New returns the connector.
 func New() *Connector {
-	return &Connector{Base: connector.Base{ConnectorName: "web", Limit: 5, Burst: 5}, Scheme: "https"}
+	return &Connector{ConnectorName: "web", Limit: 5, Burst: 5, Scheme: "https"}
 }
 
 func init() { connector.Register(New()) }

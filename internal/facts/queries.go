@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"maps"
 	"sort"
 	"strings"
 
@@ -319,9 +320,7 @@ func repoScan(g graph.Reader, a Args, scanner, kind string, fields ...string) (R
 
 func foundShape(elem map[string]*Shape, extra map[string]*Shape) *Shape {
 	fields := map[string]*Shape{"found": List(Obj(elem)), "inspected": Int}
-	for k, v := range extra {
-		fields[k] = v
-	}
+	maps.Copy(fields, extra)
 	return Obj(fields)
 }
 

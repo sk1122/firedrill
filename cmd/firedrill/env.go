@@ -137,7 +137,7 @@ func gitRemote(dir string) (owner, repo string) {
 		return "", ""
 	}
 	inOrigin := false
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		l := strings.TrimSpace(line)
 		if strings.HasPrefix(l, "[") {
 			inOrigin = l == `[remote "origin"]`

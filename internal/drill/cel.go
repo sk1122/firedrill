@@ -2,6 +2,8 @@ package drill
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -116,12 +118,7 @@ func Validate(d *Drill) []Issue {
 }
 
 func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s, v)
 }
 
 // analyzer walks a parsed condition, rejecting fields a fact does not have and
@@ -211,9 +208,7 @@ func (a *analyzer) walk(e *exprpb.Expr, scope map[string]value) value {
 		c := k.ComprehensionExpr
 		rng := a.walk(c.IterRange, scope)
 		inner := map[string]value{}
-		for n, v := range scope {
-			inner[n] = v
-		}
+		maps.Copy(inner, scope)
 		elem := value{alias: rng.alias, path: rng.path}
 		if rng.shape != nil && rng.shape.Kind == "list" {
 			elem.shape = rng.shape.Elem

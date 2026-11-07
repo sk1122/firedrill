@@ -213,11 +213,9 @@ func plan(drills []*drill.Drill, s *connector.Scope) map[string]bool {
 func collectAll(ctx context.Context, conns []connector.Connector, s connector.Scope, res *Result) {
 	var wg sync.WaitGroup
 	for _, conn := range conns {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			collectOne(ctx, conn, s, res)
-		}()
+		})
 	}
 	wg.Wait()
 }

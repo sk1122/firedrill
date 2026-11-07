@@ -28,7 +28,7 @@ type Connector struct {
 // New returns the connector.
 func New() *Connector {
 	return &Connector{
-		Base:    connector.Base{ConnectorName: "ctlog", Policy: connector.Policy{Hosts: map[string]bool{"crt.sh": true}}, Limit: 0.5, Burst: 1},
+		ConnectorName: "ctlog", Policy: connector.Policy{Hosts: map[string]bool{"crt.sh": true}}, Limit: 0.5, Burst: 1,
 		BaseURL: "https://crt.sh/",
 	}
 }
@@ -60,7 +60,7 @@ func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s conne
 		names, partial := c.names(ctx, domain, s)
 		hosts := map[string]bool{}
 		for _, n := range names {
-			for _, h := range strings.Split(n, "\n") {
+			for h := range strings.SplitSeq(n, "\n") {
 				h = strings.ToLower(strings.TrimSpace(h))
 				h = strings.TrimPrefix(h, "*.")
 				if h != "" && connector.UnderDomain(h, domain) {

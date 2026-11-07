@@ -59,7 +59,7 @@ func initCmd() *cobra.Command {
 			}
 			var cfg config.Config
 			cfg.GitHub.Org = org
-			for _, r := range strings.Split(repos, ",") {
+			for r := range strings.SplitSeq(repos, ",") {
 				if r = strings.TrimSpace(r); r != "" {
 					cfg.GitHub.Repos = append(cfg.GitHub.Repos, r)
 				}

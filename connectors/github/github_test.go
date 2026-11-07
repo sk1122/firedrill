@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -81,9 +82,7 @@ func base(extra routes) routes {
 		"/repos/acme/api": obj{"name": "api", "private": true, "default_branch": "main"},
 		"/repos/acme/api/actions/permissions/workflow": obj{"default_workflow_permissions": "read", "can_approve_pull_request_reviews": false},
 	}
-	for k, v := range extra {
-		r[k] = v
-	}
+	maps.Copy(r, extra)
 	return r
 }
 

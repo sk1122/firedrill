@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,7 +34,7 @@ type Connector struct {
 
 // New returns the connector with the system resolver.
 func New() *Connector {
-	return &Connector{Base: connector.Base{ConnectorName: "dns"}, Resolver: System{}}
+	return &Connector{ConnectorName: "dns", Resolver: System{}}
 }
 
 func init() { connector.Register(New()) }
@@ -141,12 +142,7 @@ func IsVerified(ctx context.Context, r Resolver, h graph.Hasher, domain string) 
 		return false
 	}
 	want := VerifyValue(h, domain)
-	for _, v := range txt {
-		if v == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(txt, want)
 }
 
 // System uses the machine's DNS configuration.
@@ -187,7 +183,7 @@ func (System) CNAME(ctx context.Context, host string) (string, error) {
 	}
 	id := uint16(time.Now().UnixNano())
 	msg := dnsmessage.Message{
-		Header:    dnsmessage.Header{ID: id, RecursionDesired: true},
+		ID: id, RecursionDesired: true,
 		Questions: []dnsmessage.Question{{Name: name, Type: dnsmessage.TypeCNAME, Class: dnsmessage.ClassINET}},
 	}
 	packed, err := msg.Pack()
@@ -250,7 +246,7 @@ func exchange(ctx context.Context, conn net.Conn, packed []byte, id uint16) (str
 func servers() []string {
 	var out []string
 	if b, err := os.ReadFile("/etc/resolv.conf"); err == nil {
-		for _, line := range strings.Split(string(b), "\n") {
+		for line := range strings.SplitSeq(string(b), "\n") {
 			f := strings.Fields(line)
 			if len(f) == 2 && f[0] == "nameserver" {
 				out = append(out, net.JoinHostPort(f[1], "53"))

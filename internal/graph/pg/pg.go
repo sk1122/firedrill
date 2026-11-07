@@ -41,8 +41,7 @@ func Open(ctx context.Context, url string) (*Store, error) {
 
 // redact keeps a connection error from echoing a password in the URL.
 func redact(err error) error {
-	var parse *pgconn.ParseConfigError
-	if errors.As(err, &parse) {
+	if _, ok := errors.AsType[*pgconn.ParseConfigError](err); ok {
 		return errors.New("FIREDRILL_DATABASE_URL could not be parsed")
 	}
 	return err

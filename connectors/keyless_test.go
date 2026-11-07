@@ -615,7 +615,7 @@ pass_when:
 
 func TestWebOverLimitGivesWarn(t *testing.T) {
 	var scripts strings.Builder
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		fmt.Fprintf(&scripts, `<script src="/b%d.js"></script>`, i)
 	}
 	h := site(func(w http.ResponseWriter, r *http.Request) {

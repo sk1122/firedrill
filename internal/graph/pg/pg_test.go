@@ -32,7 +32,7 @@ func startPostgres(t *testing.T) string {
 
 func writeRuns(t *testing.T, dir string, base time.Time, n int) {
 	t.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		at := base.AddDate(0, 0, 7*i)
 		g := graph.New()
 		g.Node(graph.Node{ID: "always", Kind: "k", Attrs: map[string]any{"run": float64(i)}, SeenAt: at})

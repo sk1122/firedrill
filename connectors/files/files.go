@@ -24,7 +24,7 @@ type Connector struct{ connector.Base }
 
 // New returns the connector.
 func New() *Connector {
-	return &Connector{Base: connector.Base{ConnectorName: "files"}}
+	return &Connector{ConnectorName: "files"}
 }
 
 func init() { connector.Register(New()) }

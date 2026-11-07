@@ -38,7 +38,7 @@ func TestEstateRebuiltFromSnapshotsMatchesMergedGraph(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
 	merged := NewEstate()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		at := base.AddDate(0, 0, 7*i)
 		g := New()
 		g.Node(Node{ID: "always", Kind: "k", Attrs: map[string]any{"run": float64(i)}, SeenAt: at})

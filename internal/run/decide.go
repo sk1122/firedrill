@@ -4,6 +4,7 @@ package run
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -121,8 +122,8 @@ func decideTarget(d *drill.Drill, g graph.Reader, o Options, target string, attr
 		}
 		args := facts.Args{Values: map[string]any{}, Target: attrs, Now: o.Now}
 		for k, v := range f.Args {
-			if strings.HasPrefix(v, "target.") {
-				args.Values[k] = attrs[strings.TrimPrefix(v, "target.")]
+			if field, ok := strings.CutPrefix(v, "target."); ok {
+				args.Values[k] = attrs[field]
 			} else {
 				args.Values[k] = v
 			}
@@ -255,13 +256,9 @@ func failReason(d *drill.Drill, ev *drill.Evaluator, vars map[string]any, failin
 				break
 			}
 			trial := map[string]any{}
-			for k, v := range vars {
-				trial[k] = v
-			}
+			maps.Copy(trial, vars)
 			cp := map[string]any{}
-			for k, v := range m {
-				cp[k] = v
-			}
+			maps.Copy(cp, m)
 			cp["found"] = []any{item}
 			trial[alias] = cp
 			if stillFails, _, errMsg := evalAll(d, ev, trial, nil); errMsg == "" && stillFails {
@@ -317,9 +314,7 @@ func applyWaivers(out *Outcome, d *drill.Drill, ev *drill.Evaluator, vars map[st
 		return
 	}
 	filtered := map[string]any{}
-	for k, v := range vars {
-		filtered[k] = v
-	}
+	maps.Copy(filtered, vars)
 	removed := 0
 	for alias, r := range raw {
 		m, ok := r.Data.(map[string]any)
@@ -340,9 +335,7 @@ func applyWaivers(out *Outcome, d *drill.Drill, ev *drill.Evaluator, vars map[st
 			keep = append(keep, item)
 		}
 		cp := map[string]any{}
-		for k, v := range m {
-			cp[k] = v
-		}
+		maps.Copy(cp, m)
 		cp["found"] = keep
 		filtered[alias] = cp
 	}

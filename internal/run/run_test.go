@@ -216,7 +216,7 @@ func TestConnectorFailureIsError(t *testing.T) {
 func TestSameSecondRunsDoNotCollide(t *testing.T) {
 	d := []*drill.Drill{loadDrill(t, "change/human-review-required")}
 	c := baseConfig(t, d, &fake{name: "github", available: true, write: ghWriter(0)})
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if _, err := Run(context.Background(), c); err != nil {
 			t.Fatal(err)
 		}

@@ -27,7 +27,7 @@ type Connector struct{ connector.Base }
 
 // New returns the connector.
 func New() *Connector {
-	return &Connector{Base: connector.Base{ConnectorName: "google", Policy: connector.GooglePolicy(), Limit: 10, Burst: 10}}
+	return &Connector{ConnectorName: "google", Policy: connector.GooglePolicy(), Limit: 10, Burst: 10}
 }
 
 func init() { connector.Register(New()) }

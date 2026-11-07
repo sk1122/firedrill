@@ -44,7 +44,7 @@ func ParseAgentFile(rel string, data []byte, scope string) (*AgentConfig, error)
 	switch base {
 	case ".cursorignore":
 		c := &AgentConfig{Tool: "cursor", Scope: scope, File: rel}
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line != "" && !strings.HasPrefix(line, "#") {
 				c.DenyRead = append(c.DenyRead, line)
@@ -435,7 +435,7 @@ func policyIsPublic(text string) bool {
 // ParseCodeowners returns rules in file order.
 func ParseCodeowners(data []byte) []any {
 	rules := []any{}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

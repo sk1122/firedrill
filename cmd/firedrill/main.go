@@ -49,8 +49,7 @@ func main() {
 	run.Version = version
 	connector.Version = version
 	if err := rootCmd().Execute(); err != nil {
-		var ex exitError
-		if errors.As(err, &ex) {
+		if ex, ok := errors.AsType[exitError](err); ok {
 			os.Exit(ex.code)
 		}
 		fmt.Fprintln(os.Stderr, "firedrill:", err)

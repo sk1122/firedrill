@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	gh "github.com/google/go-github/v76/github"
+	gh "github.com/google/go-github/v93/github"
 
 	"github.com/sk1122/firedrill/connector"
 	"github.com/sk1122/firedrill/internal/graph"
@@ -31,7 +31,7 @@ type Connector struct{ connector.Base }
 
 // New returns the connector.
 func New() *Connector {
-	return &Connector{Base: connector.Base{ConnectorName: "github", Policy: connector.GitHubPolicy(), Limit: 5, Burst: 10}}
+	return &Connector{ConnectorName: "github", Policy: connector.GitHubPolicy(), Limit: 5, Burst: 10}
 }
 
 func init() { connector.Register(New()) }
@@ -65,8 +65,12 @@ func (c *Connector) Available(s connector.Scope) (bool, string) {
 	return true, ""
 }
 
-func (c *Connector) client(s connector.Scope) *gh.Client {
-	return gh.NewClient(c.HTTP(s.Log)).WithAuthToken(s.Token)
+func (c *Connector) client(s connector.Scope) (*gh.Client, error) {
+	opts := []gh.ClientOptionsFunc{gh.WithHTTPClient(c.HTTP(s.Log))}
+	if s.Token != "" {
+		opts = append(opts, gh.WithAuthToken(s.Token))
+	}
+	return gh.NewClient(opts...)
 }
 
 func notFound(resp *gh.Response) bool {
@@ -110,7 +114,10 @@ func normalizePlan(p string) string {
 
 // Collect reads settings for every listed repo.
 func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s connector.Scope, out graph.Writer) error {
-	cl := c.client(s)
+	cl, err := c.client(s)
+	if err != nil {
+		return err
+	}
 	owner := s.Project.Config.GitHub.Org
 	p := plan(ctx, cl, owner)
 	exp, expDetail := loadExport(ctx, cl, s)
@@ -188,12 +195,12 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 		return nil, err
 	}
 
-	req, err := cl.NewRequest(http.MethodGet, fmt.Sprintf("repos/%s/%s/rules/branches/%s", owner, repo, branch), nil)
+	req, err := cl.NewRequest(ctx, http.MethodGet, fmt.Sprintf("repos/%s/%s/rules/branches/%s", owner, repo, branch), nil)
 	if err != nil {
 		return nil, err
 	}
 	var rules []branchRuleEntry
-	if resp, err := cl.Do(ctx, req, &rules); err != nil && !notFound(resp) && !forbidden(resp) {
+	if resp, err := cl.Do(req, &rules); err != nil && !notFound(resp) && !forbidden(resp) {
 		return nil, err
 	}
 	ids := map[int64]bool{}
@@ -244,14 +251,14 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 // rulesetBypass reads one ruleset's bypass list. GitHub returns it only to
 // callers with write access, so it falls back to the admin export, then unknown.
 func rulesetBypass(ctx context.Context, cl *gh.Client, owner, repo string, id int64, exp *Export, now time.Time) (state, source string, err error) {
-	req, err := cl.NewRequest(http.MethodGet, fmt.Sprintf("repos/%s/%s/rulesets/%d?includes_parents=true", owner, repo, id), nil)
+	req, err := cl.NewRequest(ctx, http.MethodGet, fmt.Sprintf("repos/%s/%s/rulesets/%d?includes_parents=true", owner, repo, id), nil)
 	if err != nil {
 		return "", "", err
 	}
 	var doc struct {
 		BypassActors *[]json.RawMessage `json:"bypass_actors"`
 	}
-	resp, err := cl.Do(ctx, req, &doc)
+	resp, err := cl.Do(req, &doc)
 	if err != nil && !notFound(resp) && !forbidden(resp) {
 		return "", "", err
 	}
@@ -273,7 +280,7 @@ func rulesetBypass(ctx context.Context, cl *gh.Client, owner, repo string, id in
 }
 
 func environments(ctx context.Context, cl *gh.Client, owner, name, full string, s connector.Scope, out graph.Writer) error {
-	opts := &gh.EnvironmentListOptions{ListOptions: gh.ListOptions{PerPage: 100}}
+	opts := &gh.EnvironmentListOptions{PerPage: 100}
 	for {
 		list, resp, err := cl.Repositories.ListEnvironments(ctx, owner, name, opts)
 		if notFound(resp) || forbidden(resp) {
@@ -367,7 +374,7 @@ func loadExport(ctx context.Context, cl *gh.Client, s connector.Scope) (*Export,
 	if s.Getenv != nil {
 		if owner, repo, ok := strings.Cut(s.Getenv("GITHUB_REPOSITORY"), "/"); ok {
 			commits, _, err := cl.Repositories.ListCommits(ctx, owner, repo, &gh.CommitsListOptions{
-				Path: ".firedrill/" + ExportFile, ListOptions: gh.ListOptions{PerPage: 1},
+				Path: ".firedrill/" + ExportFile, PerPage: 1,
 			})
 			if err == nil && len(commits) > 0 {
 				detail = fmt.Sprintf("commit %s by %s", commits[0].GetSHA(), commits[0].GetCommit().GetCommitter().GetName())
@@ -380,7 +387,10 @@ func loadExport(ctx context.Context, cl *gh.Client, s connector.Scope) (*Export,
 // ExportRulesets reads every listed repo's rulesets as the current user, who must
 // be a repo admin for the bypass lists to be returned, and writes the export.
 func (c *Connector) ExportRulesets(ctx context.Context, s connector.Scope) (string, int, error) {
-	cl := c.client(s)
+	cl, err := c.client(s)
+	if err != nil {
+		return "", 0, err
+	}
 	owner := s.Project.Config.GitHub.Org
 	me, _, err := cl.Users.Get(ctx, "")
 	if err != nil {
@@ -389,7 +399,7 @@ func (c *Connector) ExportRulesets(ctx context.Context, s connector.Scope) (stri
 	exp := Export{GeneratedAt: s.Now.UTC(), GeneratedBy: me.GetLogin(), Repos: map[string]map[string]RulesetExport{}}
 	count := 0
 	for _, name := range s.Project.Config.GitHub.Repos {
-		sets, resp, err := cl.Repositories.GetAllRulesets(ctx, owner, name, &gh.RepositoryListRulesetsOptions{IncludesParents: gh.Ptr(true)})
+		sets, resp, err := cl.Repositories.GetAllRulesets(ctx, owner, name, &gh.RepositoryListRulesetsOptions{IncludesParents: new(true)})
 		if notFound(resp) {
 			continue
 		}
@@ -398,7 +408,7 @@ func (c *Connector) ExportRulesets(ctx context.Context, s connector.Scope) (stri
 		}
 		repoSets := map[string]RulesetExport{}
 		for _, rs := range sets {
-			req, err := cl.NewRequest(http.MethodGet, fmt.Sprintf("repos/%s/%s/rulesets/%d?includes_parents=true", owner, name, rs.GetID()), nil)
+			req, err := cl.NewRequest(ctx, http.MethodGet, fmt.Sprintf("repos/%s/%s/rulesets/%d?includes_parents=true", owner, name, rs.GetID()), nil)
 			if err != nil {
 				return "", 0, err
 			}
@@ -406,7 +416,7 @@ func (c *Connector) ExportRulesets(ctx context.Context, s connector.Scope) (stri
 				Name         string             `json:"name"`
 				BypassActors *[]json.RawMessage `json:"bypass_actors"`
 			}
-			if _, err := cl.Do(ctx, req, &doc); err != nil {
+			if _, err := cl.Do(req, &doc); err != nil {
 				return "", 0, fmt.Errorf("read ruleset of %s: %w", name, err)
 			}
 			if doc.BypassActors == nil {
@@ -431,7 +441,11 @@ func (c *Connector) ExportRulesets(ctx context.Context, s connector.Scope) (stri
 // RepoIsPublic reads a repo's visibility through the GitHub connection, for the
 // check that keeps records out of public repos on a laptop.
 func (c *Connector) RepoIsPublic(ctx context.Context, s connector.Scope, owner, repo string) (public, known bool) {
-	r, _, err := c.client(s).Repositories.Get(ctx, owner, repo)
+	cl, err := c.client(s)
+	if err != nil {
+		return false, false
+	}
+	r, _, err := cl.Repositories.Get(ctx, owner, repo)
 	if err != nil {
 		return false, false
 	}

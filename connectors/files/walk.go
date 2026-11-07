@@ -24,10 +24,7 @@ type File struct {
 var skipDirs = map[string]bool{".git": true, "vendor": true, "node_modules": true, "third_party": true, "dist": true}
 
 func isBinary(b []byte) bool {
-	n := len(b)
-	if n > 8000 {
-		n = 8000
-	}
+	n := min(len(b), 8000)
 	return bytes.IndexByte(b[:n], 0) >= 0
 }
 
@@ -110,7 +107,7 @@ func ignored(rules []ignoreRule, rel string, isDir bool) bool {
 
 func parseIgnoreFile(base string, data []byte) []ignoreRule {
 	var out []ignoreRule
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if r, ok := compileIgnore(base, line); ok {
 			out = append(out, r)
 		}
@@ -204,7 +201,7 @@ func ReadTarball(r io.Reader) ([]File, error) {
 			continue
 		}
 		skip := h.Size > MaxFileSize
-		for _, part := range strings.Split(path.Dir(rel), "/") {
+		for part := range strings.SplitSeq(path.Dir(rel), "/") {
 			if skipDirs[part] {
 				skip = true
 			}

@@ -133,10 +133,7 @@ func Build(store tag.Store, est *graph.Estate, drills []*drill.Drill, now time.T
 		}
 		sg.Lamp, sg.Label = lamp(last.Verdict, last.State)
 		sg.Unverified = (last.State == tag.Open && last.Verdict != tag.Fail) || (last.State == tag.Closed && last.Verdict != tag.Pass)
-		start := len(hist) - LastRuns
-		if start < 0 {
-			start = 0
-		}
+		start := max(len(hist)-LastRuns, 0)
 		for _, t := range hist[start:] {
 			sg.Runs = append(sg.Runs, Run{Verdict: t.Header.Verdict, Class: verdictClass(t.Header.Verdict), Date: t.Header.Time.Format("2006-01-02")})
 		}

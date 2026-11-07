@@ -39,7 +39,7 @@ func estate() *graph.Estate {
 
 func TestBoardCoverageStateAndPages(t *testing.T) {
 	s := tag.Store{Root: t.TempDir()}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		writeTag(t, s, tag.Pass, tag.Closed, now.AddDate(0, 0, -70+7*i), "github:repo/acme/api")
 	}
 	writeTag(t, s, tag.Fail, tag.Open, now.AddDate(0, 0, 1), "github:repo/acme/api")

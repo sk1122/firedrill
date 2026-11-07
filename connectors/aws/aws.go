@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -35,8 +36,8 @@ type Connector struct {
 // New returns the connector.
 func New() *Connector {
 	return &Connector{
-		Base:       connector.Base{ConnectorName: "aws"},
-		ReportWait: 2 * time.Second,
+		ConnectorName: "aws",
+		ReportWait:    2 * time.Second,
 		Load: func(ctx context.Context, profile string) (awssdk.Config, error) {
 			return awsconfig.LoadDefaultConfig(ctx, awsconfig.WithSharedConfigProfile(profile), awsconfig.WithRegion("us-east-1"))
 		},
@@ -420,10 +421,5 @@ func stringOrList(raw json.RawMessage) []string {
 }
 
 func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s, v)
 }

@@ -20,7 +20,7 @@ type Connector struct{ connector.Base }
 
 // New returns the connector.
 func New() *Connector {
-	return &Connector{Base: connector.Base{ConnectorName: "hr"}}
+	return &Connector{ConnectorName: "hr"}
 }
 
 func init() { connector.Register(New()) }
