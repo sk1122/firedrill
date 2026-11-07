@@ -158,13 +158,17 @@ With a read-only token, ruleset bypass lists come from firedrill export rulesets
 Attach this read policy to each:
   iam:GetAccountAuthorizationDetails, iam:GetAccessKeyLastUsed, iam:ListAccessKeys,
   iam:GenerateCredentialReport, iam:GetCredentialReport`,
-	"gcp": `Google Cloud uses gcloud's application default login, read-only:
-  gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform.read-only,openid,https://www.googleapis.com/auth/userinfo.email
-Or set FIREDRILL_GCP_CREDENTIALS to a service account key's path.
-The account needs Viewer and Security Reviewer on each project, and Activity Analysis Viewer
-(roles/policyanalyzer.activityAnalysisViewer) for key last use. List projects under gcp.projects
-in config.yaml. Owner domains come from gcp.member_domains, or google.domain.
-Reads use GET, plus POST getIamPolicy on each listed project, which only reads.`,
+	"gcp": `Google Cloud reads through a reader service account with read roles only, and no key:
+1. Create a service account, for example firedrill-reader, in one project.
+2. On each project, grant it Viewer, Security Reviewer and Activity Analysis Viewer
+   (roles/viewer, roles/iam.securityReviewer, roles/policyanalyzer.activityAnalysisViewer).
+3. Grant yourself Service Account Token Creator on it, then log in as it:
+   gcloud auth application-default login --impersonate-service-account=<reader email>
+Firedrill asks for the cloud-platform.read-only scope. In CI, or instead, set
+FIREDRILL_GCP_CREDENTIALS to a credentials file's path.
+List projects under gcp.projects in config.yaml. Owner domains come from gcp.member_domains, or google.domain.
+Reads use GET, plus POST getIamPolicy on each listed project and the token calls, each by exact URL.`,
+
 	"files":   "Repo files need nothing for local checkouts: pass --path. Remote repos use the GitHub connection.",
 	"hr":      "Export a CSV with the columns email,leave_date from your HR system, and set hr.leavers_csv in config.yaml.",
 	"semgrep": "Run semgrep --json yourself and set semgrep.results in config.yaml. Firedrill reads the file and runs nothing.",

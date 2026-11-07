@@ -201,7 +201,7 @@ func TestNoPolicyAnalyzerLeavesLastUseUnknown(t *testing.T) {
 }
 
 func TestGuardRefusesWritesAndUnlistedProjects(t *testing.T) {
-	p := Policy([]string{"acme-prod"})
+	p := Policy([]string{"acme-prod"}, "")
 	log := &connector.CallLog{}
 	tr := &connector.Transport{Policy: p, Log: log, Connector: "gcp", Next: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("{}"))}, nil
@@ -287,5 +287,59 @@ func TestParseMember(t *testing.T) {
 		if got := parseMember(in, "p"); got != want {
 			t.Errorf("%s: got %+v, want %+v", in, got, want)
 		}
+	}
+}
+
+const impCreds = `{"type":"impersonated_service_account",
+ "service_account_impersonation_url":"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/reader@acme-ops.iam.gserviceaccount.com:generateAccessToken",
+ "source_credentials":{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":"r"},
+ "quota_project_id":"other-project"}`
+
+func TestImpersonatedReaderUsesReadOnlyScopeAndNoQuotaProject(t *testing.T) {
+	var scopeSeen string
+	f := &fake{t: t}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Original-Host") == "iamcredentials.googleapis.com" {
+			if r.Method != http.MethodPost || r.URL.Path != "/v1/projects/-/serviceAccounts/reader@acme-ops.iam.gserviceaccount.com:generateAccessToken" {
+				t.Errorf("impersonation call: %s %s", r.Method, r.URL.Path)
+			}
+			b, _ := io.ReadAll(r.Body)
+			scopeSeen = string(b)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"accessToken":"tok","expireTime":"2099-01-01T00:00:00Z"}`)
+			return
+		}
+		if r.Header.Get("X-Original-Host") != "oauth2.googleapis.com" && r.Header.Get("X-Goog-User-Project") != "" {
+			t.Errorf("a service account must not send a quota project, got %q", r.Header.Get("X-Goog-User-Project"))
+		}
+		r.Header.Set("X-Goog-User-Project", "acme-quota")
+		f.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	c := New()
+	c.Next = rewrite{srv}
+	c.ReadFile = func(string) ([]byte, error) { return []byte(impCreds), nil }
+	s := scope("acme-prod")
+	g := graph.New()
+	if err := c.Collect(context.Background(), c.Collections()[0], s, g); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(scopeSeen, "cloud-platform.read-only") {
+		t.Fatalf("minted token must ask for the read-only scope: %s", scopeSeen)
+	}
+	for _, call := range s.Log.Calls() {
+		if call.Blocked {
+			t.Fatalf("blocked: %+v", call)
+		}
+	}
+}
+
+func TestUnexpectedImpersonationURLIsRefused(t *testing.T) {
+	c := New()
+	c.ReadFile = func(string) ([]byte, error) {
+		return []byte(strings.Replace(impCreds, "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/reader@acme-ops.iam.gserviceaccount.com:generateAccessToken", "https://evil.example/steal", 1)), nil
+	}
+	if err := c.Collect(context.Background(), c.Collections()[0], scope("acme-prod"), graph.New()); err == nil || !strings.Contains(err.Error(), "unexpected impersonation URL") {
+		t.Fatalf("got %v", err)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -59,10 +60,14 @@ func New() *Connector {
 
 func init() { connector.Register(New()) }
 
-// Policy allows GET on the four API hosts, the token exchange, and getIamPolicy
-// on each listed project, by exact URL.
-func Policy(projects []string) connector.Policy {
+// Policy allows GET on the four API hosts, the token exchange, getIamPolicy on
+// each listed project, and, when impersonating, the one generateAccessToken URL
+// in the credentials file, each by exact URL.
+func Policy(projects []string, impersonationURL string) connector.Policy {
 	post := map[string]bool{tokenURL: true}
+	if impersonationURL != "" {
+		post[impersonationURL] = true
+	}
 	for _, p := range projects {
 		post[getIamPolicyURL(p)] = true
 	}
@@ -85,6 +90,7 @@ func (c *Connector) Collections() []connector.Collection {
 			"Activity Analysis Viewer for key last use. Scope " + Scope,
 		Calls: []string{
 			"POST " + tokenURL,
+			"POST https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{reader}:generateAccessToken, when impersonating",
 			"POST https://" + crmHost + "/v3/projects/{project}:getIamPolicy",
 			"GET https://" + iamHost + "/v1/projects/{project}/serviceAccounts",
 			"GET https://" + iamHost + "/v1/projects/{project}/serviceAccounts/{account}/keys",
@@ -144,29 +150,41 @@ func (c *Connector) client(ctx context.Context, s connector.Scope) (*http.Client
 		return nil, "", fmt.Errorf("read the GCP credentials: %w", errors.Unwrap(err))
 	}
 	var meta struct {
-		QuotaProject string `json:"quota_project_id"`
+		Type             string `json:"type"`
+		QuotaProject     string `json:"quota_project_id"`
+		ImpersonationURL string `json:"service_account_impersonation_url"`
 	}
 	_ = json.Unmarshal(raw, &meta)
-	c.Policy = Policy(s.Project.Config.GCP.Projects)
+	typ := googleoauth.CredentialsType(meta.Type)
+	impURL := ""
+	switch typ {
+	case googleoauth.AuthorizedUser, googleoauth.ServiceAccount:
+	case googleoauth.ImpersonatedServiceAccount:
+		if !impersonationURL.MatchString(meta.ImpersonationURL) {
+			return nil, "", fmt.Errorf("the GCP credentials name an unexpected impersonation URL")
+		}
+		impURL = meta.ImpersonationURL
+	default:
+		return nil, "", fmt.Errorf("GCP credentials of type %q are not supported", meta.Type)
+	}
+	c.Policy = Policy(s.Project.Config.GCP.Projects, impURL)
 	guarded := c.HTTP(s.Log)
 	tctx := context.WithValue(ctx, oauth2.HTTPClient, guarded)
-	creds, err := googleoauth.CredentialsFromJSONWithType(tctx, raw, credType(raw), Scope)
+	creds, err := googleoauth.CredentialsFromJSONWithType(tctx, raw, typ, Scope)
 	if err != nil {
 		return nil, "", fmt.Errorf("the GCP credentials could not be parsed")
 	}
-	return oauth2.NewClient(tctx, creds.TokenSource), meta.QuotaProject, nil
+	// A user login bills its quota project. A service account, impersonated or
+	// not, bills its own project, so no other project is touched.
+	quota := ""
+	if typ == googleoauth.AuthorizedUser {
+		quota = meta.QuotaProject
+	}
+	return oauth2.NewClient(tctx, creds.TokenSource), quota, nil
 }
 
-func credType(raw []byte) googleoauth.CredentialsType {
-	var t struct {
-		Type string `json:"type"`
-	}
-	_ = json.Unmarshal(raw, &t)
-	if t.Type == string(googleoauth.ServiceAccount) {
-		return googleoauth.ServiceAccount
-	}
-	return googleoauth.AuthorizedUser
-}
+// impersonationURL is the only form of impersonation URL accepted.
+var impersonationURL = regexp.MustCompile(`^https://iamcredentials\.googleapis\.com/v1/projects/-/serviceAccounts/[A-Za-z0-9._@-]+:generateAccessToken$`)
 
 type api struct {
 	cl    *http.Client

@@ -351,7 +351,7 @@ next: fix, then  firedrill verify change/no-solo-ship
 | --- | --- | --- | --- |
 | GitHub | `gh auth token` on a laptop; `FIREDRILL_GITHUB_TOKEN` in CI | Metadata, Administration, Environments and Contents, read | 1 minute |
 | Google Workspace | A service account with domain-wide delegation, approved once by a super admin | `admin.directory.user.readonly` | About 10 minutes |
-| Google Cloud | gcloud's application default login with the `cloud-platform.read-only` scope, or a key file in `FIREDRILL_GCP_CREDENTIALS`; projects under `gcp.projects` | Viewer and Security Reviewer on each project; Activity Analysis Viewer for key last use, which is evidence only | About 2 minutes |
+| Google Cloud | A reader service account with read roles only, used through gcloud's application default login with impersonation, so no key exists; tokens ask for `cloud-platform.read-only`. Or a credentials file in `FIREDRILL_GCP_CREDENTIALS`. Projects under `gcp.projects` | Viewer and Security Reviewer on each project; Activity Analysis Viewer for key last use, which is evidence only | About 2 minutes |
 | AWS | The default credential chain, one profile per account | A custom read policy that `connect aws` prints: `GetAccountAuthorizationDetails`, `GetAccessKeyLastUsed`, `ListAccessKeys`, `GenerateCredentialReport`, `GetCredentialReport` | About 2 minutes per account |
 | Repo files | Remote repos through the GitHub connection, one tarball per repo per run; local checkouts with `--path` | Contents read, for remote repos | None |
 | HR CSV | A file with `email,leave_date`, exported from the HR system | None | One export |
