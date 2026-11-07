@@ -25,7 +25,9 @@ import (
 	"github.com/sk1122/firedrill/internal/facts"
 	"github.com/sk1122/firedrill/internal/graph"
 	"github.com/sk1122/firedrill/internal/graph/pg"
+	"github.com/sk1122/firedrill/internal/hub"
 	"github.com/sk1122/firedrill/internal/report"
+	"github.com/sk1122/firedrill/internal/run"
 	"github.com/sk1122/firedrill/internal/tag"
 	"github.com/sk1122/firedrill/packs"
 )
@@ -126,6 +128,7 @@ func writeConfig(path string, c config.Config) error {
 
 func copyPacks(dest string) (int, error) {
 	count := 0
+	lock := &hub.Lock{Hub: hub.DefaultRepo, Drills: map[string]hub.LockEntry{}}
 	err := fs.WalkDir(packs.FS, ".", func(p string, e fs.DirEntry, err error) error {
 		if err != nil || e.IsDir() || !strings.HasSuffix(p, ".drill.yaml") {
 			return err
@@ -139,9 +142,14 @@ func copyPacks(dest string) (int, error) {
 			return err
 		}
 		count++
+		lock.Drills[strings.TrimSuffix(p, ".drill.yaml")] = hub.LockEntry{Source: "builtin", SHA256: drill.Hash(data)}
 		return os.WriteFile(target, data, 0o644)
 	})
-	return count, err
+	if err != nil {
+		return count, err
+	}
+	// The lock lets hub update tell an untouched starter drill from an edited one.
+	return count, hub.WriteLock(filepath.Dir(dest), lock)
 }
 
 var setupNotes = map[string]string{
@@ -531,15 +539,62 @@ func loadEstate(ctx context.Context, records string, now time.Time) (*graph.Esta
 	return graph.RebuildEstate(snaps, now)
 }
 
+func testCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "test [folder]",
+		Short: "Run each drill's fixtures and check every case gives its expected verdict",
+		Long: "Runs <slug>.test.yaml beside each drill. Every drill needs a passing, a failing and a " +
+			"not-applicable case. With no folder, tests .firedrill/drills.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := filepath.Join(projectDir, "drills")
+			if len(args) == 1 {
+				dir = args[0]
+			}
+			out := cmd.OutOrStdout()
+			results, problems, err := run.TestDir(dir)
+			if err != nil {
+				return err
+			}
+			failed, cases := 0, 0
+			for _, p := range run.SortedKeys(results) {
+				for _, c := range results[p] {
+					cases++
+					if !c.OK() {
+						failed++
+						fmt.Fprintf(out, "FAIL  %s  %q: want %s, got %s (%s)\n", p, c.Name, c.Expect, c.Got, c.Reason)
+					}
+				}
+			}
+			for _, p := range run.SortedKeys(problems) {
+				fmt.Fprintf(out, "FAIL  %s: %s\n", p, problems[p])
+			}
+			fmt.Fprintf(out, "%d drills, %d cases, %d failing, %d drills with problems.\n", len(results), cases, failed, len(problems))
+			if failed > 0 || len(problems) > 0 {
+				return exitError{1}
+			}
+			return nil
+		},
+	}
+}
+
 func validateCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "validate [file]",
+		Use:   "validate [file or folder]",
 		Short: "Check drill files against the format and the list of facts",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var issues []drill.Issue
 			count := 0
+			dir := filepath.Join(projectDir, "drills")
 			if len(args) == 1 {
+				if st, err := os.Stat(args[0]); err == nil && st.IsDir() {
+					dir = args[0]
+				} else {
+					dir = ""
+				}
+			}
+			if dir == "" {
 				data, err := os.ReadFile(args[0])
 				if err != nil {
 					return err
@@ -547,7 +602,7 @@ func validateCmd() *cobra.Command {
 				_, issues = drill.Load(args[0], data)
 				count = 1
 			} else {
-				drills, iss, err := drill.LoadDir(filepath.Join(projectDir, "drills"))
+				drills, iss, err := drill.LoadDir(dir)
 				if err != nil {
 					return err
 				}

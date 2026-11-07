@@ -1,0 +1,41 @@
+firedrill: v0
+drill: doors/every-host-owned
+cases:
+    - name: owned
+      expect: PASS
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        hosts:
+            found:
+                - host: a.acme.com
+            inspected: 1
+        owned:
+            - host: a.acme.com
+              owner: '@r'
+      inspected:
+        hosts: 1
+    - name: unowned
+      expect: FAIL
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        hosts:
+            found:
+                - host: a.acme.com
+            inspected: 1
+        owned: []
+      inspected:
+        hosts: 1
+    - name: no certs
+      expect: N/A
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        hosts:
+            found: []
+            inspected: 0
+        owned: []

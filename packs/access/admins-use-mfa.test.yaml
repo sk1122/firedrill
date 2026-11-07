@@ -1,0 +1,33 @@
+firedrill: v0
+drill: access/admins-use-mfa
+cases:
+    - name: enforced
+      expect: PASS
+      facts:
+        users:
+            - days_since_created: 2502
+              days_since_login: 6
+              email: a@x.com
+              is_admin: true
+              is_delegated_admin: false
+              last_login: "2026-11-01T00:00:00Z"
+              mfa_enforced: true
+              mfa_enrolled: true
+              suspended: false
+    - name: not enforced
+      expect: FAIL
+      facts:
+        users:
+            - days_since_created: 2502
+              days_since_login: 6
+              email: a@x.com
+              is_admin: true
+              is_delegated_admin: false
+              last_login: "2026-11-01T00:00:00Z"
+              mfa_enforced: false
+              mfa_enrolled: false
+              suspended: false
+    - name: no users
+      expect: N/A
+      facts:
+        users: []

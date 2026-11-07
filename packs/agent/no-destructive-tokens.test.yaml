@@ -1,0 +1,33 @@
+firedrill: v0
+drill: agent/no-destructive-tokens
+cases:
+    - name: limited
+      expect: PASS
+      facts:
+        keys:
+            - account: "1"
+              agents: []
+              destructive_actions: []
+              files:
+                - acme/api/a.sh
+              is_admin: false
+              key_id: AKIAEXAMPLE
+              unknown_account: false
+              user: ci
+    - name: admin
+      expect: FAIL
+      facts:
+        keys:
+            - account: "1"
+              agents: []
+              destructive_actions: []
+              files:
+                - acme/api/a.sh
+              is_admin: true
+              key_id: AKIAEXAMPLE
+              unknown_account: false
+              user: ci
+    - name: no keys
+      expect: N/A
+      facts:
+        keys: []

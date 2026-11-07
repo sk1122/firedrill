@@ -45,6 +45,11 @@ type Options struct {
 	Available map[string]bool // connectors that can run
 	Failures  map[string]string
 	Waivers   []config.Waiver
+	// Fixture, when set, answers every fetch from these values by alias instead
+	// of the graph. It is how drill test files run.
+	Fixture map[string]facts.Result
+	// Record, when set, receives each fetched fact result by alias.
+	Record func(alias string, r facts.Result)
 }
 
 // Decide evaluates one drill across its targets.
@@ -134,10 +139,22 @@ func decideTarget(d *drill.Drill, g graph.Reader, o Options, target string, attr
 				return out
 			}
 		}
-		res, err := def.Fn(g, args)
+		var res facts.Result
+		var err error
+		if o.Fixture != nil {
+			var ok bool
+			if res, ok = o.Fixture[f.Alias]; !ok {
+				err = fmt.Errorf("the fixture gives no value for %s", f.Alias)
+			}
+		} else {
+			res, err = def.Fn(g, args)
+		}
 		if err != nil {
 			out.Verdict, out.Reason = tag.Error, err.Error()
 			return out
+		}
+		if o.Record != nil {
+			o.Record(f.Alias, res)
 		}
 		raw[f.Alias] = res
 		vars[f.Alias] = res.Data

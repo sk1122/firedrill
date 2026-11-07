@@ -184,3 +184,36 @@ func TestUsedPaths(t *testing.T) {
 		t.Fatalf("used paths %v missing %s", got, want)
 	}
 }
+
+func TestAuthorAndRequires(t *testing.T) {
+	good := strings.Replace(libraryDrill(t), "severity:", "author: \"@ravi\"\nrequires: \">= 0.2.0\"\nseverity:", 1)
+	d, issues := Load("x", []byte(good))
+	if HasErrors(issues) {
+		t.Fatal(issues)
+	}
+	if d.Author != "@ravi" || d.MinVersion() != "0.2.0" {
+		t.Fatalf("%+v", d)
+	}
+	bad := strings.Replace(good, ">= 0.2.0", "latest", 1)
+	if _, issues := Load("x", []byte(bad)); !HasErrors(issues) {
+		t.Fatal("a malformed requires is an error")
+	}
+	cases := []struct {
+		v, min string
+		ok     bool
+	}{{"0.2.0", "0.2.0", true}, {"0.10.0", "0.2.0", true}, {"0.1.9", "0.2.0", false}, {"v1.0.0-rc1", "0.9.9", true}, {"0.0.1", "0.0.2", false}}
+	for _, c := range cases {
+		if VersionAtLeast(c.v, c.min) != c.ok {
+			t.Errorf("%s >= %s: want %v", c.v, c.min, c.ok)
+		}
+	}
+}
+
+func libraryDrill(t *testing.T) string {
+	t.Helper()
+	b, err := packs.FS.ReadFile("change/no-solo-ship.drill.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}

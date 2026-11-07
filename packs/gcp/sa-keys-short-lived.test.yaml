@@ -1,0 +1,53 @@
+firedrill: v0
+drill: gcp/sa-keys-short-lived
+cases:
+    - name: new and used
+      expect: PASS
+      target:
+        member_domains: []
+        name: acme-prod
+        number: "123"
+      facts:
+        keys:
+            - days_since_created: 37
+              days_since_used: 1
+              disabled: false
+              key_id: k1
+              last_use_known: true
+              service_account: ci@acme-prod.iam.gserviceaccount.com
+    - name: new, last use unknown
+      expect: PASS
+      target:
+        member_domains: []
+        name: acme-prod
+        number: "123"
+      facts:
+        keys:
+            - days_since_created: 37
+              days_since_used: -1
+              disabled: false
+              key_id: k1
+              last_use_known: false
+              service_account: ci@acme-prod.iam.gserviceaccount.com
+    - name: old key
+      expect: FAIL
+      target:
+        member_domains: []
+        name: acme-prod
+        number: "123"
+      facts:
+        keys:
+            - days_since_created: 675
+              days_since_used: 1
+              disabled: false
+              key_id: k1
+              last_use_known: true
+              service_account: ci@acme-prod.iam.gserviceaccount.com
+    - name: no keys
+      expect: N/A
+      target:
+        member_domains: []
+        name: acme-prod
+        number: "123"
+      facts:
+        keys: []

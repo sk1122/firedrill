@@ -1,0 +1,29 @@
+firedrill: v0
+drill: code/rules-clean
+cases:
+    - name: clean
+      expect: PASS
+      facts:
+        semgrep:
+            found: []
+            inspected: 1
+      inspected:
+        semgrep: 1
+    - name: error
+      expect: FAIL
+      facts:
+        semgrep:
+            found:
+                - file: a.go
+                  line: 1
+                  rule: r
+                  severity: ERROR
+            inspected: 1
+      inspected:
+        semgrep: 1
+    - name: not read
+      expect: N/A
+      facts:
+        semgrep:
+            found: []
+            inspected: 0

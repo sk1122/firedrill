@@ -1,0 +1,50 @@
+firedrill: v0
+drill: access/no-dormant-admins
+cases:
+    - name: recent
+      expect: PASS
+      facts:
+        principals: []
+        users:
+            - days_since_created: 2502
+              days_since_login: 6
+              email: a@x.com
+              is_admin: true
+              is_delegated_admin: false
+              last_login: "2026-11-01T00:00:00Z"
+              mfa_enforced: true
+              mfa_enrolled: true
+              suspended: false
+    - name: old login
+      expect: FAIL
+      facts:
+        principals: []
+        users:
+            - days_since_created: 2502
+              days_since_login: 310
+              email: a@x.com
+              is_admin: true
+              is_delegated_admin: false
+              last_login: "2026-01-01T00:00:00Z"
+              mfa_enforced: true
+              mfa_enrolled: true
+              suspended: false
+    - name: never logged in, old account
+      expect: FAIL
+      facts:
+        principals: []
+        users:
+            - days_since_created: 2502
+              days_since_login: -1
+              email: a@x.com
+              is_admin: true
+              is_delegated_admin: false
+              last_login: ""
+              mfa_enforced: true
+              mfa_enrolled: true
+              suspended: false
+    - name: empty
+      expect: N/A
+      facts:
+        principals: []
+        users: []

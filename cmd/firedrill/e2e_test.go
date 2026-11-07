@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sk1122/firedrill/packs"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -449,5 +451,96 @@ exit 0
 		if !strings.Contains(s, want) {
 			t.Errorf("gh calls missing %q:\n%s", want, s)
 		}
+	}
+}
+
+// hubCopy writes a hub folder seeded with the starter drills and fixtures.
+func (e *env) hubCopy() string {
+	e.t.Helper()
+	root := filepath.Join(e.work, "hub")
+	err := fs.WalkDir(packs.FS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".yaml") {
+			return err
+		}
+		b, _ := packs.FS.ReadFile(p)
+		dst := filepath.Join(root, "drills", filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(dst, b, 0o644)
+	})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "hub.yaml"), []byte("name: t\nofficial: [change, access, agent, doors, code, gcp]\n"), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	return root
+}
+
+func editFile(t *testing.T, path, old, repl string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), old) {
+		t.Fatalf("%s lacks %q", path, old)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(string(b), old, repl, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHubInstallUpdateAndRefusals(t *testing.T) {
+	e := newEnv(t)
+	e.vars = append(e.vars, "FIREDRILL_SALT="+strings.Repeat("a", 64))
+	h := e.hubCopy()
+	e.mustRun("init", "--yes", "--owner", "@me")
+	if out := e.mustRun("hub", "--from", h, "index", h, "--out", filepath.Join(e.work, "index.json")); !strings.Contains(out, "24 drills, 83 test cases, 0 with problems") {
+		t.Fatal(out)
+	}
+	if out := e.mustRun("test", filepath.Join(h, "drills")); !strings.Contains(out, "0 failing, 0 drills with problems") {
+		t.Fatal(out)
+	}
+	if out := e.mustRun("hub", "--from", h, "update", "--yes"); !strings.Contains(out, "0 replaced, 0 added, 24 current") {
+		t.Fatalf("starters from init are recorded as current:\n%s", out)
+	}
+	local := filepath.Join(e.work, ".firedrill", "drills")
+	editFile(t, filepath.Join(h, "drills", "change", "actions-pinned.drill.yaml"), "severity: medium", "severity: high")
+	editFile(t, filepath.Join(h, "drills", "change", "no-solo-ship.drill.yaml"), "severity: critical", "severity: high")
+	editFile(t, filepath.Join(local, "change", "no-solo-ship.drill.yaml"), "severity: critical", "severity: medium")
+	out := e.mustRun("hub", "--from", h, "update", "--yes")
+	if !strings.Contains(out, "- severity: medium\n+ severity: high") || !strings.Contains(out, "no-solo-ship: you edited it") ||
+		!strings.Contains(out, "1 replaced, 0 added, 22 current, 1 left alone") {
+		t.Fatalf("a hub change is shown and applied; an edited drill is left alone:\n%s", out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(local, "change", "no-solo-ship.drill.yaml")); !strings.Contains(string(b), "severity: medium") {
+		t.Fatal("the edited drill must be untouched")
+	}
+	// A new official drill is offered by update; a too-new one is refused by add.
+	src, _ := os.ReadFile(filepath.Join(h, "drills", "change", "no-force-push-main.drill.yaml"))
+	test, _ := os.ReadFile(filepath.Join(h, "drills", "change", "no-force-push-main.test.yaml"))
+	newDrill := strings.ReplaceAll(string(src), "change/no-force-push-main", "change/new-one")
+	_ = os.WriteFile(filepath.Join(h, "drills", "change", "new-one.drill.yaml"), []byte(newDrill), 0o644)
+	_ = os.WriteFile(filepath.Join(h, "drills", "change", "new-one.test.yaml"), []byte(strings.ReplaceAll(string(test), "change/no-force-push-main", "change/new-one")), 0o644)
+	if out := e.mustRun("hub", "--from", h, "update", "--yes"); !strings.Contains(out, "New official drill change/new-one") || !strings.Contains(out, "1 added") {
+		t.Fatal(out)
+	}
+	tooNew := strings.Replace(strings.ReplaceAll(newDrill, "change/new-one", "change/too-new"), "severity:", "requires: \">= 99.0.0\"\nseverity:", 1)
+	_ = os.WriteFile(filepath.Join(h, "drills", "change", "too-new.drill.yaml"), []byte(tooNew), 0o644)
+	_ = os.WriteFile(filepath.Join(h, "drills", "change", "too-new.test.yaml"), []byte(strings.ReplaceAll(string(test), "change/no-force-push-main", "change/too-new")), 0o644)
+	if out, code := e.run("hub", "--from", h, "add", "change/too-new"); code == 0 || !strings.Contains(out, "needs Firedrill 99.0.0 or newer") {
+		t.Fatalf("%d %s", code, out)
+	}
+	if out, code := e.run("hub", "--from", h, "add", "nope/none"); code == 0 || !strings.Contains(out, "not in the hub") {
+		t.Fatalf("%d %s", code, out)
+	}
+	lock, _ := os.ReadFile(filepath.Join(e.work, ".firedrill", "hub.lock"))
+	if !strings.Contains(string(lock), "change/new-one:") || strings.Contains(string(lock), "change/too-new") {
+		t.Fatalf("lock:\n%s", lock)
+	}
+	if out := e.mustRun("run", "--path", "."); !strings.Contains(out, "drills ran") {
+		t.Fatal(out)
 	}
 }

@@ -1,0 +1,43 @@
+firedrill: v0
+drill: change/actions-pinned
+cases:
+    - name: pass
+      expect: PASS
+      target:
+        local: true
+        name: acme/api
+      facts:
+        workflows:
+            found:
+                - file: a
+                  permissions: read
+                  pull_request_target_checkout: false
+                  unpinned_actions: []
+            inspected: 1
+      inspected:
+        workflows: 1
+    - name: unpinned
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        workflows:
+            found:
+                - file: a
+                  permissions: read
+                  pull_request_target_checkout: false
+                  unpinned_actions:
+                    - x/y@v1
+            inspected: 1
+      inspected:
+        workflows: 1
+    - name: no workflows
+      expect: N/A
+      target:
+        local: true
+        name: acme/api
+      facts:
+        workflows:
+            found: []
+            inspected: 0

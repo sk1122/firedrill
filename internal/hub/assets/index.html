@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Firedrill Drill Hub</title>
+<meta name="description" content="Open, tested drills for Firedrill: each one checks that a company safeguard actually holds.">
+<style>{{.Fonts}}{{.CSS}}</style>
+</head>
+<body>
+<main>
+<h1>Drill Hub</h1>
+<p class="lede">Open, tested drills for Firedrill. Each drill checks one safeguard against real systems, read-only, and ships passing, failing and not-applicable test cases.</p>
+<p class="meta">{{len .Entries}} drills in {{len .Packs}} packs{{if .Commit}} · hub commit {{.Commit}}{{end}} · built {{.Generated}}</p>
+<div class="hazard"></div>
+<div class="install">firedrill hub search &lt;words&gt;
+firedrill hub add &lt;pack/slug&gt;</div>
+{{range .Packs}}
+<h2 id="{{.Name}}">{{.Name}}</h2>
+<section class="panel">
+{{range .Entries}}<a class="card" href="drills/{{slug .ID}}.html">
+<span class="id">{{.ID}}</span>
+<span class="rule">{{.Safeguard}}</span>
+<span class="facts">{{join .Facts ", "}}</span>
+<span class="tags"><span class="chip {{.Severity}}">{{.Severity}}</span>{{if .Official}}<span class="chip official">official</span>{{end}}<span class="chip">{{.Cases}} tests</span>{{if .Author}}<span class="chip">{{.Author}}</span>{{end}}</span>
+</a>{{end}}
+</section>
+{{end}}
+<p class="foot">Drills are YAML with named facts and CEL conditions. They cannot run code, and every call Firedrill makes for them is read-only. Licensed Apache-2.0.</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,162 @@
+firedrill: v0
+drill: change/no-solo-ship
+cases:
+    - name: pass on enterprise
+      expect: PASS
+      target:
+        name: acme/api
+        plan: enterprise
+        private: true
+        protection_available: true
+      facts:
+        bots:
+            can_approve_pull_requests: false
+            default_token_permission: read
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: true
+            protected_branches_only: true
+            required_reviewers:
+                - '@a'
+            reviewers_available: true
+        rules:
+            bypass: none
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: pass on team uses protected branches
+      expect: PASS
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        bots:
+            can_approve_pull_requests: false
+            default_token_permission: read
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: false
+            protected_branches_only: true
+            required_reviewers: []
+            reviewers_available: false
+        rules:
+            bypass: none
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: bypass allowed
+      expect: FAIL
+      target:
+        name: acme/api
+        plan: enterprise
+        private: true
+        protection_available: true
+      facts:
+        bots:
+            can_approve_pull_requests: false
+            default_token_permission: read
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: true
+            protected_branches_only: true
+            required_reviewers:
+                - '@a'
+            reviewers_available: true
+        rules:
+            bypass: allowed
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: bypass unseen
+      expect: WARN
+      target:
+        name: acme/api
+        plan: enterprise
+        private: true
+        protection_available: true
+      facts:
+        bots:
+            can_approve_pull_requests: false
+            default_token_permission: read
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: true
+            protected_branches_only: true
+            required_reviewers:
+                - '@a'
+            reviewers_available: true
+        rules:
+            bypass: unknown
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: no environment
+      expect: N/A
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        bots:
+            can_approve_pull_requests: false
+            default_token_permission: read
+        env:
+            admin_bypass: false
+            exists: false
+            prevent_self_review: false
+            protected_branches_only: false
+            required_reviewers: []
+            reviewers_available: false
+        rules:
+            bypass: none
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: free private repo
+      expect: N/A
+      target:
+        name: acme/api
+        plan: free
+        private: true
+        protection_available: false
+      facts:
+        bots:
+            can_approve_pull_requests: false
+            default_token_permission: read
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: false
+            protected_branches_only: false
+            required_reviewers: []
+            reviewers_available: false
+        rules:
+            bypass: none
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: false
+            force_push_allowed: false
+            required_approvals: 0

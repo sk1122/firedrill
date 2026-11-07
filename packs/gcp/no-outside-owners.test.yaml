@@ -1,0 +1,89 @@
+firedrill: v0
+drill: gcp/no-outside-owners
+cases:
+    - name: owner in own domain
+      expect: PASS
+      target:
+        member_domains:
+            - acme.com
+        name: acme-prod
+        number: "123"
+      facts:
+        bindings:
+            - conditional: false
+              default_account: false
+              google_managed: false
+              member: ""
+              member_domain: acme.com
+              member_type: user
+              role: roles/owner
+            - conditional: false
+              default_account: false
+              google_managed: false
+              member: ""
+              member_domain: gmail.com
+              member_type: user
+              role: roles/viewer
+    - name: gmail editor
+      expect: FAIL
+      target:
+        member_domains:
+            - acme.com
+        name: acme-prod
+        number: "123"
+      facts:
+        bindings:
+            - conditional: false
+              default_account: false
+              google_managed: false
+              member: ""
+              member_domain: gmail.com
+              member_type: user
+              role: roles/editor
+    - name: owner granted to everyone
+      expect: FAIL
+      target:
+        member_domains:
+            - acme.com
+        name: acme-prod
+        number: "123"
+      facts:
+        bindings:
+            - conditional: false
+              default_account: false
+              google_managed: false
+              member: ""
+              member_domain: ""
+              member_type: allAuthenticatedUsers
+              role: roles/owner
+    - name: deleted outside owner
+      expect: FAIL
+      target:
+        member_domains:
+            - acme.com
+        name: acme-prod
+        number: "123"
+      facts:
+        bindings:
+            - conditional: false
+              default_account: false
+              google_managed: false
+              member: ""
+              member_domain: contractor.io
+              member_type: deleted_user
+              role: roles/owner
+    - name: no domains configured
+      expect: N/A
+      target:
+        member_domains: []
+        name: acme-prod
+        number: "123"
+      facts:
+        bindings:
+            - conditional: false
+              default_account: false
+              google_managed: false
+              member: ""
+              member_domain: gmail.com
+              member_type: user
+              role: roles/editor

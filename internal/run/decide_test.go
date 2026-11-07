@@ -123,13 +123,19 @@ func gcpKey(g *graph.Graph, id, created, lastUsed string, known bool) {
 		"created": created, "last_used": lastUsed, "last_use_known": known, "disabled": false})
 }
 
-func TestEveryDrillGoesGreenRedAndNA(t *testing.T) {
+type drillCase struct {
+	id, verdictWant string
+	name            string
+	setup           func(g *graph.Graph)
+}
+
+var allConnectors = map[string]bool{"github": true, "google": true, "aws": true, "hr": true, "semgrep": true, "dns": true, "ctlog": true, "web": true, "gcp": true}
+
+// drillCases are a passing, a failing and a not-applicable setup for every
+// starter drill. They also generate the drills' fixture files.
+func drillCases() []drillCase {
 	recent := "2026-11-01T00:00:00Z"
-	cases := []struct {
-		id, verdictWant string
-		name            string
-		setup           func(g *graph.Graph)
-	}{
+	return []drillCase{
 		{"change/no-solo-ship", tag.Pass, "pass on enterprise", func(g *graph.Graph) {
 			ghRepo(g, "enterprise", true)
 			branchRule(g, 1, "none", false)
@@ -377,9 +383,12 @@ func TestEveryDrillGoesGreenRedAndNA(t *testing.T) {
 		}},
 		{"code/rules-clean", tag.NA, "not read", func(g *graph.Graph) {}},
 	}
+}
+
+func TestEveryDrillGoesGreenRedAndNA(t *testing.T) {
 	covered := map[string]map[string]bool{}
-	all := map[string]bool{"github": true, "google": true, "aws": true, "hr": true, "semgrep": true, "dns": true, "ctlog": true, "web": true, "gcp": true}
-	for _, c := range cases {
+	all := allConnectors
+	for _, c := range drillCases() {
 		t.Run(c.id+"/"+c.name, func(t *testing.T) {
 			g := graph.New()
 			c.setup(g)

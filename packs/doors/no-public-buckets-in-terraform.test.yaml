@@ -1,0 +1,44 @@
+firedrill: v0
+drill: doors/no-public-buckets-in-terraform
+cases:
+    - name: private
+      expect: PASS
+      target:
+        local: true
+        name: acme/api
+      facts:
+        terraform:
+            found:
+                - file: m.tf
+                  name: x
+                  public_access_block: true
+                  public_acl: false
+                  public_policy: false
+            inspected: 1
+      inspected:
+        terraform: 1
+    - name: public
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        terraform:
+            found:
+                - file: m.tf
+                  name: x
+                  public_access_block: false
+                  public_acl: true
+                  public_policy: false
+            inspected: 1
+      inspected:
+        terraform: 1
+    - name: no terraform
+      expect: N/A
+      target:
+        local: true
+        name: acme/api
+      facts:
+        terraform:
+            found: []
+            inspected: 0

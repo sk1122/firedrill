@@ -33,6 +33,10 @@ type Config struct {
 	HR struct {
 		LeaversCSV string `yaml:"leavers_csv"`
 	} `yaml:"hr"`
+	Hub struct {
+		Repo string `yaml:"repo"` // owner/name of the drill hub
+		Ref  string `yaml:"ref"`  // branch, tag or commit
+	} `yaml:"hub"`
 	Semgrep struct {
 		Results string `yaml:"results"`
 	} `yaml:"semgrep"`

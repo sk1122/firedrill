@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.E.ID}} · Drill Hub</title>
+<meta name="description" content="{{.E.Safeguard}}">
+<style>{{.Fonts}}{{.CSS}}</style>
+</head>
+<body>
+<main>
+<a class="back" href="../index.html#{{.E.Pack}}">All drills</a>
+<div class="detail">
+<h1 style="font-size:clamp(28px,5vw,44px);margin-top:16px;overflow-wrap:anywhere">{{.E.ID}}</h1>
+<p class="rule">{{.E.Safeguard}}</p>
+<p class="tags"><span class="chip {{.E.Severity}}" style="color:inherit">{{.E.Severity}}</span>{{if .E.Official}}<span class="chip official">official</span>{{end}}{{if .E.Author}}<span class="chip">{{.E.Author}}</span>{{end}}{{if .E.Requires}}<span class="chip">needs firedrill {{.E.Requires}}</span>{{end}}</p>
+</div>
+<div class="hazard"></div>
+<h3>Install</h3>
+<div class="install">firedrill hub add {{.E.ID}}</div>
+<h3>Reads</h3>
+<p class="facts" style="color:var(--muted)">{{join .E.Facts ", "}}</p>
+{{if .E.Fix}}<h3>Fix when it fails</h3><p class="detail">{{.E.Fix}}</p>{{end}}
+{{if .E.MapsTo}}<h3>Maps to</h3><p class="facts" style="color:var(--muted)">{{join .E.MapsTo ", "}}</p>{{end}}
+<h3>Test cases</h3>
+<table><thead><tr><th>Case</th><th>Expected</th></tr></thead><tbody>
+{{range .Cases}}<tr><td>{{.Name}}</td><td class="v {{verdictClass .Expect}}">{{.Expect}}</td></tr>{{end}}
+</tbody></table>
+<h3>Drill file</h3>
+<pre class="src">{{printf "%s" .E.Source}}</pre>
+</main>
+</body>
+</html>

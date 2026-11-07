@@ -352,6 +352,10 @@ func displayName(it *graph.EstateItem) string {
 	return id
 }
 
+// FontCSS returns @font-face rules with the embedded fonts inlined, for any
+// page Firedrill writes.
+func FontCSS() (template.CSS, error) { return fontCSS() }
+
 func fontCSS() (template.CSS, error) {
 	faces := []struct{ family, file, weight string }{
 		{"Big Shoulders Stencil", "stencil-700.woff2", "700"},

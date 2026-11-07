@@ -1,0 +1,63 @@
+firedrill: v0
+drill: change/prod-deploy-gated
+cases:
+    - name: pass
+      expect: PASS
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: false
+            protected_branches_only: true
+            required_reviewers: []
+            reviewers_available: false
+    - name: any branch
+      expect: FAIL
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: false
+            protected_branches_only: false
+            required_reviewers: []
+            reviewers_available: false
+    - name: enterprise without reviewer
+      expect: FAIL
+      target:
+        name: acme/api
+        plan: enterprise
+        private: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: false
+            protected_branches_only: true
+            required_reviewers: []
+            reviewers_available: true
+    - name: no env
+      expect: N/A
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: false
+            prevent_self_review: false
+            protected_branches_only: false
+            required_reviewers: []
+            reviewers_available: false

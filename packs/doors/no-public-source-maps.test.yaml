@@ -1,0 +1,37 @@
+firedrill: v0
+drill: doors/no-public-source-maps
+cases:
+    - name: clean
+      expect: PASS
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        maps:
+            found: []
+            inspected: 3
+      inspected:
+        maps: 3
+    - name: public
+      expect: FAIL
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        maps:
+            found:
+                - bundle: b
+                  host: a
+                  map_url: c
+            inspected: 3
+      inspected:
+        maps: 3
+    - name: nothing checked
+      expect: N/A
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        maps:
+            found: []
+            inspected: 0
