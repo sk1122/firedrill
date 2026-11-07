@@ -240,7 +240,7 @@ Library drills over a system's object lists, such as `identity.users`, declare a
 **How the PocketOS case is caught.**
 
 - Every text file in the repo is scanned for secrets, up to 1 MB per file, skipping binaries.
-- Secrets are found by known prefix (`AKIA`, `sk_live_`, `ghp_`, `rzp_live_`) and also by any `*_TOKEN`, `*_KEY`, `*_SECRET` or `*PASSWORD*` assignment with a high-entropy value, which catches providers with no prefix, such as Railway.
+- Secrets are found by known prefix (`AKIA`, `sk_live_`, `ghp_`, `rzp_live_`) and also by any `*_TOKEN`, `*_KEY`, `*_SECRET` or `*PASSWORD*` assignment with a high-entropy value, which catches providers with no prefix, such as Railway. A quoted literal given as a default or fallback on a line naming such a variable counts too (`.default('…')`, `?? '…'`, `|| '…'`, `getenv('X', '…')`). Code references are not values (`env.X`, `process.env.X`, `this.config.y`, calls), except JWTs; a value ends at a backslash escape; and values with a placeholder word (`your`, `placeholder`, `xxx`, `replace`, `changeme`, `example`), lowercase word names joined by `-`, `_`, `:` or `/`, and paths starting with `/` are skipped.
 - A secret whose file names no environment is `unknown`, and Agent drills treat `unknown` as in scope.
 - Every file counts as `agent_readable` unless an agent setting denies it (Claude Code `permissions.deny` read rules, `.cursorignore`), because agents read files with no config at all.
 - A token with no readable scope is treated as full access.
