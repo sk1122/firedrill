@@ -52,6 +52,11 @@ func fakeGitHub(t *testing.T, r routes) *Connector {
 			_, _ = io.WriteString(w, `{"message":"Not Found"}`)
 			return
 		}
+		if st, isStatus := v.(status); isStatus {
+			w.WriteHeader(st.code)
+			_ = json.NewEncoder(w).Encode(obj{"message": st.msg})
+			return
+		}
 		if code, isInt := v.(int); isInt {
 			w.WriteHeader(code)
 			_, _ = io.WriteString(w, `{"message":"no"}`)
@@ -75,6 +80,12 @@ func scope(t *testing.T) connector.Scope {
 }
 
 type obj = map[string]any
+
+// status is a reply with a code and a message.
+type status struct {
+	code int
+	msg  string
+}
 
 func base(extra routes) routes {
 	r := routes{
@@ -260,6 +271,21 @@ func TestPlans(t *testing.T) {
 	repo, _ = collect(t, fakeGitHub(t, user), scope(t)).Get("github:repo/acme/api")
 	if repo.Attrs["plan"] != "pro" {
 		t.Fatalf("%+v", repo.Attrs)
+	}
+}
+
+func TestPlanBlockedReplyMeansNoProtectionEvenWithHiddenPlan(t *testing.T) {
+	r := base(routes{protPath: status{403, "Upgrade to GitHub Pro or make this repository public to enable this feature."}})
+	r["/orgs/acme"] = obj{"login": "acme"} // a read-only token cannot see the plan
+	repo, _ := collect(t, fakeGitHub(t, r), scope(t)).Get("github:repo/acme/api")
+	if repo.Attrs["plan"] != "unknown" || repo.Attrs["protection_available"] != false {
+		t.Fatalf("GitHub's own reply decides: %+v", repo.Attrs)
+	}
+	other := base(routes{protPath: status{403, "Resource not accessible by personal access token"}})
+	other["/orgs/acme"] = obj{"login": "acme"}
+	repo, _ = collect(t, fakeGitHub(t, other), scope(t)).Get("github:repo/acme/api")
+	if repo.Attrs["protection_available"] != true {
+		t.Fatalf("any other 403 keeps the unknown-plan rule: %+v", repo.Attrs)
 	}
 }
 
