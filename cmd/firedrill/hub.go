@@ -164,7 +164,8 @@ func checkInstallable(e *hub.Entry, h *hub.Hub) error {
 	if msg, bad := h.Problems[e.Path]; bad {
 		return fmt.Errorf("%s is not installable: %s", e.ID, msg)
 	}
-	if min := e.Drill.MinVersion(); min != "" && !drill.VersionAtLeast(run.Version, min) {
+	// A local development build is newer than any release.
+	if min := e.Drill.MinVersion(); min != "" && run.Version != "dev" && !drill.VersionAtLeast(run.Version, min) {
 		return fmt.Errorf("%s needs Firedrill %s or newer; this is %s", e.ID, min, run.Version)
 	}
 	return nil
