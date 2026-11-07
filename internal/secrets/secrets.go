@@ -166,7 +166,7 @@ func DefaultClasses() Classes {
 	return Classes{
 		ProdWords:    []string{"prod", "production"},
 		StagingWords: []string{"staging", "stage"},
-		ExamplePaths: []string{"testdata/", "fixtures/", "__tests__/", "*.example", "*.sample", "*.template"},
+		ExamplePaths: []string{"testdata/", "fixtures/", "__tests__/", "test/", "tests/", "*_test.*", "*.example", "*.sample", "*.template"},
 	}
 }
 

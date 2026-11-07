@@ -86,6 +86,11 @@ func TestClass(t *testing.T) {
 		".env.example":            "example",
 		"config.sample":           "example",
 		"prod/app.template":       "example",
+		"internal/x/x_test.go":    "example",
+		"test/keys.env":           "example",
+		"src/tests/k.py":          "example",
+		"src/latest/k.env":        "unknown",
+		"contest/k.env":           "unknown",
 	}
 	for p, want := range cases {
 		if got := c.Class(p); got != want {

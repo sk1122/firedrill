@@ -118,7 +118,7 @@ maps_to: [SOC2:CC8.1]
 | DNS, certificate logs, web | Public DNS, crt.sh, and domains you verify | None |
 | HR leavers, Semgrep | A CSV export, a results file | None |
 
-`firedrill connect <system>` prints the exact permissions and setup steps before anything is granted.
+`firedrill connect <system>` prints the exact permissions and setup steps before anything is granted. Step-by-step guides for each system are in [docs/connect](docs/connect/README.md).
 
 ## How a result works
 
