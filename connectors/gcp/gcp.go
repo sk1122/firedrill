@@ -32,8 +32,10 @@ import (
 // connector uses for its own key.
 const CredentialsEnv = "FIREDRILL_GCP_CREDENTIALS"
 
-// Scope is the only OAuth scope Firedrill asks for.
-const Scope = "https://www.googleapis.com/auth/cloud-platform.read-only"
+// Scope is the OAuth scope Firedrill asks for. The IAM API accepts only the
+// full cloud-platform scope, so reads are limited by the reader account's
+// roles and by the guard, not by the scope.
+const Scope = "https://www.googleapis.com/auth/cloud-platform"
 
 const (
 	crmHost      = "cloudresourcemanager.googleapis.com"
@@ -142,7 +144,7 @@ func (c *Connector) Available(s connector.Scope) (bool, string) {
 	return true, ""
 }
 
-// client is a guarded client authorized with the read-only scope. Token
+// client is a guarded client authorized with Scope. Token
 // refreshes go through the guard too.
 func (c *Connector) client(ctx context.Context, s connector.Scope) (*http.Client, string, error) {
 	raw, err := c.ReadFile(credentialsPath(s))

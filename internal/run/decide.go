@@ -242,12 +242,15 @@ func failReason(d *drill.Drill, ev *drill.Evaluator, vars map[string]any, failin
 	}
 	sort.Strings(aliases)
 	for _, alias := range aliases {
-		m, ok := raw[alias].Data.(map[string]any)
-		if !ok {
-			continue
+		// A fact is either an object with a found list, or a plain list.
+		m, isObj := raw[alias].Data.(map[string]any)
+		var found []any
+		if isObj {
+			found, _ = m["found"].([]any)
+		} else {
+			found, _ = raw[alias].Data.([]any)
 		}
-		found, ok := m["found"].([]any)
-		if !ok || len(found) == 0 {
+		if len(found) == 0 {
 			continue
 		}
 		var blamed []map[string]any
@@ -257,10 +260,14 @@ func failReason(d *drill.Drill, ev *drill.Evaluator, vars map[string]any, failin
 			}
 			trial := map[string]any{}
 			maps.Copy(trial, vars)
-			cp := map[string]any{}
-			maps.Copy(cp, m)
-			cp["found"] = []any{item}
-			trial[alias] = cp
+			if isObj {
+				cp := map[string]any{}
+				maps.Copy(cp, m)
+				cp["found"] = []any{item}
+				trial[alias] = cp
+			} else {
+				trial[alias] = []any{item}
+			}
 			if stillFails, _, errMsg := evalAll(d, ev, trial, nil); errMsg == "" && stillFails {
 				row, _ := item.(map[string]any)
 				blamed = append(blamed, row)
@@ -272,6 +279,13 @@ func failReason(d *drill.Drill, ev *drill.Evaluator, vars map[string]any, failin
 		return describeRow(blamed[0], len(blamed))
 	}
 	return "failed: " + strings.Join(strings.Fields(failing[0]), " ")
+}
+
+func shortID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 // maxBlameRows bounds how many rows are tried, so a huge list stays cheap.
@@ -290,6 +304,29 @@ func describeRow(row map[string]any, n int) string {
 	}
 	if h, _ := row["host"].(string); h != "" {
 		return fmt.Sprintf("%s, first on %s", count, h)
+	}
+	if k, _ := row["key_id"].(string); k != "" {
+		if sa, _ := row["service_account"].(string); sa != "" {
+			days, _ := row["days_since_created"].(int64)
+			return fmt.Sprintf("%d failing, first: key %s of %s, %d days old", n, shortID(k), sa, days)
+		}
+	}
+	if role, _ := row["role"].(string); role != "" {
+		who, _ := row["member"].(string)
+		if who == "" {
+			// People are never named in a reason, only their domain.
+			kind, _ := row["member_type"].(string)
+			who = "a " + strings.TrimPrefix(kind, "deleted_")
+			if d, _ := row["member_domain"].(string); d != "" {
+				who += " in " + d
+			}
+		}
+		return fmt.Sprintf("%s, first: %s has %s", count, who, role)
+	}
+	if b, _ := row["name"].(string); b != "" {
+		if _, ok := row["public_grants"]; ok {
+			return fmt.Sprintf("%s, first: bucket %s", count, b)
+		}
 	}
 	return count
 }

@@ -537,6 +537,38 @@ func TestFailReasonNamesTheRealFinding(t *testing.T) {
 	}
 }
 
+func TestFailReasonNamesPlainListItems(t *testing.T) {
+	all := map[string]bool{"gcp": true}
+	cases := []struct {
+		id, want string
+		setup    func(g *graph.Graph)
+	}{
+		{"gcp/sa-keys-short-lived", "1 failing, first: key 0f3a9c1d2e4b of ci@acme-prod.iam.gserviceaccount.com, 455 days old", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpKey(g, "fresh", "2026-10-01T00:00:00Z", "", false)
+			gcpKey(g, "0f3a9c1d2e4b5a6c7d8e", "2025-08-09T00:00:00Z", "", false)
+		}},
+		{"gcp/no-outside-owners", "1 failing, first: a user in gmail.com has roles/editor", func(g *graph.Graph) {
+			gcpProject(g, "acme.com")
+			gcpBinding(g, "roles/owner", "user", "acme.com", false)
+			gcpBinding(g, "roles/editor", "user", "gmail.com", false)
+		}},
+		{"gcp/no-public-buckets", "1 failing, first: bucket site", func(g *graph.Graph) {
+			gcpProject(g)
+			gcpBucket(g, "logs", []any{}, "enforced")
+			gcpBucket(g, "site", []any{"allUsers roles/storage.objectViewer"}, "enforced")
+		}},
+	}
+	for _, c := range cases {
+		g := graph.New()
+		c.setup(g)
+		got := Decide(loadDrill(t, c.id), g, Options{Now: testNow, Available: all})
+		if len(got) != 1 || got[0].Verdict != tag.Fail || got[0].Reason != c.want {
+			t.Errorf("%s: got %s %q, want %q", c.id, got[0].Verdict, got[0].Reason, c.want)
+		}
+	}
+}
+
 func TestTargetIsCountedAsRead(t *testing.T) {
 	g := graph.New()
 	targetRepo(g)

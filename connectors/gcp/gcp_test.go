@@ -295,7 +295,7 @@ const impCreds = `{"type":"impersonated_service_account",
  "source_credentials":{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":"r"},
  "quota_project_id":"other-project"}`
 
-func TestImpersonatedReaderUsesReadOnlyScopeAndNoQuotaProject(t *testing.T) {
+func TestImpersonatedReaderAndNoQuotaProject(t *testing.T) {
 	var scopeSeen string
 	f := &fake{t: t}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -324,8 +324,8 @@ func TestImpersonatedReaderUsesReadOnlyScopeAndNoQuotaProject(t *testing.T) {
 	if err := c.Collect(context.Background(), c.Collections()[0], s, g); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(scopeSeen, "cloud-platform.read-only") {
-		t.Fatalf("minted token must ask for the read-only scope: %s", scopeSeen)
+	if !strings.Contains(scopeSeen, `"https://www.googleapis.com/auth/cloud-platform"`) {
+		t.Fatalf("minted token must ask for the cloud-platform scope the IAM API needs: %s", scopeSeen)
 	}
 	for _, call := range s.Log.Calls() {
 		if call.Blocked {

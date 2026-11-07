@@ -164,7 +164,7 @@ Attach this read policy to each:
    (roles/viewer, roles/iam.securityReviewer, roles/policyanalyzer.activityAnalysisViewer).
 3. Grant yourself Service Account Token Creator on it, then log in as it:
    gcloud auth application-default login --impersonate-service-account=<reader email>
-Firedrill asks for the cloud-platform.read-only scope. In CI, or instead, set
+The IAM API needs the cloud-platform scope, so the reader's roles keep it to reads. In CI, or instead, set
 FIREDRILL_GCP_CREDENTIALS to a credentials file's path.
 List projects under gcp.projects in config.yaml. Owner domains come from gcp.member_domains, or google.domain.
 Reads use GET, plus POST getIamPolicy on each listed project and the token calls, each by exact URL.`,
