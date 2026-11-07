@@ -128,18 +128,19 @@ func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s conne
 			return fmt.Errorf("read %s: %w", full, err)
 		}
 		private := repo.GetPrivate()
+		rule, planBlocked, err := branchRule(ctx, cl, owner, name, repo.GetDefaultBranch(), exp, expDetail, s.Now)
+		if err != nil {
+			return fmt.Errorf("read rules of %s: %w", full, err)
+		}
 		// An unknown plan is assumed to have protection, so a drill never returns
-		// N/A on a guess. Required reviewers stay off, the stricter reading of
-		// what to ask for.
-		available := !private || p != "free"
+		// N/A on a guess. GitHub saying the plan does not offer protection on
+		// this repo is not a guess, so it counts whatever the plan lookup read.
+		// Required reviewers stay off, the stricter reading of what to ask for.
+		available := (!private || p != "free") && !planBlocked
 		repoID := graph.ID("github:repo/" + full)
 		out.Node(graph.Node{ID: repoID, Kind: graph.KindGitHubRepo, Source: "github", SeenAt: s.Now, Attrs: map[string]any{
 			"name": full, "private": private, "plan": p, "protection_available": available,
 		}})
-		rule, err := branchRule(ctx, cl, owner, name, repo.GetDefaultBranch(), exp, expDetail, s.Now)
-		if err != nil {
-			return fmt.Errorf("read rules of %s: %w", full, err)
-		}
 		out.Node(graph.Node{ID: graph.ID("github:branch-rule/" + full + "/default"), Kind: graph.KindBranchRule, Source: "github", SeenAt: s.Now, Attrs: rule})
 		if err := environments(ctx, cl, owner, name, full, s, out); err != nil {
 			return fmt.Errorf("read environments of %s: %w", full, err)
@@ -166,8 +167,17 @@ type branchRuleEntry struct {
 	} `json:"parameters"`
 }
 
-// branchRule merges branch protection and rulesets into the effective rules.
-func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, exp *Export, expDetail string, now time.Time) (map[string]any, error) {
+// planBlocks reports GitHub's reply that the plan offers no branch protection
+// on this repo, such as a private repo on the free plan.
+func planBlocks(err error) bool {
+	var e *gh.ErrorResponse
+	return errors.As(err, &e) && strings.Contains(e.Message, "Upgrade to GitHub Pro")
+}
+
+// branchRule merges branch protection and rulesets into the effective rules. It
+// also reports whether GitHub said the plan offers no protection on the repo.
+func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, exp *Export, expDetail string, now time.Time) (map[string]any, bool, error) {
+	planBlocked := false
 	approvals, dismiss, codeOwner := 0, false, false
 	force, deletion := true, true
 	bypass := "none"
@@ -191,17 +201,18 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 		// No classic protection. Rulesets may still apply.
 	case forbidden(resp):
 		// The plan offers no protection here, or the token cannot read it.
+		planBlocked = planBlocks(err)
 	default:
-		return nil, err
+		return nil, false, err
 	}
 
 	req, err := cl.NewRequest(ctx, http.MethodGet, fmt.Sprintf("repos/%s/%s/rules/branches/%s", owner, repo, branch), nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var rules []branchRuleEntry
 	if resp, err := cl.Do(req, &rules); err != nil && !notFound(resp) && !forbidden(resp) {
-		return nil, err
+		return nil, false, err
 	}
 	ids := map[int64]bool{}
 	for _, r := range rules {
@@ -224,7 +235,7 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 	for id := range ids {
 		state, src, err := rulesetBypass(ctx, cl, owner, repo, id, exp, now)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		switch state {
 		case "allowed":
@@ -245,7 +256,7 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 		"required_approvals": int64(approvals), "dismiss_stale": dismiss, "code_owner_review": codeOwner,
 		"bypass": bypass, "bypass_source": strings.SplitN(source, ":", 2)[0], "bypass_detail": source,
 		"force_push_allowed": force, "deletion_allowed": deletion,
-	}, nil
+	}, planBlocked, nil
 }
 
 // rulesetBypass reads one ruleset's bypass list. GitHub returns it only to
