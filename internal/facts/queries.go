@@ -13,6 +13,7 @@ func init() {
 	registerGitHub()
 	registerIdentity()
 	registerAWS()
+	registerGCP()
 	registerFiles()
 	registerDoors()
 }
@@ -222,6 +223,81 @@ func registerAWS() {
 			"unknown_account": Bool, "is_admin": Bool, "destructive_actions": List(Str),
 		})),
 		Fn: agentKeys,
+	})
+}
+
+// gcpRows lists one target project's nodes of a kind.
+func gcpRows(g graph.Reader, kind, project string, fields ...string) ([]graph.Node, Result) {
+	r := Result{Source: "api"}
+	var nodes []graph.Node
+	for _, n := range g.Nodes(kind) {
+		if strAttr(n, "project") != project {
+			continue
+		}
+		nodes = append(nodes, n)
+		r.Read = append(r.Read, n.ID)
+	}
+	return nodes, r
+}
+
+func registerGCP() {
+	Register(Def{
+		Name: "gcp.projects", Connector: "gcp",
+		Shape: List(Obj(map[string]*Shape{"name": Str, "number": Str, "member_domains": List(Str)})),
+		Fn: func(g graph.Reader, _ Args) (Result, error) {
+			return listOf(g, graph.KindGCPProject, "api", "name", "number", "member_domains"), nil
+		},
+	})
+	Register(Def{
+		Name: "gcp.iam_bindings", Connector: "gcp",
+		Shape: List(Obj(map[string]*Shape{
+			"role": Str, "member_type": Str, "member_domain": Str, "member": Str,
+			"google_managed": Bool, "default_account": Bool, "conditional": Bool,
+		})),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			nodes, r := gcpRows(g, graph.KindGCPBinding, a.TargetName())
+			rows := []any{}
+			for _, n := range nodes {
+				rows = append(rows, attrsOf(n, "role", "member_type", "member_domain", "member",
+					"google_managed", "default_account", "conditional"))
+			}
+			r.Data = rows
+			return r, nil
+		},
+	})
+	Register(Def{
+		Name: "gcp.buckets", Connector: "gcp",
+		Shape: List(Obj(map[string]*Shape{
+			"name": Str, "public_grants": List(Str), "public_access_prevention": Str, "uniform_access": Bool,
+		})),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			nodes, r := gcpRows(g, graph.KindGCPBucket, a.TargetName())
+			rows := []any{}
+			for _, n := range nodes {
+				rows = append(rows, attrsOf(n, "name", "public_grants", "public_access_prevention", "uniform_access"))
+			}
+			r.Data = rows
+			return r, nil
+		},
+	})
+	Register(Def{
+		Name: "gcp.sa_keys", Connector: "gcp",
+		Shape: List(Obj(map[string]*Shape{
+			"service_account": Str, "key_id": Str, "disabled": Bool, "last_use_known": Bool,
+			"days_since_created": Int, "days_since_used": Int,
+		})),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			nodes, r := gcpRows(g, graph.KindGCPKey, a.TargetName())
+			rows := []any{}
+			for _, n := range nodes {
+				row := attrsOf(n, "service_account", "key_id", "disabled", "last_use_known")
+				row["days_since_created"] = daysSince(strAttr(n, "created"), a.Now)
+				row["days_since_used"] = daysSince(strAttr(n, "last_used"), a.Now)
+				rows = append(rows, row)
+			}
+			r.Data = rows
+			return r, nil
+		},
 	})
 }
 

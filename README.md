@@ -34,7 +34,7 @@ firedrill connect github
 firedrill run
 ```
 
-If the GitHub CLI is logged in, `connect github` reuses its token. With GitHub alone, 11 of the 20 drills run. The rest are listed with what connects them.
+If the GitHub CLI is logged in, `connect github` reuses its token. With GitHub alone, 11 of the 24 drills run. The rest are listed with what connects them.
 
 No GitHub yet? Point it at a checkout:
 
@@ -121,7 +121,7 @@ Snapshots on the records branch stay the source of truth. The database holds the
 ## Safety model
 
 - **Read scopes are the real control.** Every connector asks for read access only, and `connect` prints the permissions first.
-- **A guard backs it up.** GitHub and Google calls may only GET and HEAD, plus Google's token exchange and GitHub's tarball redirect, each by exact host. AWS calls are checked by action against a fixed list. Anything else stops the run with ERROR.
+- **A guard backs it up.** GitHub, Google and Google Cloud calls may only GET and HEAD, plus Google's token exchange, GitHub's tarball redirect, and Google Cloud's read-only `getIamPolicy` POST on each listed project, each by exact URL or host. AWS calls are checked by action against a fixed list. Anything else stops the run with ERROR.
 - **Every call is logged** to `.firedrill/local/calls.jsonl`, with no query strings. `--dry-run` prints the calls and makes none.
 - **Secrets are never stored.** A found secret becomes an HMAC keyed by your org's salt. Every record is scanned before it is written, and anything that looks like a secret is replaced with its hash.
 - **Records stay private.** In a public repo Firedrill writes no record files and prints only counts, unless you pass `--public-ok`.

@@ -26,6 +26,10 @@ type Config struct {
 		} `yaml:"accounts"`
 		BreakGlass []string `yaml:"break_glass"`
 	} `yaml:"aws"`
+	GCP struct {
+		Projects      []string `yaml:"projects"`
+		MemberDomains []string `yaml:"member_domains"`
+	} `yaml:"gcp"`
 	HR struct {
 		LeaversCSV string `yaml:"leavers_csv"`
 	} `yaml:"hr"`

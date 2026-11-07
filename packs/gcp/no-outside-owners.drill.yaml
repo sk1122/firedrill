@@ -1,0 +1,19 @@
+firedrill: v0
+id: gcp/no-outside-owners
+safeguard: "Only accounts in the company's own domains hold Owner or Editor on a Google Cloud project."
+severity: critical
+for_each: gcp.projects
+fetch:
+  bindings: { fact: gcp.iam_bindings }
+applies_when: target.member_domains.size() > 0 && bindings.size() > 0
+na_reason: "list gcp.member_domains or google.domain in config.yaml, or the project has no IAM bindings"
+pass_when:
+  - >-
+    bindings.filter(b, b.role in ["roles/owner", "roles/editor"] &&
+    b.member_type in ["user", "group", "domain", "deleted_user", "deleted_group"] &&
+    !(b.member_domain in target.member_domains)).size() == 0
+  - >-
+    bindings.filter(b, b.role in ["roles/owner", "roles/editor"] &&
+    b.member_type in ["allUsers", "allAuthenticatedUsers"]).size() == 0
+fix: "Remove Owner and Editor from accounts outside your domains, and give outside collaborators a narrow role on the resources they need."
+maps_to: [SOC2:CC6.2, ISO27001:A.5.18]

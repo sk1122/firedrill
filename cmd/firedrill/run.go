@@ -250,7 +250,7 @@ func printRun(out io.Writer, res *run.Result, total int) {
 func waitingLine(skips []run.Skip) string {
 	hints := map[string]string{
 		"github": "connect github", "google": "connect google (about 10 minutes, needs a super admin)",
-		"aws": "connect aws (about 2 minutes)", "hr": "an HR leavers CSV", "semgrep": "a Semgrep results file",
+		"aws": "connect aws (about 2 minutes)", "gcp": "connect gcp (about 2 minutes)", "hr": "an HR leavers CSV", "semgrep": "a Semgrep results file",
 		"web": "verify-domain (one DNS record)", "dns": "verify-domain (one DNS record)", "ctlog": "verify-domain (one DNS record)",
 		"a verified domain": "verify-domain (one DNS record)", "a target from repos": "--path, or connect github",
 	}

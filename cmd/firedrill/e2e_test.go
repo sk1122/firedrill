@@ -94,7 +94,7 @@ func TestFromCleanMachineToFirstFailThenFixedMeansFixed(t *testing.T) {
 	e := newEnv(t)
 	start := time.Now()
 	out := e.mustRun("init", "--yes", "--owner", "@arjun")
-	if !strings.Contains(out, "20 starter drills") || !strings.Contains(out, "salt") {
+	if !strings.Contains(out, "24 starter drills") || !strings.Contains(out, "salt") {
 		t.Fatalf("init: %s", out)
 	}
 	if info, err := os.Stat(filepath.Join(e.home, ".config/firedrill/salt")); err != nil || info.Mode().Perm() != 0o600 {

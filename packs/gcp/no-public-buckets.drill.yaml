@@ -1,0 +1,15 @@
+firedrill: v0
+id: gcp/no-public-buckets
+safeguard: "No Cloud Storage bucket is open to everyone on the internet."
+severity: critical
+for_each: gcp.projects
+fetch:
+  buckets: { fact: gcp.buckets }
+applies_when: buckets.size() > 0
+na_reason: "the project has no buckets"
+pass_when:
+  - buckets.filter(b, b.public_grants.size() > 0).size() == 0
+warn_when:
+  - buckets.filter(b, b.public_access_prevention != "enforced").size() > 0
+fix: "Remove allUsers and allAuthenticatedUsers from the bucket's IAM policy, then set public access prevention to enforced on the bucket, or on the organization."
+maps_to: [SOC2:CC6.1, ISO27001:A.8.3]

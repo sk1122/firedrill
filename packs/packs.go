@@ -5,5 +5,5 @@ import "embed"
 
 // FS holds every starter drill under <pack>/<slug>.drill.yaml.
 //
-//go:embed change access agent doors code
+//go:embed change access agent doors code gcp
 var FS embed.FS
