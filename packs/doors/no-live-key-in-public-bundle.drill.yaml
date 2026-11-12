@@ -1,0 +1,15 @@
+firedrill: v0
+id: doors/no-live-key-in-public-bundle
+safeguard: "No credential in a public JavaScript bundle or source map matches a key that is live in the cloud inventory."
+severity: critical
+for_each: config.domains
+fetch:
+  secrets: { fact: web.public_secrets, args: { domain: target.domain } }
+na_reason: "no home page, bundle or source map was read on this domain's hosts"
+pass_when:
+  - secrets.found.filter(s, s.live == "yes").size() == 0
+  - secrets.found.filter(s, !s.client_side).size() == 0
+warn_when:
+  - secrets.found.exists(s, s.client_side && s.live == "unknown")
+fix: "Anything in a page, bundle or source map is public. A key that matches a live Google Cloud key fails: disable or delete that key now, then rotate. A server-side credential (a private key, a service account key, a cloud or payment secret key, a database URL with a password, a personal token) fails whatever its live status, since it is public by definition: revoke it, move it behind your server, and stop bundling it. A browser key that is meant to be public (a Google API key, a Stripe publishable key, a Razorpay key ID, or a credential-named value Firedrill cannot place) warns until it is known not to be live: check it is restricted by referrer, API and quota. It passes only when nothing is found, or every key found is a browser key known to be disabled. Firedrill never tries a key: it matches the key ID against keys it already read, and only Google Cloud service account keys can be matched today."
+maps_to: [SOC2:CC6.1, ISO27001:A.8.12]

@@ -106,3 +106,65 @@ func TestUnderDomain(t *testing.T) {
 		t.Fatal("lookalikes must not match")
 	}
 }
+
+func TestPathLimitedPolicies(t *testing.T) {
+	cases := []struct {
+		name     string
+		policy   Policy
+		host     string
+		allowed  []string
+		refused  []string
+		refusedM [][2]string // method, path
+	}{
+		{"anthropic", AnthropicPolicy(), "api.anthropic.com",
+			[]string{"/v1/organizations/api_keys", "/v1/organizations/workspaces"},
+			[]string{"/v1/messages", "/v1/organizations/users", "/v1/organizations/api_keys/apikey_01AcmeExample", "/v1/organizations/api_keys/x/../../messages", "/"},
+			[][2]string{{"POST", "/v1/organizations/api_keys/apikey_01AcmeExample"}, {"POST", "/v1/messages"}, {"DELETE", "/v1/organizations/workspaces"}}},
+		{"openai", OpenAIPolicy(), "api.openai.com",
+			[]string{"/v1/organization/projects", "/v1/organization/projects/proj_acme/api_keys", "/v1/organization/projects/proj_acme/spend_limit", "/v1/organization/spend_limit"},
+			[]string{"/v1/chat/completions", "/v1/organization/admin_api_keys", "/v1/organization/projects/proj_acme/service_accounts", "/v1/organization/projects/a/b/api_keys", "/v1/models"},
+			[][2]string{{"POST", "/v1/organization/admin_api_keys"}, {"POST", "/v1/organization/projects/proj_acme/spend_limit"}, {"DELETE", "/v1/organization/projects/proj_acme/api_keys/key_acme"}}},
+	}
+	for _, c := range cases {
+		tr := &Transport{Policy: c.policy, Log: &CallLog{}, Connector: c.name}
+		for _, p := range c.allowed {
+			if err := tr.check("GET", c.host, c.host, "https://"+c.host+p); err != nil {
+				t.Errorf("%s GET %s: %v", c.name, p, err)
+			}
+		}
+		for _, p := range c.refused {
+			if err := tr.check("GET", c.host, c.host, "https://"+c.host+p); !errors.Is(err, ErrBlocked) {
+				t.Errorf("%s GET %s must be refused", c.name, p)
+			}
+		}
+		for _, mp := range c.refusedM {
+			if err := tr.check(mp[0], c.host, c.host, "https://"+c.host+mp[1]); !errors.Is(err, ErrBlocked) {
+				t.Errorf("%s %s %s must be refused", c.name, mp[0], mp[1])
+			}
+		}
+		if err := tr.check("GET", "evil.example", "evil.example", "https://evil.example/v1/organization/projects"); !errors.Is(err, ErrBlocked) {
+			t.Errorf("%s: another host must be refused", c.name)
+		}
+	}
+}
+
+func TestAWSWritesOnNewServicesAreRefused(t *testing.T) {
+	log := &CallLog{}
+	for _, a := range []string{"rds:DeleteDBInstance", "rds:ModifyDBInstance", "rds:DeleteDBClusterSnapshot", "rds:CopyDBSnapshot",
+		"backup:DeleteRecoveryPoint", "backup:StartCopyJob", "backup:DeleteBackupVault", "backup:GetBackupVaultAccessPolicy"} {
+		if err := CheckAWS(log, a); !errors.Is(err, ErrBlocked) {
+			t.Errorf("%s must be refused", a)
+		}
+	}
+	for svc, prefix := range AWSServicePrefix {
+		found := false
+		for a := range AWSActions {
+			if strings.HasPrefix(a, prefix+":") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("service %s maps to %s, which has no allowed action", svc, prefix)
+		}
+	}
+}

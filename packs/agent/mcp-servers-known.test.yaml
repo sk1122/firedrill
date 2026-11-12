@@ -1,0 +1,208 @@
+firedrill: v0
+drill: agent/mcp-servers-known
+cases:
+    - name: owned host, pinned allowlisted package, local script
+      expect: PASS
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  egress: open
+                  egress_hosts: []
+                  egress_unbounded: false
+                  file: .mcp.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers:
+                    - command: ""
+                      credentials: []
+                      host: mcp.acme.com
+                      host_known: true
+                      name: docs
+                      package: ""
+                      package_known: true
+                      pinned: true
+                      transport: http
+                      version: ""
+                    - command: npx
+                      credentials: []
+                      host: ""
+                      host_known: false
+                      name: fs
+                      package: '@acme/mcp-fs'
+                      package_known: true
+                      pinned: true
+                      transport: stdio
+                      version: 1.4.2
+                    - command: scripts/mcp.sh
+                      credentials: []
+                      host: ""
+                      host_known: false
+                      name: tools
+                      package: ""
+                      package_known: true
+                      pinned: true
+                      transport: stdio
+                      version: ""
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        agents: 1
+    - name: unknown remote host
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  egress: open
+                  egress_hosts: []
+                  egress_unbounded: false
+                  file: .mcp.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers:
+                    - command: ""
+                      credentials: []
+                      host: mcp.unknown-tools.example
+                      host_known: false
+                      name: helper
+                      package: ""
+                      package_known: true
+                      pinned: true
+                      transport: http
+                      version: ""
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        agents: 1
+    - name: unpinned npx package
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  egress: open
+                  egress_hosts: []
+                  egress_unbounded: false
+                  file: .mcp.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers:
+                    - command: npx
+                      credentials: []
+                      host: ""
+                      host_known: false
+                      name: helper
+                      package: some-mcp
+                      package_known: false
+                      pinned: false
+                      transport: stdio
+                      version: ""
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        agents: 1
+    - name: latest tag
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  egress: open
+                  egress_hosts: []
+                  egress_unbounded: false
+                  file: .mcp.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers:
+                    - command: npx
+                      credentials: []
+                      host: ""
+                      host_known: false
+                      name: helper
+                      package: '@acme/mcp-fs'
+                      package_known: true
+                      pinned: false
+                      transport: stdio
+                      version: ""
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        agents: 1
+    - name: pinned but unknown package
+      expect: WARN
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  egress: open
+                  egress_hosts: []
+                  egress_unbounded: false
+                  file: .mcp.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers:
+                    - command: uvx
+                      credentials: []
+                      host: ""
+                      host_known: false
+                      name: helper
+                      package: acme-mcp-search
+                      package_known: false
+                      pinned: true
+                      transport: stdio
+                      version: 0.3.1
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        agents: 1
+    - name: no agent config
+      expect: N/A
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found: []
+            inspected: 0
+            shared_credentials: []

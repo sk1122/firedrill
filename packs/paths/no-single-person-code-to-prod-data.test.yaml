@@ -1,0 +1,465 @@
+firedrill: v0
+drill: paths/no-single-person-code-to-prod-data
+cases:
+    - name: one person can bypass review and delete production data
+      expect: FAIL
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: true
+            protected_branches_only: true
+            required_reviewers:
+                - '@a'
+            reviewers_available: false
+        people:
+            bypass_known: true
+            found:
+                - email: ana@acme.example
+                  external: false
+                  gcp_admin:
+                    - acme-prod
+                  gcp_destructive:
+                    - acme-prod
+                  gcp_power_known: true
+                  gcp_roles:
+                    - acme-prod:roles/owner
+                  github_admin_repos: []
+                  github_bypass:
+                    - acme/api
+                  github_org_role: admin
+                  github_present: true
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: false
+                  id: person:ana
+                  leaver: false
+                  prod_destructive:
+                    - acme-prod
+                  systems:
+                    - gcp
+                    - github
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - gcp
+                - github
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+        projects:
+            - member_domains: []
+              name: acme-prod
+              number: "1"
+        rules:
+            bypass: allowed
+            bypass_actors_known: true
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: the person who can bypass cannot delete production data
+      expect: PASS
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: true
+            protected_branches_only: true
+            required_reviewers:
+                - '@a'
+            reviewers_available: false
+        people:
+            bypass_known: true
+            found:
+                - email: ana@acme.example
+                  external: false
+                  gcp_admin: []
+                  gcp_destructive: []
+                  gcp_power_known: true
+                  gcp_roles:
+                    - acme-prod:roles/viewer
+                  github_admin_repos: []
+                  github_bypass:
+                    - acme/api
+                  github_org_role: admin
+                  github_present: true
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: false
+                  id: person:ana
+                  leaver: false
+                  prod_destructive: []
+                  systems:
+                    - gcp
+                    - github
+                - email: bo@acme.example
+                  external: false
+                  gcp_admin:
+                    - acme-prod
+                  gcp_destructive:
+                    - acme-prod
+                  gcp_power_known: true
+                  gcp_roles:
+                    - acme-prod:roles/owner
+                  github_admin_repos: []
+                  github_bypass: []
+                  github_org_role: member
+                  github_present: true
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: false
+                  id: person:bo
+                  leaver: false
+                  prod_destructive:
+                    - acme-prod
+                  systems:
+                    - gcp
+                    - github
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - gcp
+                - github
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+        projects:
+            - member_domains: []
+              name: acme-prod
+              number: "1"
+        rules:
+            bypass: allowed
+            bypass_actors_known: true
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: delete rights only outside production
+      expect: PASS
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: true
+            protected_branches_only: true
+            required_reviewers:
+                - '@a'
+            reviewers_available: false
+        people:
+            bypass_known: true
+            found:
+                - email: ana@acme.example
+                  external: false
+                  gcp_admin:
+                    - acme-dev
+                  gcp_destructive:
+                    - acme-dev
+                  gcp_power_known: true
+                  gcp_roles:
+                    - acme-dev:roles/owner
+                  github_admin_repos: []
+                  github_bypass:
+                    - acme/api
+                  github_org_role: admin
+                  github_present: true
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: false
+                  id: person:ana
+                  leaver: false
+                  prod_destructive: []
+                  systems:
+                    - gcp
+                    - github
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - gcp
+                - github
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+        projects:
+            - member_domains: []
+              name: acme-dev
+              number: "1"
+            - member_domains: []
+              name: acme-prod
+              number: "1"
+        rules:
+            bypass: allowed
+            bypass_actors_known: true
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: who can bypass is unknown
+      expect: WARN
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: true
+            protected_branches_only: true
+            required_reviewers:
+                - '@a'
+            reviewers_available: false
+        people:
+            bypass_known: false
+            found:
+                - email: bo@acme.example
+                  external: false
+                  gcp_admin:
+                    - acme-prod
+                  gcp_destructive:
+                    - acme-prod
+                  gcp_power_known: true
+                  gcp_roles:
+                    - acme-prod:roles/owner
+                  github_admin_repos: []
+                  github_bypass: []
+                  github_org_role: none
+                  github_present: false
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: false
+                  id: person:bo
+                  leaver: false
+                  prod_destructive:
+                    - acme-prod
+                  systems:
+                    - gcp
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - gcp
+                - github
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+        projects:
+            - member_domains: []
+              name: acme-prod
+              number: "1"
+        rules:
+            bypass: unknown
+            bypass_actors_known: false
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: an unlinked GitHub account can bypass
+      expect: WARN
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: true
+            protected_branches_only: true
+            required_reviewers:
+                - '@a'
+            reviewers_available: false
+        people:
+            bypass_known: true
+            found: []
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - gcp
+                - github
+            unlinked:
+                bypass_repos:
+                    - acme/api
+                gcp: 0
+                github: 1
+                total: 1
+        projects:
+            - member_domains: []
+              name: acme-prod
+              number: "1"
+        rules:
+            bypass: allowed
+            bypass_actors_known: true
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: the bypassing person holds a custom role nobody could read
+      expect: WARN
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: true
+            prevent_self_review: true
+            protected_branches_only: true
+            required_reviewers:
+                - '@a'
+            reviewers_available: false
+        people:
+            bypass_known: true
+            found:
+                - email: ana@acme.example
+                  external: false
+                  gcp_admin: []
+                  gcp_destructive: []
+                  gcp_power_known: false
+                  gcp_roles:
+                    - acme-prod:projects/acme-prod/roles/deployer
+                  github_admin_repos: []
+                  github_bypass:
+                    - acme/api
+                  github_org_role: admin
+                  github_present: true
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: false
+                  id: person:ana
+                  leaver: false
+                  prod_destructive: []
+                  systems:
+                    - gcp
+                    - github
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - gcp
+                - github
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+        projects:
+            - member_domains: []
+              name: acme-prod
+              number: "1"
+        rules:
+            bypass: allowed
+            bypass_actors_known: true
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: no production environment
+      expect: N/A
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: false
+            prevent_self_review: false
+            protected_branches_only: false
+            required_reviewers: []
+            reviewers_available: false
+        people:
+            bypass_known: true
+            found:
+                - email: ana@acme.example
+                  external: false
+                  gcp_admin:
+                    - acme-prod
+                  gcp_destructive:
+                    - acme-prod
+                  gcp_power_known: true
+                  gcp_roles:
+                    - acme-prod:roles/owner
+                  github_admin_repos: []
+                  github_bypass:
+                    - acme/api
+                  github_org_role: admin
+                  github_present: true
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: false
+                  id: person:ana
+                  leaver: false
+                  prod_destructive:
+                    - acme-prod
+                  systems:
+                    - gcp
+                    - github
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - gcp
+                - github
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+        projects:
+            - member_domains: []
+              name: acme-prod
+              number: "1"
+        rules:
+            bypass: allowed
+            bypass_actors_known: true
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1

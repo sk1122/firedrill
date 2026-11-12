@@ -1,0 +1,12 @@
+firedrill: v0
+id: doors/third-party-scripts-pinned
+safeguard: "Every script an owned page loads from a host you do not own carries an integrity hash."
+severity: high
+for_each: config.domains
+fetch:
+  scripts: { fact: web.page_scripts, args: { domain: target.domain } }
+na_reason: "no home page was read on this domain's hosts; only each host's home page is checked, other pages are not crawled"
+pass_when:
+  - scripts.found.filter(s, !s.owned && !s.has_integrity).size() == 0
+fix: "Add an integrity attribute (a sha384 hash of the exact file) and crossorigin=\"anonymous\" to each script tag that loads from another host, so a changed file is refused, or host the script yourself. A vendor whose script changes by design cannot be pinned: record who owns that risk with a waiver and an expiry. Only each verified host's home page is read."
+maps_to: [SOC2:CC8.1, ISO27001:A.8.26]

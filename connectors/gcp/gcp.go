@@ -1,5 +1,7 @@
-// Package gcp reads IAM bindings, Cloud Storage bucket access and service
-// account keys in every listed Google Cloud project. Every call is a GET, except
+// Package gcp reads IAM bindings, Cloud Storage bucket access, service account
+// keys, and Cloud SQL backup settings and restore operations in every listed
+// Google Cloud project.
+// Every call is a GET, except
 // the token exchange and getIamPolicy on each listed project, each allowed by
 // exact URL.
 package gcp
@@ -42,7 +44,13 @@ const (
 	iamHost      = "iam.googleapis.com"
 	storageHost  = "storage.googleapis.com"
 	analyzerHost = "policyanalyzer.googleapis.com"
-	tokenURL     = "https://oauth2.googleapis.com/token"
+	// Cloud SQL Admin API: instances.list, for each instance's backup
+	// configuration, deletion protection, region and replicas, and
+	// operations.list, for the restores and clones each instance ran. Both GET.
+	// https://docs.cloud.google.com/sql/docs/mysql/admin-api/rest/v1/instances/list
+	// https://docs.cloud.google.com/sql/docs/mysql/admin-api/rest/v1/operations/list
+	sqlHost  = "sqladmin.googleapis.com"
+	tokenURL = "https://oauth2.googleapis.com/token"
 )
 
 // Connector reads Google Cloud.
@@ -74,7 +82,7 @@ func Policy(projects []string, impersonationURL string) connector.Policy {
 		post[getIamPolicyURL(p)] = true
 	}
 	return connector.Policy{
-		Hosts:    map[string]bool{crmHost: true, iamHost: true, storageHost: true, analyzerHost: true},
+		Hosts:    map[string]bool{crmHost: true, iamHost: true, storageHost: true, analyzerHost: true, sqlHost: true},
 		PostURLs: post,
 	}
 }
@@ -83,10 +91,16 @@ func getIamPolicyURL(project string) string {
 	return "https://" + crmHost + "/v3/projects/" + project + ":getIamPolicy"
 }
 
+// Collection names.
+const (
+	CollectionIAM     = "gcp"
+	CollectionBackups = "cloudsql"
+)
+
 // Collections lists what it reads.
 func (c *Connector) Collections() []connector.Collection {
 	return []connector.Collection{{
-		Name:  "gcp",
+		Name:  CollectionIAM,
 		Nodes: []string{graph.KindGCPProject, graph.KindGCPBinding, graph.KindGCPBucket, graph.KindGCPKey},
 		Permission: "Viewer and Security Reviewer on each project, and Policy Analyzer's " +
 			"Activity Analysis Viewer for key last use. Scope " + Scope,
@@ -99,6 +113,15 @@ func (c *Connector) Collections() []connector.Collection {
 			"GET https://" + analyzerHost + "/v1/projects/{project}/locations/global/activityTypes/serviceAccountKeyLastAuthentication/activities:query",
 			"GET https://" + storageHost + "/storage/v1/b?project={project}",
 			"GET https://" + storageHost + "/storage/v1/b/{bucket}/iam",
+			"GET https://" + iamHost + "/v1/{projects/{project} or organizations/{org}}/roles/{role}, once per custom role a binding names",
+		},
+	}, {
+		Name:       CollectionBackups,
+		Nodes:      []string{graph.KindDatabase},
+		Permission: "Cloud SQL Viewer (roles/cloudsql.viewer), which Viewer includes, and the Cloud SQL Admin API turned on in each project",
+		Calls: []string{
+			"GET https://" + sqlHost + "/v1/projects/{project}/instances",
+			"GET https://" + sqlHost + "/v1/projects/{project}/operations?instance={instance}, for each instance, to find restores and clones",
 		},
 	}}
 }
@@ -129,9 +152,10 @@ func credentialsPath(s connector.Scope) string {
 	return filepath.Join(dir, "application_default_credentials.json")
 }
 
-// Available is true when projects are listed and a credentials file exists.
+// Available is true when Google Cloud was connected on purpose, projects are
+// listed and a credentials file exists. Credentials alone are never enough.
 func (c *Connector) Available(s connector.Scope) (bool, string) {
-	if len(s.Project.Config.GCP.Projects) == 0 {
+	if !s.Project.Config.IsConnected("gcp") || len(s.Project.Config.GCP.Projects) == 0 {
 		return false, "connect gcp"
 	}
 	p := credentialsPath(s)
@@ -252,24 +276,28 @@ func (a *api) do(ctx context.Context, method, u string, body any, out any) error
 }
 
 // Collect reads every listed project.
-func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s connector.Scope, out graph.Writer) error {
+func (c *Connector) Collect(ctx context.Context, col connector.Collection, s connector.Scope, out graph.Writer) error {
 	cl, quota, err := c.client(ctx, s)
 	if err != nil {
 		return err
 	}
 	a := &api{cl: cl, quota: quota}
+	if col.Name == CollectionBackups {
+		return c.collectCloudSQL(ctx, a, s, out)
+	}
 	// One project that cannot be read gives ERROR on that project's drills;
 	// the others still run. Only when none can be read does the connector fail.
 	var errs []error
+	roles := &customRoles{seen: map[string]Power{}}
 	for _, p := range s.Project.Config.GCP.Projects {
-		if err := c.collectProject(ctx, a, p, s, out); err != nil {
+		if err := c.collectProject(ctx, a, p, roles, s, out); err != nil {
 			if errors.Is(err, connector.ErrBlocked) {
 				return err
 			}
 			errs = append(errs, fmt.Errorf("gcp project %s: %w", p, err))
 			out.Node(graph.Node{ID: graph.ID("gcp:project/" + p), Kind: graph.KindGCPProject, Source: "gcp", SeenAt: s.Now,
 				Attrs: map[string]any{"name": p, "number": "", "member_domains": memberDomains(s), "partial": []any{},
-					"error": err.Error()}})
+					"production": s.Project.Config.IsProduction(p), "error": err.Error()}})
 		}
 	}
 	if len(errs) == len(s.Project.Config.GCP.Projects) {
@@ -292,7 +320,7 @@ func memberDomains(s connector.Scope) []any {
 	return out
 }
 
-func (c *Connector) collectProject(ctx context.Context, a *api, project string, s connector.Scope, out graph.Writer) error {
+func (c *Connector) collectProject(ctx context.Context, a *api, project string, roles *customRoles, s connector.Scope, out graph.Writer) error {
 	var policy struct {
 		Bindings []struct {
 			Role      string    `json:"role"`
@@ -307,7 +335,16 @@ func (c *Connector) collectProject(ctx context.Context, a *api, project string, 
 	projID := graph.ID("gcp:project/" + project)
 	var partial []any
 	number := ""
+	production := s.Project.Config.IsProduction(project)
 	for _, b := range policy.Bindings {
+		power := PredefinedPower(b.Role)
+		if IsCustomRole(b.Role) {
+			p, err := roles.power(ctx, a, b.Role, &partial)
+			if err != nil {
+				return err
+			}
+			power = p
+		}
 		for _, m := range b.Members {
 			mem := parseMember(m, project)
 			if mem.number != "" {
@@ -319,6 +356,8 @@ func (c *Connector) collectProject(ctx context.Context, a *api, project string, 
 					"project": project, "role": b.Role, "member_type": mem.kind, "member_domain": mem.domain,
 					"google_managed": mem.googleManaged, "default_account": mem.defaultAccount,
 					"conditional": b.Condition != nil, "member": mem.public,
+					"is_admin": power.Admin, "destructive": power.Destructive, "power_known": power.Known,
+					"production": production,
 				},
 				Private: map[string]any{"email": mem.email}})
 			out.Edge(graph.Edge{From: projID, To: id, Kind: graph.EdgeOwns, Source: "gcp"})
@@ -333,6 +372,7 @@ func (c *Connector) collectProject(ctx context.Context, a *api, project string, 
 	}
 	out.Node(graph.Node{ID: projID, Kind: graph.KindGCPProject, Source: "gcp", SeenAt: s.Now, Attrs: map[string]any{
 		"name": project, "number": number, "member_domains": memberDomains(s), "partial": partial,
+		"production": production,
 	}})
 	return nil
 }

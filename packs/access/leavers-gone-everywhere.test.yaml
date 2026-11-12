@@ -1,0 +1,312 @@
+firedrill: v0
+drill: access/leavers-gone-everywhere
+cases:
+    - name: leaver still active in Google Workspace
+      expect: FAIL
+      facts:
+        leavers:
+            - email: dee@acme.example
+              id: person:dee
+              leave_date: "2026-10-01"
+        people:
+            bypass_known: true
+            found:
+                - email: dee@acme.example
+                  external: false
+                  gcp_admin: []
+                  gcp_destructive: []
+                  gcp_power_known: true
+                  gcp_roles: []
+                  github_admin_repos: []
+                  github_bypass: []
+                  github_org_role: none
+                  github_present: false
+                  github_repos: []
+                  google_active: true
+                  google_admin: false
+                  google_present: true
+                  id: person:dee
+                  leaver: true
+                  prod_destructive: []
+                  systems:
+                    - google
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - google
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+    - name: leaver suspended in Google but still holds a GCP role
+      expect: FAIL
+      facts:
+        leavers:
+            - email: dee@acme.example
+              id: person:dee
+              leave_date: "2026-10-01"
+        people:
+            bypass_known: true
+            found:
+                - email: dee@acme.example
+                  external: false
+                  gcp_admin: []
+                  gcp_destructive:
+                    - acme-prod
+                  gcp_power_known: true
+                  gcp_roles:
+                    - acme-prod:roles/storage.objectAdmin
+                  github_admin_repos: []
+                  github_bypass: []
+                  github_org_role: none
+                  github_present: false
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: true
+                  id: person:dee
+                  leaver: true
+                  prod_destructive:
+                    - acme-prod
+                  systems:
+                    - gcp
+                    - google
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - google
+                - gcp
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+    - name: leaver suspended in Google but still in the GitHub org
+      expect: FAIL
+      facts:
+        leavers:
+            - email: dee@acme.example
+              id: person:dee
+              leave_date: "2026-10-01"
+        people:
+            bypass_known: true
+            found:
+                - email: dee@acme.example
+                  external: false
+                  gcp_admin: []
+                  gcp_destructive: []
+                  gcp_power_known: true
+                  gcp_roles: []
+                  github_admin_repos: []
+                  github_bypass: []
+                  github_org_role: member
+                  github_present: true
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: true
+                  id: person:dee
+                  leaver: true
+                  prod_destructive: []
+                  systems:
+                    - github
+                    - google
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - google
+                - github
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+    - name: every account of the leaver is closed
+      expect: PASS
+      facts:
+        leavers:
+            - email: dee@acme.example
+              id: person:dee
+              leave_date: "2026-10-01"
+        people:
+            bypass_known: true
+            found:
+                - email: ana@acme.example
+                  external: false
+                  gcp_admin: []
+                  gcp_destructive: []
+                  gcp_power_known: true
+                  gcp_roles: []
+                  github_admin_repos: []
+                  github_bypass: []
+                  github_org_role: admin
+                  github_present: true
+                  github_repos: []
+                  google_active: true
+                  google_admin: true
+                  google_present: true
+                  id: person:ana
+                  leaver: false
+                  prod_destructive: []
+                  systems:
+                    - github
+                    - google
+                - email: dee@acme.example
+                  external: false
+                  gcp_admin: []
+                  gcp_destructive: []
+                  gcp_power_known: true
+                  gcp_roles: []
+                  github_admin_repos: []
+                  github_bypass: []
+                  github_org_role: none
+                  github_present: false
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: true
+                  id: person:dee
+                  leaver: true
+                  prod_destructive: []
+                  systems:
+                    - google
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - google
+                - gcp
+                - github
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+    - name: only GitHub connected and the leaver is gone from it
+      expect: PASS
+      facts:
+        leavers:
+            - email: dee@acme.example
+              id: person:dee
+              leave_date: "2026-10-01"
+        people:
+            bypass_known: true
+            found:
+                - email: ana@acme.example
+                  external: false
+                  gcp_admin: []
+                  gcp_destructive: []
+                  gcp_power_known: true
+                  gcp_roles: []
+                  github_admin_repos: []
+                  github_bypass: []
+                  github_org_role: admin
+                  github_present: true
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: false
+                  id: person:ana
+                  leaver: false
+                  prod_destructive: []
+                  systems:
+                    - github
+                - email: dee@acme.example
+                  external: false
+                  gcp_admin: []
+                  gcp_destructive: []
+                  gcp_power_known: true
+                  gcp_roles: []
+                  github_admin_repos: []
+                  github_bypass: []
+                  github_org_role: none
+                  github_present: false
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: false
+                  id: person:dee
+                  leaver: true
+                  prod_destructive: []
+                  systems: []
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - github
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+    - name: a GitHub account maps to nobody
+      expect: WARN
+      facts:
+        leavers:
+            - email: dee@acme.example
+              id: person:dee
+              leave_date: "2026-10-01"
+        people:
+            bypass_known: true
+            found:
+                - email: dee@acme.example
+                  external: false
+                  gcp_admin: []
+                  gcp_destructive: []
+                  gcp_power_known: true
+                  gcp_roles: []
+                  github_admin_repos: []
+                  github_bypass: []
+                  github_org_role: none
+                  github_present: false
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: false
+                  id: person:dee
+                  leaver: true
+                  prod_destructive: []
+                  systems: []
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - github
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 1
+                total: 1
+    - name: leave date still ahead
+      expect: N/A
+      facts:
+        leavers: []
+        people:
+            bypass_known: true
+            found:
+                - email: dee@acme.example
+                  external: false
+                  gcp_admin: []
+                  gcp_destructive: []
+                  gcp_power_known: true
+                  gcp_roles: []
+                  github_admin_repos: []
+                  github_bypass: []
+                  github_org_role: none
+                  github_present: false
+                  github_repos: []
+                  google_active: true
+                  google_admin: false
+                  google_present: true
+                  id: person:dee
+                  leaver: false
+                  prod_destructive: []
+                  systems:
+                    - google
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - google
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0

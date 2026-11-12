@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' role='img' aria-label='Firedrill'%3E %3Cpath d='M64 20h128l32 32v184H32V52z' fill='%23F4F2EA' stroke='%2316161A' stroke-width='8' stroke-linejoin='round'/%3E %3Ccircle cx='128' cy='56' r='13' fill='%2324272C'/%3E%3Ccircle cx='128' cy='56' r='6' fill='%23F4F2EA'/%3E %3Cpath d='M32 92h192v14H32z' fill='%2316161A'/%3E %3Cg fill='%2316161A'%3E %3Crect x='82' y='124' width='22' height='88'/%3E %3Crect x='110' y='124' width='64' height='20'/%3E %3Crect x='110' y='160' width='46' height='18'/%3E %3C/g%3E %3Ccircle cx='190' cy='200' r='15' fill='%23D3261A'/%3E %3C/svg%3E">
+<title>Firedrill People</title>
+<style>
+{{.Fonts}}
+:root{--stock:#F4F2EA;--red:#D3261A;--green:#0B8A4E;--amber:#E8A317;--grey:#8A877C;--enamel:#24272C;--dim:#3A3E45;--muted:#B9B6AB}
+*{box-sizing:border-box}
+body{margin:0;background:var(--enamel);color:var(--stock);font:400 15px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:32px 16px 64px}
+h1,h2{font-family:"Big Shoulders Stencil",Impact,sans-serif;font-weight:700;letter-spacing:.03em;text-transform:uppercase;overflow-wrap:anywhere}
+h1{font-size:clamp(30px,6vw,44px);line-height:1.05;margin:8px 0}
+h2{font-size:26px;margin:32px 0 10px}
+.meta{color:var(--muted);font:400 13px/1.5 "IBM Plex Mono",monospace;overflow-wrap:anywhere}
+a{color:var(--stock)}
+.empty{color:var(--muted)}
+.filters{display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 0 14px;font-size:14px}
+.filters b{font-weight:600}
+.box{overflow:auto;max-width:100%;border:1px solid var(--dim)}
+table{width:100%;border-collapse:collapse;min-width:960px}
+td,th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--dim);font-size:13px;vertical-align:top}
+th{color:var(--muted);font-weight:400;font-size:12px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+td{font-family:"IBM Plex Mono",monospace}
+td:target,tr:target td{background:#2d3036}
+details summary{cursor:pointer}
+details ul{margin:4px 0 0;padding-left:16px}
+.warn{color:var(--amber)}.fail{color:#ff6a5e}.ok{color:#3cc986}
+.pill{display:inline-block;padding:0 6px;font:600 11px/1.6 "IBM Plex Mono",monospace;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap;border:1px solid var(--muted)}
+.pill.verified{background:var(--green);border-color:var(--green);color:#fff}
+.pill.declared{background:transparent;color:var(--stock)}
+ul.notes{margin:0;padding-left:18px;font:400 13px/1.6 "IBM Plex Mono",monospace;overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<main>
+<a href="index.html">Back to the board</a>
+<h1>People</h1>
+{{with .V}}
+{{if .Present}}<p class="meta">From the snapshot of {{.Taken}}{{if .SystemsRead}} · read from {{range $i, $s := .SystemsRead}}{{if $i}}, {{end}}{{$s}}{{end}}{{end}}</p>{{end}}
+<p class="meta">Evidence: accounts, roles and repo access <span class="pill verified">verified</span> from the GitHub, GCP and Google Workspace APIs; links from GitHub logins to people and owners of service accounts <span class="pill declared">declared</span> in people.yaml and owners.yaml. People show by a short hashed ID, never by name or address. Sorted by ID; no total and no ranking.</p>
+{{if .Basis}}<p class="meta warn">{{.Basis}}.</p>{{end}}
+{{end}}
+<nav class="filters" aria-label="Filter by system">{{range .Filters}}{{if .Current}}<b>{{.Label}} ({{.Count}})</b>{{else}}<a href="{{.File}}">{{.Label}} ({{.Count}})</a>{{end}}{{end}}</nav>
+{{if .Rows}}
+<div class="box"><table>
+<thead><tr><th>Person</th><th>Systems</th><th>Left</th><th>GitHub role</th><th>Repos</th><th>Can bypass review</th><th>GCP admin</th><th>GCP can delete</th><th>Production delete</th><th>Google</th><th>Graph</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr id="{{.Anchor}}">
+<td>{{if .ItemHref}}<a href="{{.ItemHref}}">person {{.Short}}</a>{{else}}person {{.Short}}{{end}}{{if .External}}<br><span class="warn">outside the domain</span>{{end}}{{if .Cut}}<br><span class="fail" title="{{range .Cut}}{{.}}. {{end}}">cut point</span>{{end}}</td>
+<td>{{range $i, $s := .Systems}}{{if $i}}, {{end}}{{$s}}{{else}}none{{end}}</td>
+<td>{{if .Leaver}}<span class="fail">left</span>{{else}}no{{end}}</td>
+<td>{{.GitHubRole}}</td>
+<td>{{template "list" .Repos}}{{if .AdminRepos}}<br>admin of {{template "list" .AdminRepos}}{{end}}</td>
+<td>{{template "list" .Bypass}}</td>
+<td>{{template "list" .GCPAdmin}}</td>
+<td>{{template "list" .GCPDestructive}}{{if not .PowerKnown}}<br><span class="warn">power unknown</span>{{end}}</td>
+<td>{{if .ProdDestructive}}<span class="fail">{{template "list" .ProdDestructive}}</span>{{else}}0{{end}}</td>
+<td>{{if .GooglePresent}}{{if .GoogleActive}}active{{else}}suspended{{end}}{{if .GoogleAd}}, admin{{end}}{{else}}no account{{end}}</td>
+<td>{{if .GraphHref}}<a href="{{.GraphHref}}">what can they do?</a>{{else}}nothing to draw{{end}}</td>
+</tr>{{end}}
+</tbody></table></div>
+{{else}}<p class="empty">{{if .V.PeopleNote}}{{.V.PeopleNote}}{{else}}No person here holds an account in {{.Label}}.{{end}}</p>{{end}}
+{{with .V}}
+{{if .PagesCut}}<p class="meta">{{.PagesCut}} people with power have no graph page: pages are drawn for the first {{$.Max}} by ID.</p>{{end}}
+{{if $.All}}
+<h2>Cut points ({{len .Cuts}})</h2>
+{{if .Cuts}}<ul class="notes">{{range .Cuts}}<li><a href="{{.Href}}">person {{.Short}}</a>: {{.Why}}</li>{{end}}</ul>
+<p class="meta"><a href="graph/production.html">Who can reach production data alone?</a></p>
+{{else}}<p class="empty">No one person alone can get code to production, or is the only admin of a project, the org or Workspace.</p>{{end}}
+<h2>Admin or delete power nobody owns ({{len .Orphans}})</h2>
+{{if .Orphans}}<div class="box"><table><thead><tr><th>Principal</th><th>System</th><th>Kind</th><th>Power</th><th>Why</th></tr></thead><tbody>
+{{range .Orphans}}<tr><td>{{if .Href}}<a href="{{.Href}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</td><td>{{.System}}</td><td>{{.Kind}}</td><td>{{.Role}}</td><td>{{.Reason}}</td></tr>{{end}}
+</tbody></table></div>{{else}}<p class="empty">Every admin or delete-capable principal has a person or an owner.</p>{{end}}
+<h2>Accounts no person answers for ({{len .Unlinked}})</h2>
+{{if .Unlinked}}<div class="box"><table><thead><tr><th>Account</th><th>System</th><th>Kind</th><th>Admin</th><th>Why</th></tr></thead><tbody>
+{{range .Unlinked}}<tr><td>{{if .Href}}<a href="{{.Href}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</td><td>{{.System}}</td><td>{{.Kind}}</td><td>{{if .Admin}}<span class="fail">yes</span>{{else}}no{{end}}</td><td>{{.Reason}}</td></tr>{{end}}
+</tbody></table></div>{{else}}<p class="empty">Every account links to a person or an owner.</p>{{end}}
+{{end}}
+{{end}}
+</main>
+</body>
+</html>
+{{define "list"}}{{if .}}<details><summary>{{len .}}</summary><ul>{{range .}}<li>{{.}}</li>{{end}}</ul></details>{{else}}0{{end}}{{end}}

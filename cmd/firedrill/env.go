@@ -84,9 +84,19 @@ type runContext struct {
 
 // prepare loads the project, its drills and the run scope.
 func prepare(ctx context.Context, paths []string, includeHome bool) (*runContext, error) {
+	return prepareConnecting(ctx, paths, includeHome, "")
+}
+
+// prepareConnecting is prepare for firedrill connect: the system being
+// connected counts as connected for this one command, since running connect is
+// the deliberate act. Nothing reads a GitHub token unless GitHub is connected.
+func prepareConnecting(ctx context.Context, paths []string, includeHome bool, connecting string) (*runContext, error) {
 	project, err := config.Load(projectDir)
 	if err != nil {
 		return nil, err
+	}
+	if connecting != "" && !project.Config.IsConnected(connecting) {
+		project.Config.Connected = append(project.Config.Connected, connecting)
 	}
 	drills, issues, err := drill.LoadDir(filepath.Join(projectDir, "drills"))
 	if err != nil {
@@ -103,7 +113,10 @@ func prepare(ctx context.Context, paths []string, includeHome bool) (*runContext
 		return nil, err
 	}
 	home, _ := os.UserHomeDir()
-	token, _ := githubToken(ctx)
+	var token string
+	if project.Config.IsConnected("github") {
+		token, _ = githubToken(ctx)
+	}
 	hasher := graph.NewHasher(salt)
 	scope := connector.Scope{
 		Project: project, Hasher: hasher, Now: time.Now().UTC().Truncate(time.Second), Log: &connector.CallLog{},
@@ -155,8 +168,9 @@ func gitRemote(dir string) (owner, repo string) {
 // recordsAllowed checks the visibility of the repo a run writes into: in GitHub
 // Actions from the run's event payload, which needs no extra permission; on a
 // laptop through the GitHub connection. In Actions an unreadable payload writes
-// nothing. On a laptop with no connection, records stay in a gitignored folder.
-func recordsAllowed(ctx context.Context, s connector.Scope, publicOK bool) bool {
+// nothing. On a laptop with no GitHub connection the visibility is unknown, so
+// records may only go to the gitignored default folder.
+func recordsAllowed(ctx context.Context, s connector.Scope, publicOK bool, records string) bool {
 	if publicOK {
 		return true
 	}
@@ -176,15 +190,24 @@ func recordsAllowed(ctx context.Context, s connector.Scope, publicOK bool) bool 
 		return *ev.Repository.Private
 	}
 	owner, repo := gitRemote(filepath.Dir(s.Project.Dir))
-	if owner == "" || s.Token == "" {
+	if owner == "" {
 		return true
 	}
 	gh, ok := connector.Lookup("github")
-	if !ok {
-		return true
+	if ok && s.Token != "" && s.Project.Config.IsConnected("github") {
+		if public, known := gh.(*githubconn.Connector).RepoIsPublic(ctx, s, owner, repo); known {
+			return !public
+		}
 	}
-	public, known := gh.(*githubconn.Connector).RepoIsPublic(ctx, s, owner, repo)
-	return !known || !public
+	return isDefaultRecords(records)
+}
+
+// isDefaultRecords says whether records go to .firedrill/local, which init
+// gitignores.
+func isDefaultRecords(records string) bool {
+	a, err1 := filepath.Abs(records)
+	b, err2 := filepath.Abs(defaultRecords())
+	return err1 == nil && err2 == nil && a == b
 }
 
 func defaultRecords() string { return filepath.Join(projectDir, "local") }

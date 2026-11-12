@@ -142,38 +142,62 @@ func (h Hasher) Fingerprint() string { return h.Sum("firedrill-salt-fingerprint"
 
 // Node kinds. Facts read these and connectors write them.
 const (
-	KindTargetRepo    = "target_repo"
-	KindGitHubRepo    = "github_repo"
-	KindBranchRule    = "branch_rule"
-	KindEnvironment   = "github_environment"
-	KindActionsPerms  = "actions_permissions"
-	KindIdentityUser  = "identity_user"
-	KindPerson        = "person"
-	KindAWSPrincipal  = "aws_principal"
-	KindAWSKey        = "aws_key"
-	KindGCPProject    = "gcp_project"
-	KindGCPBinding    = "gcp_iam_binding"
-	KindGCPBucket     = "gcp_bucket"
-	KindGCPKey        = "gcp_sa_key"
-	KindSecret        = "secret"
-	KindSecretSeen    = "secret_occurrence"
-	KindAgentConfig   = "agent_config"
-	KindWorkflow      = "workflow"
-	KindTFBucket      = "tf_bucket"
-	KindFileDoc       = "file_doc"
-	KindCodeowners    = "codeowners"
-	KindSemgrep       = "semgrep_finding"
-	KindHost          = "host"
-	KindCNAME         = "dns_cname"
-	KindDNSRecord     = "dns_record"
-	KindWebResponse   = "web_response"
-	KindSourceMap     = "public_source_map"
-	KindAPIDoc        = "public_api_doc"
-	KindLeaver        = "hr_leaver"
-	KindConfigHost    = "config_host"
-	KindConfigDomain  = "config_domain"
-	KindScan          = "scan"
-	KindConnectorFail = "connector_failure"
+	KindTargetRepo   = "target_repo"
+	KindGitHubRepo   = "github_repo"
+	KindBranchRule   = "branch_rule"
+	KindEnvironment  = "github_environment"
+	KindActionsPerms = "actions_permissions"
+	KindIdentityUser = "identity_user"
+	KindPerson       = "person"
+	KindAWSPrincipal = "aws_principal"
+	KindAWSKey       = "aws_key"
+	KindGCPProject   = "gcp_project"
+	KindGCPBinding   = "gcp_iam_binding"
+	KindGCPBucket    = "gcp_bucket"
+	KindGCPKey       = "gcp_sa_key"
+	KindSecret       = "secret"
+	KindSecretSeen   = "secret_occurrence"
+	KindAgentConfig  = "agent_config"
+	KindWorkflow     = "workflow"
+	KindTFBucket     = "tf_bucket"
+	KindManifest     = "js_manifest"
+	KindFileDoc      = "file_doc"
+	KindCodeowners   = "codeowners"
+	KindSemgrep      = "semgrep_finding"
+	KindHost         = "host"
+	KindCNAME        = "dns_cname"
+	KindDNSRecord    = "dns_record"
+	KindWebResponse  = "web_response"
+	KindSourceMap    = "public_source_map"
+	KindAPIDoc       = "public_api_doc"
+	// A credential found in a public JavaScript bundle or source map, by
+	// fingerprint and key ID only, and a script an owned page loads from
+	// another host.
+	KindPublicSecret = "public_secret"
+	KindPageScript   = "page_script"
+	KindLeaver       = "hr_leaver"
+	KindConfigHost   = "config_host"
+	KindConfigDomain = "config_domain"
+	KindOAuthApp     = "oauth_app"
+	KindDatabase     = "database"
+	KindAIKey        = "ai_key"
+	// GitHub people. A user's login lives only in Private, like an email.
+	KindGitHubUser = "github_user"
+	KindGitHubTeam = "github_team"
+	KindGitHubApp  = "github_app"
+	KindDeployKey  = "deploy_key"
+	// A Google group, read only when a GCP binding names it. Its address lives
+	// only in Private, like a user's.
+	KindGoogleGroup = "google_group"
+	// Registers the team keeps in .firedrill, and the thresholds in config.yaml.
+	KindConfigApp      = "config_app"
+	KindConfigBackup   = "config_backup"
+	KindConfigAIKey    = "config_ai_key"
+	KindConfigOwner    = "config_owner"
+	KindConfigRestore  = "config_restore"
+	KindConfigSettings = "config_settings"
+	KindScan           = "scan"
+	KindConnectorFail  = "connector_failure"
 )
 
 // Edge kinds.
@@ -186,6 +210,22 @@ const (
 	EdgeOwns       = "owns"
 	EdgePointsTo   = "points_to"
 	EdgeDeploysTo  = "deploys_to"
+	// EdgeGrantedTo links a third-party OAuth app to a person who granted it
+	// access. The person is a hashed ID, never an email.
+	EdgeGrantedTo = "granted_to"
+	// EdgeWritesTo links a GitHub user or team to a repo it can push to, with
+	// push or maintain permission. Admin permission is admin_of instead.
+	EdgeWritesTo = "writes_to"
+	// EdgeCanBypass links a GitHub user, app or deploy key to a repo whose
+	// default branch review it can skip. Teams and roles are expanded to users.
+	EdgeCanBypass = "can_bypass"
+	// EdgeBoundTo links a Google group to a GCP IAM binding that names it as
+	// its member. Written by the link step.
+	EdgeBoundTo = "bound_to"
+	// EdgeViaGroup links a person to a GCP IAM binding they hold through a
+	// Google group, nested groups included. A binding they hold directly is a
+	// same_person edge instead. Written by the link step.
+	EdgeViaGroup = "via_group"
 )
 
 // ScanID names the record of what a scanner inspected. Scope is a repo, a

@@ -5,6 +5,7 @@ package run
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -27,6 +28,9 @@ type Outcome struct {
 	Facts       map[string]any
 	Read        []graph.ID
 	Sources     map[string]string
+	// Tiers holds each fetch's evidence tier by alias, plus alias.path for each
+	// inferred field the conditions read.
+	Tiers       map[string]string
 	Waived      bool
 	Waivers     []config.Waiver
 	WaivedParts int
@@ -37,6 +41,18 @@ type Outcome struct {
 	NewlyClosed bool
 	Unverified  string
 	Retired     string
+	// Shadow is set while the drill is new to an established install. It is
+	// decided and recorded as normal but never changes the exit code.
+	Shadow      bool
+	ShadowUntil time.Time
+	// ShadowEnded marks a safeguard that opened in shadow and is raised as newly
+	// open on the first run after shadow ends, so it fails CI once.
+	ShadowEnded bool
+	// OpenSince and OpenDays say when the current unwaived open stretch began.
+	// NeedsReview is set once it has lasted review_after_days.
+	OpenSince   time.Time
+	OpenDays    int
+	NeedsReview bool
 }
 
 // Options controls decisions.
@@ -50,6 +66,8 @@ type Options struct {
 	Fixture map[string]facts.Result
 	// Record, when set, receives each fetched fact result by alias.
 	Record func(alias string, r facts.Result)
+	// Previous is the graph of the previous run, nil when there is none.
+	Previous graph.Reader
 }
 
 // Decide evaluates one drill across its targets.
@@ -64,7 +82,7 @@ func Decide(d *drill.Drill, g graph.Reader, o Options) []*Outcome {
 	if !ok {
 		return []*Outcome{{Drill: d, Verdict: tag.Error, Reason: "unknown for_each " + d.ForEach}}
 	}
-	res, err := def.Fn(g, facts.Args{Now: o.Now})
+	res, err := def.Fn(g, facts.Args{Now: o.Now, Previous: o.Previous})
 	if err != nil {
 		return []*Outcome{{Drill: d, Verdict: tag.Error, Reason: err.Error()}}
 	}
@@ -103,15 +121,24 @@ func missingConnector(d *drill.Drill, o Options) string {
 		names = append(names, f.Fact)
 	}
 	for _, n := range names {
-		if def, ok := facts.Lookup(n); ok && def.Connector != "" && !o.Available[def.Connector] {
+		def, ok := facts.Lookup(n)
+		if !ok {
+			continue
+		}
+		if def.Connector != "" && !o.Available[def.Connector] {
 			return def.Connector
+		}
+		// A fact any of several systems can answer waits only when none of
+		// them is connected, and then names them all.
+		if len(def.AnyConnector) > 0 && !slices.ContainsFunc(def.AnyConnector, func(c string) bool { return o.Available[c] }) {
+			return strings.Join(def.AnyConnector, " or ")
 		}
 	}
 	return ""
 }
 
 func decideTarget(d *drill.Drill, g graph.Reader, o Options, target string, attrs map[string]any) *Outcome {
-	out := &Outcome{Drill: d, Target: target, TargetAttrs: attrs, Sources: map[string]string{}, Facts: map[string]any{}}
+	out := &Outcome{Drill: d, Target: target, TargetAttrs: attrs, Sources: map[string]string{}, Tiers: map[string]string{}, Facts: map[string]any{}}
 	vars := map[string]any{"target": attrs}
 	if attrs == nil {
 		vars["target"] = map[string]any{}
@@ -125,7 +152,7 @@ func decideTarget(d *drill.Drill, g graph.Reader, o Options, target string, attr
 			out.Verdict, out.Reason = tag.Error, "unknown fact "+f.Fact
 			return out
 		}
-		args := facts.Args{Values: map[string]any{}, Target: attrs, Now: o.Now}
+		args := facts.Args{Values: map[string]any{}, Target: attrs, Now: o.Now, Previous: o.Previous}
 		for k, v := range f.Args {
 			if field, ok := strings.CutPrefix(v, "target."); ok {
 				args.Values[k] = attrs[field]
@@ -136,6 +163,14 @@ func decideTarget(d *drill.Drill, g graph.Reader, o Options, target string, attr
 		if def.Connector != "" {
 			if msg := o.Failures[def.Connector]; msg != "" {
 				out.Verdict, out.Reason = tag.Error, def.Connector+": "+msg
+				return out
+			}
+		}
+		// A system that was connected but failed leaves its rows out, which
+		// must never read as a clean result.
+		for _, c := range def.AnyConnector {
+			if msg := o.Failures[c]; msg != "" {
+				out.Verdict, out.Reason = tag.Error, c+": "+msg
 				return out
 			}
 		}
@@ -160,6 +195,9 @@ func decideTarget(d *drill.Drill, g graph.Reader, o Options, target string, attr
 		vars[f.Alias] = res.Data
 		out.Read = append(out.Read, res.Read...)
 		out.Sources[f.Alias] = res.Source
+		if tier := facts.TierOf(res.Source); tier != "" {
+			out.Tiers[f.Alias] = tier
+		}
 		if def.Scanning {
 			sawScan = true
 			if res.Inspected > 0 {
@@ -171,6 +209,8 @@ func decideTarget(d *drill.Drill, g graph.Reader, o Options, target string, attr
 		}
 	}
 	out.Facts = trimEvidence(d, raw)
+	inferred := inferredFields(d)
+	maps.Copy(out.Tiers, inferredRead(d, inferred))
 	ev, err := drill.NewEvaluator(d)
 	if err != nil {
 		out.Verdict, out.Reason = tag.Error, err.Error()
@@ -199,6 +239,12 @@ func decideTarget(d *drill.Drill, g graph.Reader, o Options, target string, attr
 	switch {
 	case failed:
 		out.Verdict, out.Reason = tag.Fail, failReason(d, ev, vars, failing, raw)
+		if onlyInferred(d, inferred, failing) {
+			// A FAIL resting only on guessed fields is not proof, so it warns and
+			// never opens the safeguard. A waiver has nothing to cover.
+			out.Verdict, out.Reason = tag.Warn, "only inferred evidence: "+out.Reason
+			return out
+		}
 		applyWaivers(out, d, ev, vars, raw, target, o)
 	default:
 		out.Verdict = tag.Pass
@@ -218,6 +264,63 @@ func decideTarget(d *drill.Drill, g graph.Reader, o Options, target string, attr
 		}
 	}
 	return out
+}
+
+// inferredFields returns, per alias, the inferred field paths of the facts a
+// drill reads, the target's from its for_each fact. It is empty for every
+// shipped fact today.
+func inferredFields(d *drill.Drill) map[string][]string {
+	out := map[string][]string{}
+	if def, ok := facts.Lookup(d.ForEach); ok && len(def.Inferred) > 0 {
+		out["target"] = def.Inferred
+	}
+	for _, f := range d.Fetches {
+		if def, ok := facts.Lookup(f.Fact); ok && len(def.Inferred) > 0 {
+			out[f.Alias] = def.Inferred
+		}
+	}
+	return out
+}
+
+// inferredRead names the inferred fields the drill's conditions read, as
+// alias.path, so the evidence shows which fields were guessed.
+func inferredRead(d *drill.Drill, inferred map[string][]string) map[string]string {
+	out := map[string]string{}
+	if len(inferred) == 0 {
+		return out
+	}
+	for alias, paths := range drill.LeafPaths(drill.UsedPaths(d)) {
+		for _, p := range paths {
+			if p != "" && facts.IsInferred(p, inferred[alias]) {
+				out[alias+"."+p] = facts.TierInferred
+			}
+		}
+	}
+	return out
+}
+
+// onlyInferred says whether a FAIL rests only on inferred evidence: every
+// failing condition reads at least one fact field, and every field the failing
+// conditions read is inferred. A condition reading no field, or any field that
+// was read rather than guessed, keeps the FAIL.
+func onlyInferred(d *drill.Drill, inferred map[string][]string, failing []string) bool {
+	if len(inferred) == 0 || len(failing) == 0 {
+		return false
+	}
+	for _, expr := range failing {
+		leaves := drill.LeafPaths(drill.ConditionPaths(d, expr))
+		if len(leaves) == 0 {
+			return false
+		}
+		for alias, paths := range leaves {
+			for _, p := range paths {
+				if !facts.IsInferred(p, inferred[alias]) {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 func naReason(d *drill.Drill, fallback string) string {
@@ -305,6 +408,12 @@ func shortID(id string) string {
 	return id
 }
 
+// shortHash gives the first 8 characters of the hash at the end of an ID.
+func shortHash(id string) string {
+	h := id[strings.LastIndexAny(id, ":/")+1:]
+	return h[:min(8, len(h))]
+}
+
 // maxBlameRows bounds how many rows are tried, so a huge list stays cheap.
 const maxBlameRows = 200
 
@@ -319,6 +428,13 @@ func describeRow(row map[string]any, n int) string {
 		}
 		return fmt.Sprintf("%s, first in %s", count, f)
 	}
+	if sh, _ := row["script_host"].(string); sh != "" {
+		return fmt.Sprintf("%s, first: script from %s on %s%s", count, sh, row["host"], row["page"])
+	}
+	if k, _ := row["kind"].(string); k != "" && row["client_side"] != nil {
+		// A credential in a public body, named by kind and place, never value.
+		return fmt.Sprintf("%s, first: %s in %s%s", count, strings.ReplaceAll(k, "_", " "), row["host"], row["path"])
+	}
 	if h, _ := row["host"].(string); h != "" {
 		return fmt.Sprintf("%s, first on %s", count, h)
 	}
@@ -327,6 +443,43 @@ func describeRow(row map[string]any, n int) string {
 			days, _ := row["days_since_created"].(int64)
 			return fmt.Sprintf("%d failing, first: key %s of %s, %d days old", n, shortID(k), sa, days)
 		}
+	}
+	if _, ok := row["engine"].(string); ok {
+		where, _ := row["account"].(string)
+		if p, _ := row["project"].(string); p != "" {
+			where = p
+		}
+		region, _ := row["region"].(string)
+		reason := fmt.Sprintf("%s, first: database %s (%s %s %s)", count, row["name"], row["system"], where, region)
+		if basis, _ := row["production_basis"].(string); strings.HasPrefix(basis, "nothing") {
+			reason += "; " + basis
+		}
+		return reason
+	}
+	if p, _ := row["provider"].(string); p != "" {
+		where, _ := row["workspace_name"].(string)
+		if pn, _ := row["project_name"].(string); pn != "" {
+			where = pn
+		}
+		return fmt.Sprintf("%s, first: %s key %s (%v) in %s", count, p, row["key_id"], row["name"], where)
+	}
+	if id, _ := row["client_id"].(string); id != "" {
+		return fmt.Sprintf("%s, first: app %v (%s), %v users", count, row["name"], id, row["user_count"])
+	}
+	// A person is named only by a short hashed ID, never an address or login.
+	if id, _ := row["id"].(string); strings.HasPrefix(id, "person:") {
+		return fmt.Sprintf("%s, first: person %s", count, shortHash(id))
+	}
+	if _, ok := row["unowned"]; ok {
+		where := ""
+		if p, _ := row["project"].(string); p != "" {
+			where = " in " + p
+		}
+		why := "no person or owner answers for it"
+		if d, _ := row["departed"].(bool); d {
+			why = "the person it belongs to has left or is suspended"
+		}
+		return fmt.Sprintf("%s, first: %s %s %s with %s%s: %s", count, row["system"], row["kind"], shortHash(fmt.Sprint(row["id"])), row["role"], where, why)
 	}
 	if role, _ := row["role"].(string); role != "" {
 		who, _ := row["member"].(string)
@@ -352,17 +505,11 @@ func describeRow(row map[string]any, n int) string {
 // A finding waiver covers it only if the drill passes once every waived finding
 // is removed, so one accepted fake key never hides a real one.
 func applyWaivers(out *Outcome, d *drill.Drill, ev *drill.Evaluator, vars map[string]any, raw map[string]facts.Result, target string, o Options) {
-	var findings []config.Waiver
-	for _, w := range o.Waivers {
-		if w.Drill != d.ID || (w.Target != "" && w.Target != target) || !w.Active(o.Now) {
-			continue
-		}
-		if w.Finding == nil {
-			out.Waived = true
-			out.Waivers = append(out.Waivers, w)
-			return
-		}
-		findings = append(findings, w)
+	whole, findings := activeWaivers(o.Waivers, d.ID, target, o.Now)
+	if whole != nil {
+		out.Waived = true
+		out.Waivers = append(out.Waivers, *whole)
+		return
 	}
 	if len(findings) == 0 {
 		return
@@ -401,6 +548,40 @@ func applyWaivers(out *Outcome, d *drill.Drill, ev *drill.Evaluator, vars map[st
 	if errMsg == "" && !failed {
 		out.Waived = true
 		out.Waivers = findings
+	}
+}
+
+// activeWaivers returns the first active drill-wide waiver for a drill and
+// target, or else the active finding waivers, in config order.
+func activeWaivers(ws []config.Waiver, drillID, target string, now time.Time) (*config.Waiver, []config.Waiver) {
+	var findings []config.Waiver
+	for _, w := range ws {
+		if w.Drill != drillID || (w.Target != "" && w.Target != target) || !w.Active(now) {
+			continue
+		}
+		if w.Finding == nil {
+			return &w, nil
+		}
+		findings = append(findings, w)
+	}
+	return nil, findings
+}
+
+// CarryWaiver keeps an open safeguard waived on a run that could not judge it
+// (ERROR, SKIP, N/A or WARN), so such a run never un-waives it. A drill-wide
+// waiver still covers it while active. Findings cannot be re-checked, so a
+// finding waiver carries the previous run's waived status only while a finding
+// waiver for this drill and target is still active. Call it before ApplyState.
+func CarryWaiver(o *Outcome, prev *tag.Tag, ws []config.Waiver, now time.Time) {
+	if o.Waived || o.Verdict == tag.Fail || o.Verdict == tag.Pass || prev == nil || prev.Header.State != tag.Open {
+		return
+	}
+	whole, findings := activeWaivers(ws, o.Drill.ID, o.Target, now)
+	switch {
+	case whole != nil:
+		o.Waived, o.Waivers = true, []config.Waiver{*whole}
+	case len(findings) > 0 && prev.Header.Waived:
+		o.Waived, o.Waivers, o.WaivedParts = true, findings, prev.Header.WaivedParts
 	}
 }
 
@@ -485,12 +666,18 @@ type Attention struct {
 	NewlyClosed      []*Outcome
 	OpenUnverified   []*Outcome
 	ClosedUnverified []*Outcome
+	// NeedsReview lists safeguards open with no fix and no waiver for
+	// review_after_days. They also stay in the lists above.
+	NeedsReview []*Outcome
 }
 
 // BuildAttention groups outcomes by what changed.
 func BuildAttention(all []*Outcome) Attention {
 	var a Attention
 	for _, o := range all {
+		if o.NeedsReview {
+			a.NeedsReview = append(a.NeedsReview, o)
+		}
 		switch {
 		case o.NewlyOpen:
 			a.NewlyOpen = append(a.NewlyOpen, o)
@@ -530,10 +717,14 @@ func ApplyState(o *Outcome, prev *tag.Tag, retired *config.Retired) {
 	}
 }
 
-// ExitCode applies the exit rules. failOn is "", "open" or "any".
+// ExitCode applies the exit rules. failOn is "", "open" or "any". An outcome in
+// shadow never changes the code, not even an ERROR.
 func ExitCode(all []*Outcome, failOn string) int {
 	code := 0
 	for _, o := range all {
+		if o.Shadow {
+			continue
+		}
 		if o.Verdict == tag.Error {
 			return 2
 		}

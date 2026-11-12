@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' role='img' aria-label='Firedrill'%3E %3Cpath d='M64 20h128l32 32v184H32V52z' fill='%23F4F2EA' stroke='%2316161A' stroke-width='8' stroke-linejoin='round'/%3E %3Ccircle cx='128' cy='56' r='13' fill='%2324272C'/%3E%3Ccircle cx='128' cy='56' r='6' fill='%23F4F2EA'/%3E %3Cpath d='M32 92h192v14H32z' fill='%2316161A'/%3E %3Cg fill='%2316161A'%3E %3Crect x='82' y='124' width='22' height='88'/%3E %3Crect x='110' y='124' width='64' height='20'/%3E %3Crect x='110' y='160' width='46' height='18'/%3E %3C/g%3E %3Ccircle cx='190' cy='200' r='15' fill='%23D3261A'/%3E %3C/svg%3E">
+<title>Firedrill Agents</title>
+<style>
+{{.Fonts}}
+:root{--stock:#F4F2EA;--red:#D3261A;--green:#0B8A4E;--amber:#E8A317;--grey:#8A877C;--enamel:#24272C;--dim:#3A3E45;--muted:#B9B6AB}
+*{box-sizing:border-box}
+body{margin:0;background:var(--enamel);color:var(--stock);font:400 15px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:32px 16px 64px}
+h1{font:700 clamp(30px,6vw,44px)/1.05 "Big Shoulders Stencil",Impact,sans-serif;letter-spacing:.03em;text-transform:uppercase;margin:8px 0;overflow-wrap:anywhere}
+.meta{color:var(--muted);font:400 13px/1.5 "IBM Plex Mono",monospace;overflow-wrap:anywhere}
+a{color:var(--stock)}
+.empty{color:var(--muted)}
+.box{overflow:auto;max-width:100%;border:1px solid var(--dim)}
+table{width:100%;border-collapse:collapse;min-width:900px}
+td,th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--dim);font-size:13px;vertical-align:top}
+th{color:var(--muted);font-weight:400;font-size:12px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+td{font-family:"IBM Plex Mono",monospace;overflow-wrap:anywhere}
+tr:target td{background:#2d3036}
+details summary{cursor:pointer}
+details ul{margin:4px 0 0;padding-left:16px}
+.warn{color:var(--amber)}.fail{color:#ff6a5e}
+</style>
+</head>
+<body>
+<main>
+<a href="index.html">Back to the board</a>
+<h1>Agents</h1>
+{{with .V}}
+{{if .Present}}<p class="meta">From the snapshot of {{.Taken}}. Agent configs <span>declared</span> in repo files; secrets show by fingerprint only, never by value.</p>{{end}}
+{{if .Agents}}
+<div class="box"><table>
+<thead><tr><th>Tool</th><th>Repo</th><th>File</th><th>MCP servers</th><th>Secrets it can read</th><th>Unguarded destructive commands</th><th>Outbound access</th><th>Humans can bypass review</th><th>Graph</th></tr></thead>
+<tbody>
+{{range .Agents}}<tr id="{{.Anchor}}">
+<td>{{.Tool}}{{if eq .Scope "user"}} (home){{end}}</td>
+<td>{{.Repo}}</td>
+<td>{{.File}}</td>
+<td>{{if .Servers}}<details><summary>{{len .Servers}}</summary><ul>{{range .Servers}}<li>{{.Name}}: {{.Where}}{{if not .Pinned}} <span class="warn">unpinned</span>{{end}}{{if not .Known}} <span class="warn">unknown</span>{{end}}</li>{{end}}</ul></details>{{else}}0{{end}}</td>
+<td>{{if .Secrets}}<details><summary class="fail">{{len .Secrets}}</summary><ul>{{range .Secrets}}<li>{{.Fingerprint}} in {{.File}}</li>{{end}}</ul></details>{{else}}0{{end}}</td>
+<td>{{if .Unguarded}}<details><summary class="fail">{{len .Unguarded}}</summary><ul>{{range .Unguarded}}<li>{{.}}</li>{{end}}</ul></details>{{else}}0{{end}}</td>
+<td>{{if .Unbounded}}<span class="fail">{{.Egress}}, any host</span>{{else if eq .Egress "allowlist"}}allowlist{{else if eq .Egress "open"}}<span class="fail">open</span>{{else if eq .Egress "not read"}}not read{{else}}<span class="warn">{{.Egress}}</span>{{end}}{{if .EgressHosts}}<details><summary>{{len .EgressHosts}} {{if eq (len .EgressHosts) 1}}host{{else}}hosts{{end}}</summary><ul>{{range .EgressHosts}}<li>{{.}}</li>{{end}}</ul></details>{{end}}</td>
+<td>{{if eq .Bypass "no"}}no{{else if eq .Bypass "unknown"}}<span class="warn">unknown</span>{{else if eq .Bypass "not read"}}not read{{else}}<span class="fail">{{.Bypass}}</span>{{end}}</td>
+<td>{{if .GraphHref}}<a href="{{.GraphHref}}">what can it touch?</a>{{end}}</td>
+</tr>{{end}}
+</tbody></table></div>
+{{else}}<p class="empty">{{.AgentNote}}</p>{{end}}
+{{end}}
+</main>
+</body>
+</html>

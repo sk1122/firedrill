@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -13,7 +14,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +40,29 @@ func (r rewrite) RoundTrip(req *http.Request) (*http.Response, error) {
 
 type routes map[string]any
 
+// paged is a list reply split into pages, served with GitHub's Link header.
+type paged [][]any
+
+// logKey, set to a *reqLog in routes, records every request's path and query.
+const logKey = "__log"
+
+type reqLog struct {
+	mu   sync.Mutex
+	uris []string
+}
+
+func (l *reqLog) add(u string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.uris = append(l.uris, u)
+}
+
+func (l *reqLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.uris...)
+}
+
 func fakeGitHub(t *testing.T, r routes) *Connector {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -46,7 +72,16 @@ func fakeGitHub(t *testing.T, r routes) *Connector {
 		if got := req.Header.Get("Authorization"); got != "Bearer tok" {
 			t.Errorf("auth header: %q", got)
 		}
-		v, ok := r[req.URL.Path]
+		if lg, ok := r[logKey].(*reqLog); ok {
+			lg.add(req.URL.RequestURI())
+		}
+		key := req.URL.Path
+		if role := req.URL.Query().Get("role"); role != "" {
+			if _, ok := r[key+"?role="+role]; ok {
+				key += "?role=" + role
+			}
+		}
+		v, ok := r[key]
 		if !ok {
 			w.WriteHeader(404)
 			_, _ = io.WriteString(w, `{"message":"Not Found"}`)
@@ -56,6 +91,17 @@ func fakeGitHub(t *testing.T, r routes) *Connector {
 			w.WriteHeader(st.code)
 			_ = json.NewEncoder(w).Encode(obj{"message": st.msg})
 			return
+		}
+		if p, isPaged := v.(paged); isPaged {
+			page, _ := strconv.Atoi(req.URL.Query().Get("page"))
+			page = max(page, 1)
+			if page < len(p) {
+				w.Header().Set("Link", fmt.Sprintf(`<https://api.github.com%s?page=%d>; rel="next"`, req.URL.Path, page+1))
+			}
+			v = []any{}
+			if page <= len(p) {
+				v = p[page-1]
+			}
 		}
 		if code, isInt := v.(int); isInt {
 			w.WriteHeader(code)
@@ -281,16 +327,58 @@ func TestPlanBlockedReplyMeansNoProtectionEvenWithHiddenPlan(t *testing.T) {
 	if repo.Attrs["plan"] != "unknown" || repo.Attrs["protection_available"] != false {
 		t.Fatalf("GitHub's own reply decides: %+v", repo.Attrs)
 	}
-	other := base(routes{protPath: status{403, "Resource not accessible by personal access token"}})
-	other["/orgs/acme"] = obj{"login": "acme"}
-	repo, _ = collect(t, fakeGitHub(t, other), scope(t)).Get("github:repo/acme/api")
-	if repo.Attrs["protection_available"] != true {
-		t.Fatalf("any other 403 keeps the unknown-plan rule: %+v", repo.Attrs)
+}
+
+// collectErr runs Collect and returns its error, failing if there is none.
+func collectErr(t *testing.T, r routes) error {
+	t.Helper()
+	c := fakeGitHub(t, r)
+	err := c.Collect(context.Background(), c.Collections()[0], scope(t), graph.New())
+	if err == nil {
+		t.Fatal("a setting the token cannot read must be an error, not an empty value")
+	}
+	return err
+}
+
+func TestForbiddenProtectionIsAnError(t *testing.T) {
+	err := collectErr(t, base(routes{protPath: status{403, "Resource not accessible by personal access token"}}))
+	if !strings.Contains(err.Error(), "acme/api") || !strings.Contains(err.Error(), "Administration: read") {
+		t.Fatalf("the error names the repo and the permission: %v", err)
 	}
 }
 
-func TestForbiddenProtectionIsNotFatal(t *testing.T) {
-	collect(t, fakeGitHub(t, base(routes{protPath: 403, rulesPath: 403})), scope(t))
+func TestForbiddenRulesIsAnError(t *testing.T) {
+	err := collectErr(t, base(routes{rulesPath: 403}))
+	if !strings.Contains(err.Error(), "acme/api") || !strings.Contains(err.Error(), "rulesets") {
+		t.Fatalf("the error names the repo and the rulesets: %v", err)
+	}
+}
+
+func TestPlanBlockedRulesAreNotAnError(t *testing.T) {
+	up := status{403, "Upgrade to GitHub Pro or make this repository public to enable this feature."}
+	repo, _ := collect(t, fakeGitHub(t, base(routes{protPath: up, rulesPath: up})), scope(t)).Get("github:repo/acme/api")
+	if repo.Attrs["protection_available"] != false {
+		t.Fatalf("%+v", repo.Attrs)
+	}
+}
+
+func TestForbiddenRulesetBypassIsUnknown(t *testing.T) {
+	r := rulesetRoutes(nil)
+	r["/repos/acme/api/rulesets/7"] = 403
+	if got := rule(t, collect(t, fakeGitHub(t, r), scope(t))); got["bypass"] != "unknown" {
+		t.Fatalf("an unreadable bypass list is unknown, never none: %+v", got)
+	}
+}
+
+func TestForbiddenEnvironmentsIsAnError(t *testing.T) {
+	err := collectErr(t, base(routes{"/repos/acme/api/environments": status{403, "Resource not accessible by personal access token"}}))
+	if !strings.Contains(err.Error(), "acme/api") || !strings.Contains(err.Error(), "Environments: read") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestForbiddenActionsSettingsIsAnError(t *testing.T) {
+	collectErr(t, base(routes{"/repos/acme/api/actions/permissions/workflow": 403}))
 }
 
 func TestRepoErrorIsReported(t *testing.T) {
@@ -370,8 +458,12 @@ func TestTarballThroughGuardedRedirect(t *testing.T) {
 
 func TestAvailable(t *testing.T) {
 	s := scope(t)
+	if ok, why := New().Available(s); ok || !strings.Contains(why, "connect github") {
+		t.Fatal("a token and repos are not enough before connect github")
+	}
+	s.Project.Config.Connected = []string{"github"}
 	if ok, _ := New().Available(s); !ok {
-		t.Fatal("token and repos present")
+		t.Fatal("connected, token and repos present")
 	}
 	s.Token = ""
 	if ok, why := New().Available(s); ok || !strings.Contains(why, "connect github") {

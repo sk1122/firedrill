@@ -1,0 +1,171 @@
+firedrill: v0
+drill: recovery/restore-exercised
+cases:
+    - name: API restore 20 days ago
+      expect: PASS
+      facts:
+        dbs:
+            found:
+                - account: ""
+                  automated_backups: true
+                  copy_detail: ""
+                  deletion_protection: true
+                  engine: POSTGRES_16
+                  last_restore_days: 20
+                  name: orders
+                  production: true
+                  production_basis: named under production in config
+                  project: acme-prod
+                  region: europe-west1
+                  restore_current: true
+                  restore_detail: a clone of orders finished 2026-10-18; a clone shows its data can be brought up elsewhere
+                  restore_known: true
+                  restore_source: api
+                  retention_days: 14
+                  retention_ok: true
+                  separate_copy: unknown
+                  system: gcp
+            min_retention_days: 7
+            restore_days: 90
+            systems:
+                - gcp
+    - name: declared restore
+      expect: PASS
+      facts:
+        dbs:
+            found:
+                - account: ""
+                  automated_backups: true
+                  copy_detail: ""
+                  deletion_protection: true
+                  engine: POSTGRES_16
+                  last_restore_days: 38
+                  name: orders
+                  production: true
+                  production_basis: named under production in config
+                  project: acme-prod
+                  region: europe-west1
+                  restore_current: true
+                  restore_detail: declared restore on 2026-09-30 by platform-team
+                  restore_known: true
+                  restore_source: declared
+                  retention_days: 14
+                  retention_ok: true
+                  separate_copy: unknown
+                  system: gcp
+            min_retention_days: 7
+            restore_days: 90
+            systems:
+                - gcp
+    - name: last restore older than the window
+      expect: FAIL
+      facts:
+        dbs:
+            found:
+                - account: ""
+                  automated_backups: true
+                  copy_detail: ""
+                  deletion_protection: true
+                  engine: POSTGRES_16
+                  last_restore_days: 200
+                  name: orders
+                  production: true
+                  production_basis: named under production in config
+                  project: acme-prod
+                  region: europe-west1
+                  restore_current: false
+                  restore_detail: a clone of orders finished 2026-04-21; a clone shows its data can be brought up elsewhere
+                  restore_known: true
+                  restore_source: api
+                  retention_days: 14
+                  retention_ok: true
+                  separate_copy: unknown
+                  system: gcp
+            min_retention_days: 7
+            restore_days: 90
+            systems:
+                - gcp
+    - name: never restored, operations readable
+      expect: FAIL
+      facts:
+        dbs:
+            found:
+                - account: ""
+                  automated_backups: true
+                  copy_detail: ""
+                  deletion_protection: true
+                  engine: POSTGRES_16
+                  last_restore_days: -1
+                  name: orders
+                  production: true
+                  production_basis: named under production in config
+                  project: acme-prod
+                  region: europe-west1
+                  restore_current: false
+                  restore_detail: ""
+                  restore_known: true
+                  restore_source: none
+                  retention_days: 14
+                  retention_ok: true
+                  separate_copy: unknown
+                  system: gcp
+            min_retention_days: 7
+            restore_days: 90
+            systems:
+                - gcp
+    - name: operations unreadable
+      expect: WARN
+      facts:
+        dbs:
+            found:
+                - account: ""
+                  automated_backups: true
+                  copy_detail: ""
+                  deletion_protection: true
+                  engine: POSTGRES_16
+                  last_restore_days: -1
+                  name: orders
+                  production: true
+                  production_basis: named under production in config
+                  project: acme-prod
+                  region: europe-west1
+                  restore_current: false
+                  restore_detail: operations could not be read for orders (403)
+                  restore_known: false
+                  restore_source: none
+                  retention_days: 14
+                  retention_ok: true
+                  separate_copy: unknown
+                  system: gcp
+            min_retention_days: 7
+            restore_days: 90
+            systems:
+                - gcp
+    - name: no production database
+      expect: N/A
+      facts:
+        dbs:
+            found:
+                - account: ""
+                  automated_backups: true
+                  copy_detail: ""
+                  deletion_protection: true
+                  engine: POSTGRES_16
+                  last_restore_days: -1
+                  name: scratch
+                  production: false
+                  production_basis: ""
+                  project: acme-prod
+                  region: europe-west1
+                  restore_current: false
+                  restore_detail: ""
+                  restore_known: true
+                  restore_source: none
+                  retention_days: 14
+                  retention_ok: true
+                  separate_copy: unknown
+                  system: gcp
+            min_retention_days: 7
+            restore_days: 90
+            systems:
+                - gcp

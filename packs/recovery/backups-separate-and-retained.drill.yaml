@@ -1,0 +1,16 @@
+firedrill: v0
+id: recovery/backups-separate-and-retained
+safeguard: "Every production database has automated backups kept for a minimum number of days, with a copy in a different account or project from the database."
+severity: critical
+fetch:
+  dbs: { fact: recovery.databases }
+applies_when: dbs.found.exists(d, d.production)
+na_reason: "no production database was found in the connected accounts and projects"
+pass_when:
+  - dbs.found.filter(d, d.production && !d.automated_backups).size() == 0
+  - dbs.found.filter(d, d.production && !d.retention_ok).size() == 0
+  - dbs.found.filter(d, d.production && d.separate_copy == "no").size() == 0
+warn_when:
+  - dbs.found.exists(d, d.production && d.separate_copy == "unknown")
+fix: "Turn on automated backups and keep them at least recovery.min_retention_days (7 unless set). Copy them to a different account or project that the database's own credentials cannot delete: an AWS Backup copy rule to a vault in another account, or a scheduled export to a bucket in another project. A copy the API cannot show goes in .firedrill/backups.yaml with who checked it and when."
+maps_to: [SOC2:A1.2, ISO27001:A.8.13]

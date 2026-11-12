@@ -230,3 +230,87 @@ func TestSameSecondRunsDoNotCollide(t *testing.T) {
 	}
 	_ = time.Second
 }
+
+// ghErrorWriter lists the repo but leaves out a branch rule field, so the drill
+// errors on acme/api.
+func ghErrorWriter(w graph.Writer) {
+	g := graph.New()
+	ghRepo(g, "team", true)
+	node(g, "github:branch-rule/acme/api/default", graph.KindBranchRule, map[string]any{"bypass": "none"})
+	for _, n := range g.Nodes("") {
+		w.Node(n)
+	}
+}
+
+// waiverStep is one run in a sequence and what it must report.
+type waiverStep struct {
+	name      string
+	days      int
+	conn      *fake
+	verdict   string
+	waived    bool
+	newlyOpen bool
+	exit      int // exit code with failOn ""
+	exitOpen  int // exit code with failOn "open"
+}
+
+func runWaiverSteps(t *testing.T, expires string, steps []waiverStep) {
+	t.Helper()
+	d := []*drill.Drill{loadDrill(t, "change/human-review-required")}
+	c := baseConfig(t, d)
+	c.Project.Waivers = []config.Waiver{{Drill: d[0].ID, Target: "acme/api", Reason: "r", ApprovedBy: "@a", Expires: expires}}
+	for _, s := range steps {
+		c.Connectors = []connector.Connector{s.conn}
+		c.Scope.Now = testNow.AddDate(0, 0, s.days)
+		res, err := Run(context.Background(), c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Outcomes) != 1 {
+			t.Fatalf("%s: outcomes %+v", s.name, res.Outcomes)
+		}
+		o := res.Outcomes[0]
+		if o.Verdict != s.verdict || o.State != tag.Open || o.Waived != s.waived || o.NewlyOpen != s.newlyOpen {
+			t.Errorf("%s: verdict=%s state=%s waived=%v newlyOpen=%v, want verdict=%s state=OPEN waived=%v newlyOpen=%v",
+				s.name, o.Verdict, o.State, o.Waived, o.NewlyOpen, s.verdict, s.waived, s.newlyOpen)
+		}
+		if got := ExitCode(res.Outcomes, ""); got != s.exit {
+			t.Errorf("%s: exit %d, want %d", s.name, got, s.exit)
+		}
+		if got := ExitCode(res.Outcomes, "open"); got != s.exitOpen {
+			t.Errorf("%s: exit --fail-on open %d, want %d", s.name, got, s.exitOpen)
+		}
+		if a := BuildAttention(res.Outcomes); (len(a.NewlyOpen) == 1) != s.newlyOpen {
+			t.Errorf("%s: attention newly open %d", s.name, len(a.NewlyOpen))
+		}
+	}
+}
+
+// A waived open safeguard stays waived through runs that cannot judge it, and
+// counts as newly open exactly once when the waiver expires.
+func TestWaiverHoldsThroughUnjudgedRuns(t *testing.T) {
+	failing := func() *fake { return &fake{name: "github", available: true, write: ghWriter(0)} }
+	gone := func() *fake { return &fake{name: "github", available: false} }
+	broken := func() *fake { return &fake{name: "github", available: true, write: ghErrorWriter} }
+	runWaiverSteps(t, "2026-11-20", []waiverStep{
+		{"FAIL waived", 0, failing(), tag.Fail, true, false, 0, 0},
+		{"SKIP waived", 1, gone(), tag.Skip, true, false, 0, 0},
+		{"ERROR waived", 2, broken(), tag.Error, true, false, 2, 2},
+		{"FAIL still waived", 3, failing(), tag.Fail, true, false, 0, 0},
+		{"SKIP after expiry", 14, gone(), tag.Skip, false, true, 1, 1},
+		{"SKIP again", 15, gone(), tag.Skip, false, false, 0, 1},
+		{"FAIL again", 16, failing(), tag.Fail, false, false, 0, 1},
+	})
+}
+
+// The waiver expires between a SKIP and the next FAIL: that FAIL is newly open.
+func TestWaiverExpiryAfterSkipIsNewlyOpen(t *testing.T) {
+	failing := func() *fake { return &fake{name: "github", available: true, write: ghWriter(0)} }
+	gone := func() *fake { return &fake{name: "github", available: false} }
+	runWaiverSteps(t, "2026-11-20", []waiverStep{
+		{"FAIL waived", 0, failing(), tag.Fail, true, false, 0, 0},
+		{"SKIP waived", 1, gone(), tag.Skip, true, false, 0, 0},
+		{"FAIL after expiry", 14, failing(), tag.Fail, false, true, 1, 1},
+		{"FAIL again", 15, failing(), tag.Fail, false, false, 0, 1},
+	})
+}

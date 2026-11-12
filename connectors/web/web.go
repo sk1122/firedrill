@@ -3,6 +3,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/sk1122/firedrill/connector"
 	"github.com/sk1122/firedrill/internal/graph"
+	"github.com/sk1122/firedrill/internal/secrets"
 )
 
 // Request limits.
@@ -48,10 +50,12 @@ func init() { connector.Register(New()) }
 
 // Collections lists what it checks.
 func (c *Connector) Collections() []connector.Collection {
-	return []connector.Collection{{Name: "doors", Nodes: []string{graph.KindSourceMap, graph.KindAPIDoc, graph.KindWebResponse},
+	return []connector.Collection{{Name: "doors",
+		Nodes: []string{graph.KindSourceMap, graph.KindAPIDoc, graph.KindWebResponse, graph.KindPublicSecret, graph.KindPageScript},
 		Calls: []string{
 			"GET each API doc path on hosts under verified domains, at most 20 per host and drill, 500 in total",
 			"GET each host's home page, its JavaScript bundles and their source maps, within the same limits",
+			"No further call: the home page, bundles and maps above are scanned for credentials, and the home page's script tags are listed; a script on another host is never requested",
 		}}}
 }
 
@@ -87,6 +91,10 @@ type response struct {
 	headers http.Header
 	head    string
 	tail    string
+	// body is the whole body, kept only when asked for, up to headBytes and
+	// maxBodyToRead; truncated says the body was longer.
+	body      string
+	truncated bool
 }
 
 // budget counts requests for one drill.
@@ -108,7 +116,9 @@ func (b *budget) take(host string) bool {
 	return true
 }
 
-func (c *Connector) get(ctx context.Context, cl *http.Client, host, p string) (*response, error) {
+// get makes one GET. With keep, the whole body is kept for the secret scan and
+// the script list; it is the same request and the same bounded read.
+func (c *Connector) get(ctx context.Context, cl *http.Client, host, p string, keep bool) (*response, error) {
 	u := c.Scheme + "://" + host + p
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -126,18 +136,31 @@ func (c *Connector) get(ctx context.Context, cl *http.Client, host, p string) (*
 	out.head = string(head[:n])
 	if err == io.ErrUnexpectedEOF || err == io.EOF {
 		out.tail = lastN(out.head, tailBytes)
+		if keep {
+			out.body = out.head
+		}
 		return out, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	// Keep only the last 1 KB of the rest, reading a bounded amount.
+	// Keep only the last 1 KB of the rest, reading a bounded amount, or all
+	// of it when asked.
+	var whole []byte
+	if keep {
+		whole = append(whole, head[:n]...)
+	}
 	tail := make([]byte, 0, tailBytes)
 	buf := make([]byte, 32<<10)
 	rest := io.LimitReader(resp.Body, maxBodyToRead)
+	read := 0
 	for {
 		m, err := rest.Read(buf)
 		if m > 0 {
+			read += m
+			if keep {
+				whole = append(whole, buf[:m]...)
+			}
 			tail = append(tail, buf[:m]...)
 			if len(tail) > tailBytes {
 				tail = append(tail[:0], tail[len(tail)-tailBytes:]...)
@@ -148,6 +171,16 @@ func (c *Connector) get(ctx context.Context, cl *http.Client, host, p string) (*
 		}
 	}
 	out.tail = string(tail)
+	if keep {
+		out.body = string(whole)
+		if read >= maxBodyToRead {
+			// One more byte says whether the body went on.
+			var one [1]byte
+			if m, _ := resp.Body.Read(one[:]); m > 0 {
+				out.truncated = true
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -201,7 +234,7 @@ func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s conne
 	}
 	for _, w := range s.WebGets {
 		host, p := w[0], w[1]
-		r, err := c.get(ctx, cl, host, p)
+		r, err := c.get(ctx, cl, host, p, false)
 		if err != nil {
 			return fmt.Errorf("web %s%s: %w", host, p, err)
 		}
@@ -251,7 +284,7 @@ func (c *Connector) apiDocs(ctx context.Context, cl *http.Client, domain string,
 			if !b.take(host) {
 				continue
 			}
-			r, err := c.get(ctx, cl, host, p)
+			r, err := c.get(ctx, cl, host, p, false)
 			if err != nil {
 				if errors.Is(err, connector.ErrBlocked) {
 					return err
@@ -279,26 +312,85 @@ var (
 	mapURL    = regexp.MustCompile(`[#@]\s*sourceMappingURL=([^\s*]+)`)
 )
 
+// pageScan gathers what one domain's home pages, bundles and source maps
+// show: the bodies scanned for credentials and the scripts each page loads.
+type pageScan struct {
+	domain    string
+	s         connector.Scope
+	out       graph.Writer
+	bodies    int // bodies scanned for credentials
+	truncated int // bodies longer than the read limit, scanned in part
+	pages     int // home pages read, whose scripts are listed
+	seen      map[graph.ID]bool
+}
+
+// secrets scans one public body for credentials and writes each by
+// fingerprint, kind and key ID. The value never leaves this function.
+func (p *pageScan) secrets(host, at, text string, truncated bool) {
+	p.bodies++
+	if truncated {
+		p.truncated++
+	}
+	for _, f := range secrets.ScanPublic(text) {
+		hash := p.s.Hasher.Sum(f.Value)
+		id := graph.ID("public-secret:" + host + at + "#" + hash)
+		if p.seen[id] {
+			continue
+		}
+		p.seen[id] = true
+		p.out.Node(graph.Node{ID: id, Kind: graph.KindPublicSecret, Source: "web", SeenAt: p.s.Now,
+			Attrs: map[string]any{"domain": p.domain, "host": host, "path": at, "kind": f.Kind, "hash": hash,
+				"key_id": f.KeyID, "client_side": secrets.IsClientSide(f.Kind)}})
+	}
+}
+
+// mapSources returns a source map's original sources, so code in them reads
+// line by line as it was written. A map that is not JSON is scanned as it is.
+func mapSources(body string) string {
+	var m struct {
+		SourcesContent []*string `json:"sourcesContent"`
+	}
+	if err := json.Unmarshal([]byte(body), &m); err != nil || len(m.SourcesContent) == 0 {
+		return body
+	}
+	var b strings.Builder
+	for _, src := range m.SourcesContent {
+		if src != nil {
+			b.WriteString(*src)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
 func (c *Connector) sourceMaps(ctx context.Context, cl *http.Client, domain string, hosts []string, s connector.Scope, out graph.Writer) error {
 	b := newBudget(hosts)
 	bundles, failures := 0, 0
+	ps := &pageScan{domain: domain, s: s, out: out, seen: map[graph.ID]bool{}}
 	for _, host := range hosts {
 		if !b.take(host) {
 			continue
 		}
-		home, err := c.get(ctx, cl, host, "/")
+		home, err := c.get(ctx, cl, host, "/", true)
 		if err != nil {
 			if errors.Is(err, connector.ErrBlocked) {
 				return err
 			}
 			continue
 		}
+		if home.status == http.StatusOK {
+			ps.pages++
+			ps.secrets(host, "/", home.body, home.truncated)
+			writeScripts(ps, host, "/", home.body)
+		}
+		// Bundles are found in the first 4 KB of the page, as before: reading
+		// the whole page for its script list makes no further request.
 		for _, m := range scriptSrc.FindAllStringSubmatch(home.head, -1) {
 			bundlePath, ok := samePath(host, "/", m[1])
 			if !ok || !b.take(host) {
 				continue
 			}
-			r, err := c.get(ctx, cl, host, bundlePath)
+			r, err := c.get(ctx, cl, host, bundlePath, true)
 			if err != nil {
 				failures++
 				continue
@@ -307,6 +399,9 @@ func (c *Connector) sourceMaps(ctx context.Context, cl *http.Client, domain stri
 				continue
 			}
 			bundles++
+			if !strings.Contains(strings.ToLower(r.ctype), "text/html") {
+				ps.secrets(host, bundlePath, r.body, r.truncated)
+			}
 			ref := r.headers.Get("SourceMap")
 			if ref == "" {
 				ref = r.headers.Get("X-SourceMap")
@@ -323,7 +418,7 @@ func (c *Connector) sourceMaps(ctx context.Context, cl *http.Client, domain stri
 			if !ok || !b.take(host) {
 				continue
 			}
-			mr, err := c.get(ctx, cl, host, mp)
+			mr, err := c.get(ctx, cl, host, mp, true)
 			if err != nil {
 				failures++
 				continue
@@ -331,12 +426,27 @@ func (c *Connector) sourceMaps(ctx context.Context, cl *http.Client, domain stri
 			if mr.status == http.StatusOK && !strings.Contains(strings.ToLower(mr.ctype), "text/html") {
 				out.Node(graph.Node{ID: graph.ID("source-map:" + host + mp), Kind: graph.KindSourceMap, Source: "web", SeenAt: s.Now,
 					Attrs: map[string]any{"domain": domain, "host": host, "bundle": bundlePath, "map_url": mp}})
+				ps.secrets(host, mp, mapSources(mr.body), mr.truncated)
 			}
 		}
 	}
-	graph.WriteScan(out, "web", "web_source_maps", domain, bundles, partialOf(b, failures), s.Now)
+	partial := partialOf(b, failures)
+	graph.WriteScan(out, "web", "web_source_maps", domain, bundles, partial, s.Now)
+	secretsPartial := partial
+	if ps.truncated > 0 {
+		secretsPartial = strings.TrimPrefix(secretsPartial+fmt.Sprintf("; %d bodies over 20 MB were scanned only in part", ps.truncated), "; ")
+	}
+	graph.WriteScan(out, "web", PublicSecretsScanner, domain, ps.bodies, secretsPartial, s.Now)
+	graph.WriteScan(out, "web", PageScriptsScanner, domain, ps.pages, partial, s.Now)
 	return nil
 }
+
+// Scan records of the two checks that read the same responses as the
+// source-map check.
+const (
+	PublicSecretsScanner = "web_public_secrets"
+	PageScriptsScanner   = "web_page_scripts"
+)
 
 // samePath resolves a reference against a page, keeping only references to the
 // same host, so a bundle on a CDN is reported nowhere and requested never.

@@ -1,0 +1,20 @@
+firedrill: v0
+id: paths/no-single-person-code-to-prod-data
+safeguard: "No one person can bypass review on a repo that deploys to production and also destroy production data."
+severity: critical
+for_each: github.repos
+fetch:
+  env:      { fact: github.environment, args: { name: production } }
+  rules:    { fact: github.branch_rules, args: { branch: default } }
+  projects: { fact: gcp.projects }
+  people:   { fact: people.powers }
+applies_when: env.exists && projects.size() > 0
+na_reason: "the repo has no production environment in GitHub, or no GCP project was read to hold production data"
+pass_when:
+  - people.found.filter(p, target.name in p.github_bypass && p.prod_destructive.size() > 0).size() == 0
+warn_when:
+  - "!rules.bypass_actors_known"
+  - target.name in people.unlinked.bypass_repos
+  - people.found.exists(p, target.name in p.github_bypass && !p.gcp_power_known)
+fix: "Remove this person's bypass on the default branch, or move their production role that can delete data to one that needs a second person to grant, such as a just-in-time grant with approval. List production projects under production in config.yaml so only they count."
+maps_to: [SOC2:CC8.1, SOC2:CC6.3, ISO27001:A.8.2]

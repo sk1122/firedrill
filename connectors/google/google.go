@@ -1,5 +1,5 @@
-// Package google reads the Workspace directory through a service account with
-// domain-wide delegation.
+// Package google reads the Workspace directory, and the OAuth grants users gave
+// third-party apps, through a service account with domain-wide delegation.
 package google
 
 import (
@@ -32,15 +32,53 @@ func New() *Connector {
 
 func init() { connector.Register(New()) }
 
+// Collection names.
+const (
+	CollectionUsers  = "directory users"
+	CollectionTokens = "oauth tokens"
+	CollectionGroups = "groups"
+)
+
+// TokensScope is the scope tokens.list needs. Google offers no read-only
+// scope for it; the guard allows only GET on the Admin SDK, so the delete
+// method it also covers is never called.
+// https://developers.google.com/workspace/admin/directory/reference/rest/v1/tokens/list
+const TokensScope = admin.AdminDirectoryUserSecurityScope
+
+// TokenScanner names the scan record of the OAuth grants read.
+const TokenScanner = "oauth_tokens"
+
+// UserScanner names the scan record of the directory users read, so a fact
+// can tell Google not read from a domain with no users.
+const UserScanner = "google_users"
+
 // Collections lists what it reads.
 func (c *Connector) Collections() []connector.Collection {
 	return []connector.Collection{{
-		Name:       "directory users",
+		Name:       CollectionUsers,
 		Nodes:      []string{graph.KindIdentityUser},
 		Permission: admin.AdminDirectoryUserReadonlyScope,
 		Calls: []string{
 			"POST https://oauth2.googleapis.com/token",
 			"GET https://admin.googleapis.com/admin/directory/v1/users?domain={domain}",
+		},
+	}, {
+		Name:       CollectionTokens,
+		Nodes:      []string{graph.KindOAuthApp},
+		Permission: admin.AdminDirectoryUserReadonlyScope + " and " + TokensScope,
+		Calls: []string{
+			"POST https://oauth2.googleapis.com/token",
+			"GET https://admin.googleapis.com/admin/directory/v1/users?domain={domain}",
+			"GET https://admin.googleapis.com/admin/directory/v1/users/{user ID}/tokens, once per user",
+		},
+	}, {
+		Name:       CollectionGroups,
+		Nodes:      []string{graph.KindGoogleGroup},
+		Permission: GroupsScope,
+		Calls: []string{
+			"POST https://oauth2.googleapis.com/token",
+			"GET https://admin.googleapis.com/admin/directory/v1/groups?customer=my_customer, only when a GCP binding names a group",
+			"GET https://admin.googleapis.com/admin/directory/v1/groups/{group ID}/members, once per group a GCP binding names and each group nested in one",
 		},
 	}}
 }
@@ -52,36 +90,59 @@ func keyPath(s connector.Scope) string {
 	return ""
 }
 
-// Available is true when the domain, the admin and the key are all set.
+// Available is true when Google was connected on purpose and the domain, the
+// admin and the key are all set. A key alone is never enough.
 func (c *Connector) Available(s connector.Scope) (bool, string) {
 	g := s.Project.Config.Google
-	if g.Domain == "" || g.AdminEmail == "" || keyPath(s) == "" {
+	if !s.Project.Config.IsConnected("google") || g.Domain == "" || g.AdminEmail == "" || keyPath(s) == "" {
 		return false, "connect google"
 	}
 	return true, ""
 }
 
-// Collect reads every user in the domain.
-func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s connector.Scope, out graph.Writer) error {
+// service returns an Admin SDK client acting as the configured admin with one
+// scope. Each scope gets its own token, so a scope the delegation lacks fails
+// only the collection that needs it.
+func (c *Connector) service(ctx context.Context, s connector.Scope, scope string) (*admin.Service, error) {
 	key, err := os.ReadFile(keyPath(s))
 	if err != nil {
-		return fmt.Errorf("read the service account key: %w", errors.Unwrap(err))
+		return nil, fmt.Errorf("read the service account key: %w", errors.Unwrap(err))
 	}
-	conf, err := googleoauth.JWTConfigFromJSON(key, admin.AdminDirectoryUserReadonlyScope)
+	conf, err := googleoauth.JWTConfigFromJSON(key, scope)
 	if err != nil {
-		return fmt.Errorf("the service account key could not be parsed")
+		return nil, fmt.Errorf("the service account key could not be parsed")
 	}
 	conf.Subject = s.Project.Config.Google.AdminEmail
 	guarded := c.HTTP(s.Log)
 	authed := conf.Client(context.WithValue(ctx, oauth2.HTTPClient, guarded))
-	svc, err := admin.NewService(ctx, option.WithHTTPClient(authed))
+	return admin.NewService(ctx, option.WithHTTPClient(authed))
+}
+
+// Collect reads every user in the domain, or every user's OAuth grants.
+func (c *Connector) Collect(ctx context.Context, col connector.Collection, s connector.Scope, out graph.Writer) error {
+	switch col.Name {
+	case CollectionTokens:
+		return c.collectTokens(ctx, s, out)
+	case CollectionGroups:
+		return c.collectGroups(ctx, s, out)
+	}
+	svc, err := c.service(ctx, s, admin.AdminDirectoryUserReadonlyScope)
 	if err != nil {
 		return err
 	}
+	n := 0
+	if err := listUsers(ctx, svc, s, func(u *admin.User) { n++; write(u, s, out) }); err != nil {
+		return err
+	}
+	graph.WriteScan(out, "google", UserScanner, "", n, "", s.Now)
+	return nil
+}
+
+func listUsers(ctx context.Context, svc *admin.Service, s connector.Scope, each func(*admin.User)) error {
 	return svc.Users.List().Domain(s.Project.Config.Google.Domain).MaxResults(500).OrderBy("email").
 		Pages(ctx, func(page *admin.Users) error {
 			for _, u := range page.Users {
-				write(u, s, out)
+				each(u)
 			}
 			return nil
 		})
@@ -96,8 +157,20 @@ func write(u *admin.User, s connector.Scope, out graph.Writer) {
 			"mfa_enrolled": u.IsEnrolledIn2Sv, "mfa_enforced": u.IsEnforcedIn2Sv,
 			"last_login": normalizeTime(u.LastLoginTime), "created": normalizeTime(u.CreationTime),
 		},
-		Private: map[string]any{"email": strings.ToLower(u.PrimaryEmail)},
+		Private: map[string]any{"email": strings.ToLower(u.PrimaryEmail), "aliases": aliasesOf(u)},
 	})
+}
+
+// aliasesOf lists a user's other addresses, lowercased, so the link step can
+// match a GCP binding or people.yaml entry that names one of them.
+func aliasesOf(u *admin.User) []string {
+	var out []string
+	for _, a := range append(append([]string{}, u.Aliases...), u.NonEditableAliases...) {
+		if a = strings.ToLower(strings.TrimSpace(a)); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // normalizeTime turns Google's zero time, meaning never, into empty.

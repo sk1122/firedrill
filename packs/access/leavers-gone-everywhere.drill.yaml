@@ -1,0 +1,18 @@
+firedrill: v0
+id: access/leavers-gone-everywhere
+safeguard: "People who left hold no account, role or repo access in Google Workspace, GCP or GitHub."
+severity: critical
+fetch:
+  leavers: { fact: hr.leavers }
+  people:  { fact: people.powers }
+applies_when: leavers.size() > 0 && people.systems_read.size() > 0
+na_reason: "no leave dates have passed in the HR file"
+pass_when:
+  - >-
+    people.found.filter(p, leavers.exists(l, l.id == p.id)
+    && (p.google_active || p.gcp_roles.size() > 0 || p.github_repos.size() > 0
+    || p.github_org_role in ["admin", "member"])).size() == 0
+warn_when:
+  - people.unlinked.github > 0
+fix: "Suspend the leaver's Google account, remove their GCP roles and group memberships, and remove them from the GitHub org and every repo, then rerun. Map every GitHub login in people.yaml, so no leaver hides behind an unlinked account."
+maps_to: [SOC2:CC6.2, ISO27001:A.5.18]

@@ -1,6 +1,6 @@
 # Connect GitHub
 
-GitHub unlocks the Change pack (branch protection, rulesets, production environments, Actions settings) and lets Firedrill read remote repos for the file drills.
+GitHub unlocks the Change pack (branch protection, rulesets, production environments, Actions settings), shows who can reach each repo (org members, teams, collaborators and who can bypass review), and lets Firedrill read remote repos for the file drills.
 
 ## On your laptop
 
@@ -38,10 +38,13 @@ Create a fine-grained token at [github.com/settings/personal-access-tokens/new](
 | --- | --- |
 | Resource owner | Your org |
 | Repository access | Only select repositories: the repos in `github.repos` |
-| Administration | Read-only |
-| Contents | Read-only |
-| Environments | Read-only |
-| Metadata | Read-only (added automatically) |
+| Repository permissions → Administration | Read-only |
+| Repository permissions → Contents | Read-only |
+| Repository permissions → Environments | Read-only |
+| Repository permissions → Metadata | Read-only (added automatically) |
+| Organization permissions → Members | Read-only |
+
+A token made before this list had Members only needs that one permission added: edit the token, open **Organization permissions**, and set **Members** to Read-only. If your org approves tokens, the change needs approval again.
 
 If your org requires approval for fine-grained tokens, an org owner approves it under the org's **Settings → Personal access tokens → Pending requests**.
 
@@ -55,7 +58,29 @@ GitHub shows who may bypass a ruleset only to people with write access to it, so
 firedrill export rulesets
 ```
 
-It writes `.firedrill/evidence/rulesets.json`. Commit it; CI uses it for 30 days, and records say which commit it came from.
+It writes `.firedrill/evidence/rulesets.json`. Commit it; CI uses it for 30 days, and records say which commit it came from. The file holds each ruleset's bypass list as GitHub returns it: actor type, actor ID and bypass mode, with team and app IDs but no logins.
+
+## Who can reach your repos
+
+Firedrill reads, for `github.org` and each repo in `github.repos`:
+
+| Call | What it reads | Permission |
+| --- | --- | --- |
+| `GET /orgs/{org}/members?role=admin` and `?role=member` | Org owners and members | Organization Members: read |
+| `GET /orgs/{org}/outside_collaborators` | Outside collaborators | Organization Members: read |
+| `GET /orgs/{org}/teams`, then `GET /orgs/{org}/teams/{team}/members?role=maintainer` and `?role=member` for each team | Teams, their parent team, and members (GitHub includes child teams' members) | Organization Members: read |
+| `GET /repos/{repo}/collaborators?affiliation=all` | Everyone with access to the repo and their permission: admin, maintain, push, triage or pull | Repository Metadata: read |
+| `GET /repos/{repo}/teams` | Teams with access to the repo and their permission | Repository Metadata: read |
+
+Each list is read 100 at a time. Team members are read once per team, and no user profile is fetched, so a large org costs a few calls per team and per repo.
+
+Logins are used during the run and in drill results only. Snapshots keep a hashed ID per person, never the login.
+
+Who can bypass review on each repo's default branch comes from branch protection (users, teams and apps allowed to bypass pull requests, and every repo admin when admins are not included) and from rulesets' bypass lists (teams, repository roles, org admins, apps and deploy keys). Teams and roles are expanded to people; apps and deploy keys are listed as they are. A ruleset's bypass list needs the export below when the token can't see it. Until then Firedrill says it does not know who can bypass, never that nobody can.
+
+Without Members: read, `firedrill connect github` prints `Not readable yet:` with what to add. Repo settings are still read, and only the facts about people give ERROR. A repo whose collaborators can't be read prints `Read only in part:`, and drills reading people there give WARN.
+
+If `github.org` is a user account rather than an org, there are no members or teams; repo collaborators are still read.
 
 ## What your plan allows
 

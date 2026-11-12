@@ -1,5 +1,6 @@
-// Package aws reads IAM users, roles and access keys in every connected account.
-// Calls are checked by action name against a fixed list.
+// Package aws reads IAM users, roles and access keys, and RDS databases and
+// their backup copies, in every connected account. Calls are checked by action
+// name against a fixed list.
 package aws
 
 import (
@@ -33,13 +34,21 @@ type Connector struct {
 	ReportWait time.Duration
 }
 
+// Collection names.
+const (
+	CollectionIAM     = "iam"
+	CollectionBackups = "backups"
+)
+
 // New returns the connector.
 func New() *Connector {
 	return &Connector{
 		ConnectorName: "aws",
 		ReportWait:    2 * time.Second,
+		// The profile's own region is kept: databases are read there when
+		// aws.regions is unset. IAM is global, so it falls back to us-east-1.
 		Load: func(ctx context.Context, profile string) (awssdk.Config, error) {
-			return awsconfig.LoadDefaultConfig(ctx, awsconfig.WithSharedConfigProfile(profile), awsconfig.WithRegion("us-east-1"))
+			return awsconfig.LoadDefaultConfig(ctx, awsconfig.WithSharedConfigProfile(profile))
 		},
 	}
 }
@@ -48,22 +57,33 @@ func init() { connector.Register(New()) }
 
 // Collections lists what it reads.
 func (c *Connector) Collections() []connector.Collection {
-	calls := make([]string, 0, len(connector.AWSActions))
+	var iamCalls, backupCalls []string
 	for a := range connector.AWSActions {
-		calls = append(calls, a)
+		if strings.HasPrefix(a, "iam:") {
+			iamCalls = append(iamCalls, a)
+		} else {
+			backupCalls = append(backupCalls, a)
+		}
 	}
-	sort.Strings(calls)
+	sort.Strings(iamCalls)
+	sort.Strings(backupCalls)
 	return []connector.Collection{{
-		Name:       "iam",
+		Name:       CollectionIAM,
 		Nodes:      []string{graph.KindAWSPrincipal, graph.KindAWSKey},
-		Permission: strings.Join(calls, ", "),
-		Calls:      calls,
+		Permission: strings.Join(iamCalls, ", "),
+		Calls:      iamCalls,
+	}, {
+		Name:       CollectionBackups,
+		Nodes:      []string{graph.KindDatabase},
+		Permission: strings.Join(backupCalls, ", ") + ", in each region under aws.regions or the profile's region",
+		Calls:      backupCalls,
 	}}
 }
 
-// Available is true when a profile is listed.
+// Available is true when AWS was connected on purpose and a profile is listed.
+// Ambient AWS credentials alone are never enough.
 func (c *Connector) Available(s connector.Scope) (bool, string) {
-	if len(s.Project.Config.AWS.Accounts) == 0 {
+	if !s.Project.Config.IsConnected("aws") || len(s.Project.Config.AWS.Accounts) == 0 {
 		return false, "connect aws"
 	}
 	return true, ""
@@ -76,7 +96,11 @@ func guardMiddleware(log *connector.CallLog) func(*middleware.Stack) error {
 		return st.Initialize.Add(middleware.InitializeMiddlewareFunc("FiredrillGuard",
 			func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
 				op := awsmiddleware.GetOperationName(ctx)
-				if err := connector.CheckAWS(log, "iam:"+op); err != nil {
+				prefix, ok := connector.AWSServicePrefix[awsmiddleware.GetServiceID(ctx)]
+				if !ok {
+					prefix = "unknown-service"
+				}
+				if err := connector.CheckAWS(log, prefix+":"+op); err != nil {
 					return middleware.InitializeOutput{}, middleware.Metadata{}, err
 				}
 				return next.HandleInitialize(ctx, in)
@@ -86,13 +110,19 @@ func guardMiddleware(log *connector.CallLog) func(*middleware.Stack) error {
 
 // ClientFor returns an IAM client behind the guard.
 func ClientFor(cfg awssdk.Config, log *connector.CallLog) *iam.Client {
+	if cfg.Region == "" {
+		cfg.Region = "us-east-1"
+	}
 	return iam.NewFromConfig(cfg, func(o *iam.Options) {
 		o.APIOptions = append(o.APIOptions, guardMiddleware(log))
 	})
 }
 
 // Collect reads every connected account.
-func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s connector.Scope, out graph.Writer) error {
+func (c *Connector) Collect(ctx context.Context, col connector.Collection, s connector.Scope, out graph.Writer) error {
+	if col.Name == CollectionBackups {
+		return c.collectBackups(ctx, s, out)
+	}
 	for _, acct := range s.Project.Config.AWS.Accounts {
 		cfg, err := c.Load(ctx, acct.Profile)
 		if err != nil {
@@ -177,6 +207,7 @@ func (c *Connector) collectAccount(ctx context.Context, cl *iam.Client, s connec
 		out.Node(graph.Node{ID: graph.ID("aws:iam-user/" + account + "/" + name), Kind: graph.KindAWSPrincipal, Source: "aws", SeenAt: s.Now, Attrs: map[string]any{
 			"account": account, "principal_kind": "user", "name": name, "last_used": stamp(lastUsed), "created": stamp(awssdk.ToTime(u.CreateDate)),
 			"keys": keys, "is_admin": flags.admin, "destructive_actions": flags.destructive, "excluded": breakGlass[awssdk.ToString(u.Arn)],
+			"github_oidc": false, "github_oidc_unscoped": false,
 		}})
 	}
 	for _, r := range details.roles {
@@ -196,9 +227,11 @@ func (c *Connector) collectAccount(ctx context.Context, cl *iam.Client, s connec
 		}
 		excluded := breakGlass[arn] || strings.HasPrefix(name, "AWSReservedSSO_") ||
 			strings.HasPrefix(awssdk.ToString(r.Path), "/aws-reserved/") || strings.HasPrefix(awssdk.ToString(r.Path), "/aws-service-role/")
+		trust := githubTrust(awssdk.ToString(r.AssumeRolePolicyDocument))
 		out.Node(graph.Node{ID: graph.ID("aws:iam-role/" + account + "/" + name), Kind: graph.KindAWSPrincipal, Source: "aws", SeenAt: s.Now, Attrs: map[string]any{
 			"account": account, "principal_kind": "role", "name": name, "last_used": stamp(last), "created": stamp(awssdk.ToTime(r.CreateDate)),
 			"keys": []any{}, "is_admin": flags.admin, "destructive_actions": flags.destructive, "excluded": excluded,
+			"github_oidc": trust.federated, "github_oidc_unscoped": trust.unscoped,
 		}})
 	}
 	return nil
@@ -381,6 +414,101 @@ func analyze(docs, arns []string, managed map[string]string) policyFlags {
 		f.destructive[i] = n
 	}
 	return f
+}
+
+// githubIssuer is the OIDC provider GitHub Actions tokens come from.
+const githubIssuer = "token.actions.githubusercontent.com"
+
+type trustFlags struct {
+	federated bool // the role trusts GitHub Actions OIDC tokens
+	unscoped  bool // some statement does so with no sub condition, or one wider than one org
+}
+
+// githubTrust reads a role's trust policy, which GetAccountAuthorizationDetails
+// already returns, for GitHub Actions federation. A statement is scoped when
+// every sub value it allows names one org: repo:acme/..., or
+// repository_owner:acme for a customised sub. A wildcard in the org, a bare *,
+// or no sub condition at all lets any GitHub repo assume the role.
+func githubTrust(doc string) trustFlags {
+	var f trustFlags
+	if decoded, err := url.QueryUnescape(doc); err == nil {
+		doc = decoded
+	}
+	var policy struct {
+		Statement json.RawMessage `json:"Statement"`
+	}
+	if json.Unmarshal([]byte(doc), &policy) != nil {
+		return f
+	}
+	type statement struct {
+		Effect    string                                `json:"Effect"`
+		Principal json.RawMessage                       `json:"Principal"`
+		Condition map[string]map[string]json.RawMessage `json:"Condition"`
+	}
+	var stmts []statement
+	if json.Unmarshal(policy.Statement, &stmts) != nil {
+		var one statement
+		if json.Unmarshal(policy.Statement, &one) != nil {
+			return f
+		}
+		stmts = []statement{one}
+	}
+	for _, st := range stmts {
+		if !strings.EqualFold(st.Effect, "Allow") {
+			continue
+		}
+		var principal struct {
+			Federated json.RawMessage `json:"Federated"`
+		}
+		_ = json.Unmarshal(st.Principal, &principal)
+		github := false
+		for _, p := range stringOrList(principal.Federated) {
+			if strings.Contains(p, githubIssuer) {
+				github = true
+			}
+		}
+		if !github {
+			continue
+		}
+		f.federated = true
+		var subs []string
+		for op, conds := range st.Condition {
+			// A negative operator excludes, so it never scopes the role.
+			if strings.Contains(op, "Not") || strings.HasPrefix(op, "Null") {
+				continue
+			}
+			for key, v := range conds {
+				if strings.EqualFold(key, githubIssuer+":sub") {
+					subs = append(subs, stringOrList(v)...)
+				}
+			}
+		}
+		if len(subs) == 0 {
+			f.unscoped = true
+		}
+		for _, sub := range subs {
+			if !oneOrg(sub) {
+				f.unscoped = true
+			}
+		}
+	}
+	return f
+}
+
+// oneOrg reports a sub value that names a single org with no wildcard in it.
+func oneOrg(sub string) bool {
+	var owner string
+	switch {
+	case strings.HasPrefix(sub, "repo:"):
+		owner, _, _ = strings.Cut(strings.TrimPrefix(sub, "repo:"), "/")
+	case strings.HasPrefix(sub, "repository_owner:"):
+		owner, _, _ = strings.Cut(strings.TrimPrefix(sub, "repository_owner:"), ":")
+	case strings.HasPrefix(sub, "repository_owner_id:"):
+		owner, _, _ = strings.Cut(strings.TrimPrefix(sub, "repository_owner_id:"), ":")
+	default:
+		return false
+	}
+	return owner != "" && !strings.ContainsAny(owner, "*?")
 }
 
 // isDestructive matches a destructive action, or a wildcard covering one.

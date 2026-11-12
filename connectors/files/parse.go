@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -30,12 +31,26 @@ type AgentConfig struct {
 	DenyRead    []string
 	DefaultMode string
 	Servers     []MCPServer
+	// Net is what the file says about outbound network access, for a Claude
+	// Code settings file or Cursor's sandbox.json; nil otherwise.
+	Net *NetSettings
 }
 
-// MCPServer is one MCP server and the raw values passed to it.
+// MCPServer is one MCP server and the raw values passed to it. Values are held
+// in memory only, to be hashed; the other fields are safe to store.
 type MCPServer struct {
-	Name   string
-	Values []string
+	Name      string
+	Values    []string
+	Transport string // http for a server defined by a URL, stdio for a command
+	Host      string // the URL's hostname alone, for http
+	Command   string // the executable's base name, for stdio
+	Package   string // the package or image the command fetches, if any
+	Version   string // its exact version or digest, if given
+	Pinned    bool   // no package, or an exact version or digest
+	// Sandboxed is a VS Code stdio server run with sandboxEnabled, which
+	// reaches only SandboxHosts, its sandbox.network.allowedDomains.
+	Sandboxed    bool
+	SandboxHosts []string
 }
 
 // ParseAgentFile reads one agent config by its path.
@@ -52,7 +67,20 @@ func ParseAgentFile(rel string, data []byte, scope string) (*AgentConfig, error)
 		}
 		return c, nil
 	case "settings.json", "settings.local.json":
+		if strings.HasPrefix(rel, ".gemini/") {
+			// Gemini CLI settings name MCP servers the way .mcp.json does, and
+			// may hold comments.
+			return parseMCP(rel, stripComments(data), scope, "gemini")
+		}
 		return parseClaudeSettings(rel, data, scope)
+	case "sandbox.json":
+		if strings.HasPrefix(rel, ".cursor/") {
+			c, err := parseCursorSandbox(rel, data, scope)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", rel, err)
+			}
+			return c, nil
+		}
 	case "mcp.json", ".mcp.json":
 		tool := "claude-code"
 		if strings.Contains(rel, ".cursor/") {
@@ -70,13 +98,15 @@ func parseClaudeSettings(rel string, data []byte, scope string) (*AgentConfig, e
 		Permissions struct {
 			Allow       []string `json:"allow"`
 			Deny        []string `json:"deny"`
+			Ask         []string `json:"ask"`
 			DefaultMode string   `json:"defaultMode"`
 		} `json:"permissions"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", rel, err)
 	}
-	c := &AgentConfig{Tool: "claude-code", Scope: scope, File: rel, DefaultMode: doc.Permissions.DefaultMode}
+	c := &AgentConfig{Tool: "claude-code", Scope: scope, File: rel, DefaultMode: doc.Permissions.DefaultMode,
+		Net: parseClaudeNet(data, doc.Permissions.Allow, doc.Permissions.Deny, doc.Permissions.Ask)}
 	for _, a := range doc.Permissions.Allow {
 		if tool, arg := splitRule(a); tool == "Bash" || tool == "*" {
 			c.Allowed = append(c.Allowed, arg)
@@ -142,15 +172,69 @@ func parseMCP(rel string, data []byte, scope, tool string) (*AgentConfig, error)
 			}
 		}
 		s.Values = append(s.Values, e.Args...)
+		describe(&s, e)
+		if tool == "vscode" && s.Transport == "stdio" && e.SandboxEnabled {
+			s.Sandboxed = true
+			if e.Sandbox != nil {
+				s.SandboxHosts = e.Sandbox.Network.AllowedDomains
+			}
+		}
 		c.Servers = append(c.Servers, s)
 	}
 	return c, nil
 }
 
+// stripComments blanks // and /* */ comments outside JSON strings, keeping
+// line numbers.
+func stripComments(data []byte) []byte {
+	out := append([]byte(nil), data...)
+	inStr := false
+	for i := 0; i < len(out); i++ {
+		c := out[i]
+		switch {
+		case inStr && c == '\\':
+			i++
+		case c == '"':
+			inStr = !inStr
+		case inStr:
+		case c == '/' && i+1 < len(out) && out[i+1] == '/':
+			for ; i < len(out) && out[i] != '\n'; i++ {
+				out[i] = ' '
+			}
+		case c == '/' && i+1 < len(out) && out[i+1] == '*':
+			out[i], out[i+1] = ' ', ' '
+			for i += 2; i < len(out); i++ {
+				if out[i] == '*' && i+1 < len(out) && out[i+1] == '/' {
+					out[i], out[i+1] = ' ', ' '
+					i++
+					break
+				}
+				if out[i] != '\n' {
+					out[i] = ' '
+				}
+			}
+		}
+	}
+	return out
+}
+
 type mcpEntry struct {
-	Env     map[string]string `json:"env"`
-	Headers map[string]string `json:"headers"`
-	Args    []string          `json:"args"`
+	Env       map[string]string `json:"env"`
+	Headers   map[string]string `json:"headers"`
+	Args      []string          `json:"args"`
+	Command   string            `json:"command"`
+	URL       string            `json:"url"`
+	HTTPURL   string            `json:"httpUrl"`
+	ServerURL string            `json:"serverUrl"`
+	// VS Code only: run a stdio server in a sandbox that reaches only its
+	// allowed domains.
+	// https://code.visualstudio.com/docs/copilot/reference/mcp-configuration
+	SandboxEnabled bool `json:"sandboxEnabled"`
+	Sandbox        *struct {
+		Network struct {
+			AllowedDomains []string `json:"allowedDomains"`
+		} `json:"network"`
+	} `json:"sandbox"`
 }
 
 var varRef = regexp.MustCompile(`\$\{(?:env:)?([A-Za-z_][A-Za-z0-9_]*)\}|^\$([A-Za-z_][A-Za-z0-9_]*)$`)
@@ -229,6 +313,16 @@ type Workflow struct {
 	Permissions string // read, write or undeclared
 	Unpinned    []string
 	PRTarget    bool
+	Triggers    []string // every event under on:, sorted
+	Secrets     []string // names of the secrets it references, never values
+	// Unfrozen lists install commands in run steps that may change the
+	// lockfile, by their normalised head such as "npm install".
+	Unfrozen []string
+	// CloudKeys names the secrets that hold a long-lived cloud credential.
+	CloudKeys []string
+	// OIDC is set when the workflow may mint an OIDC token and a step trades it
+	// for cloud credentials.
+	OIDC bool
 }
 
 var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -238,26 +332,47 @@ func ParseWorkflow(rel string, data []byte) (*Workflow, error) {
 	var doc struct {
 		On          yaml.Node `yaml:"on"`
 		Permissions yaml.Node `yaml:"permissions"`
+		Env         yaml.Node `yaml:"env"`
 		Jobs        map[string]struct {
 			Permissions yaml.Node `yaml:"permissions"`
+			Env         yaml.Node `yaml:"env"`
 			Steps       []struct {
 				Uses string            `yaml:"uses"`
 				With map[string]string `yaml:"with"`
+				Run  string            `yaml:"run"`
+				Env  yaml.Node         `yaml:"env"`
 			} `yaml:"steps"`
-			Uses string `yaml:"uses"`
+			Uses    string    `yaml:"uses"`
+			Secrets yaml.Node `yaml:"secrets"`
 		} `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", rel, err)
 	}
-	w := &Workflow{File: rel}
+	w := &Workflow{File: rel, Triggers: triggers(&doc.On), Secrets: secretNames(data)}
 	prTarget := triggerHas(&doc.On, "pull_request_target")
 	allDeclared := len(doc.Jobs) > 0
 	seen := map[string]bool{}
+	cloud := cloudScan{keys: map[string]bool{}, idToken: idTokenWrite(&doc.Permissions)}
+	cloud.env(&doc.Env)
+	unfrozen := map[string]bool{}
 	for _, job := range doc.Jobs {
+		cloud.idToken = cloud.idToken || idTokenWrite(&job.Permissions)
+		cloud.env(&job.Env)
+		for _, st := range job.Steps {
+			cloud.env(&st.Env)
+			cloud.step(st.Uses, st.With)
+			for _, c := range UnfrozenInstalls(st.Run) {
+				unfrozen[c] = true
+			}
+		}
 		switch permLevel(&job.Permissions) {
 		case "undeclared":
 			allDeclared = false
+		}
+		if job.Secrets.Kind == yaml.ScalarNode && job.Secrets.Value == "inherit" && !slices.Contains(w.Secrets, "inherit") {
+			// A reusable workflow called this way gets every secret.
+			w.Secrets = append(w.Secrets, "inherit")
 		}
 		uses := []string{job.Uses}
 		for _, st := range job.Steps {
@@ -277,6 +392,10 @@ func ParseWorkflow(rel string, data []byte) (*Workflow, error) {
 		}
 	}
 	sort.Strings(w.Unpinned)
+	sort.Strings(w.Secrets)
+	w.Unfrozen = sortedSet(unfrozen)
+	w.CloudKeys = cloud.names(w.Secrets)
+	w.OIDC = cloud.idToken && cloud.federated
 	switch top := permLevel(&doc.Permissions); {
 	case top == "read":
 		w.Permissions = "read"
@@ -323,6 +442,53 @@ func permLevel(n *yaml.Node) string {
 		return "read"
 	}
 	return "undeclared"
+}
+
+// triggers lists the events under on:, in any of its three forms.
+func triggers(n *yaml.Node) []string {
+	var out []string
+	switch n.Kind {
+	case yaml.ScalarNode:
+		if n.Value != "" {
+			out = append(out, n.Value)
+		}
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			out = append(out, c.Value)
+		}
+	case yaml.MappingNode:
+		for i := 0; i < len(n.Content); i += 2 {
+			out = append(out, n.Content[i].Value)
+		}
+	}
+	sort.Strings(out)
+	return slices.Compact(out)
+}
+
+// expr finds ${{ }} expressions, and secretRef finds secrets.NAME and
+// secrets['NAME'] inside one.
+var (
+	expr      = regexp.MustCompile(`(?s)\$\{\{(.*?)\}\}`)
+	secretRef = regexp.MustCompile(`(?:^|[^.\w])secrets\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*)|\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\])`)
+)
+
+// secretNames lists the secrets a workflow's expressions name, upper-cased
+// since GitHub treats names that way. GITHUB_TOKEN is left out: the permissions
+// block says what it can do.
+func secretNames(data []byte) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, e := range expr.FindAllStringSubmatch(string(data), -1) {
+		for _, m := range secretRef.FindAllStringSubmatch(e[1], -1) {
+			name := strings.ToUpper(m[1] + m[2])
+			if name == "GITHUB_TOKEN" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func triggerHas(n *yaml.Node, name string) bool {

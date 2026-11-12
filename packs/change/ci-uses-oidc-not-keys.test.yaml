@@ -1,0 +1,103 @@
+firedrill: v0
+drill: change/ci-uses-oidc-not-keys
+cases:
+    - name: OIDC role
+      expect: PASS
+      target:
+        local: true
+        name: acme/api
+      facts:
+        workflows:
+            found:
+                - cloud_key_secrets: []
+                  file: .github/workflows/deploy.yml
+                  permissions: read
+                  pull_request_target_checkout: false
+                  secrets: []
+                  triggers:
+                    - push
+                  unfrozen_installs: []
+                  unpinned_actions: []
+                  uses_oidc: true
+            inspected: 1
+      inspected:
+        workflows: 1
+    - name: no cloud access
+      expect: PASS
+      target:
+        local: true
+        name: acme/api
+      facts:
+        workflows:
+            found:
+                - cloud_key_secrets: []
+                  file: .github/workflows/ci.yml
+                  permissions: read
+                  pull_request_target_checkout: false
+                  secrets:
+                    - NPM_TOKEN
+                  triggers:
+                    - push
+                  unfrozen_installs: []
+                  unpinned_actions: []
+                  uses_oidc: false
+            inspected: 1
+      inspected:
+        workflows: 1
+    - name: static AWS keys
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        workflows:
+            found:
+                - cloud_key_secrets:
+                    - AWS_ACCESS_KEY_ID
+                    - AWS_SECRET_ACCESS_KEY
+                  file: .github/workflows/deploy.yml
+                  permissions: read
+                  pull_request_target_checkout: false
+                  secrets:
+                    - AWS_ACCESS_KEY_ID
+                    - AWS_SECRET_ACCESS_KEY
+                  triggers:
+                    - push
+                  unfrozen_installs: []
+                  unpinned_actions: []
+                  uses_oidc: false
+            inspected: 1
+      inspected:
+        workflows: 1
+    - name: GCP credentials_json
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        workflows:
+            found:
+                - cloud_key_secrets:
+                    - GCP_DEPLOY
+                  file: .github/workflows/deploy.yml
+                  permissions: read
+                  pull_request_target_checkout: false
+                  secrets:
+                    - GCP_DEPLOY
+                  triggers:
+                    - push
+                  unfrozen_installs: []
+                  unpinned_actions: []
+                  uses_oidc: false
+            inspected: 1
+      inspected:
+        workflows: 1
+    - name: no workflows
+      expect: N/A
+      target:
+        local: true
+        name: acme/api
+      facts:
+        workflows:
+            found: []
+            inspected: 0

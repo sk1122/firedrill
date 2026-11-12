@@ -14,9 +14,21 @@ import (
 // Snapshot is one run's graph as stored next to its tags. Private attributes
 // never reach it, so emails and raw values stay out of history.
 type Snapshot struct {
-	Time  time.Time `json:"time"`
-	Nodes []Node    `json:"nodes"`
-	Edges []Edge    `json:"edges"`
+	Time time.Time `json:"time"`
+	// Stream is local or ci. Snapshots written before it existed leave it empty.
+	Stream string `json:"stream,omitempty"`
+	// Coverage says which connectors collected cleanly. Older snapshots have
+	// none, and the diff works it out from the nodes instead.
+	Coverage *Coverage `json:"coverage,omitempty"`
+	Nodes    []Node    `json:"nodes"`
+	Edges    []Edge    `json:"edges"`
+}
+
+// Coverage lists the connectors that ran in one run: those that collected
+// cleanly and those that failed. A connector in neither list did not run.
+type Coverage struct {
+	Read   []string `json:"read"`
+	Failed []string `json:"failed,omitempty"`
 }
 
 // TakeSnapshot captures a graph.
@@ -24,13 +36,66 @@ func TakeSnapshot(g Reader, at time.Time) Snapshot {
 	return Snapshot{Time: at.UTC(), Nodes: g.Nodes(""), Edges: g.Edges("")}
 }
 
+// SnapshotName is the file name a snapshot taken at t is stored under.
+func SnapshotName(t time.Time) string { return t.UTC().Format("2006-01-02T15-04-05Z") + ".json.gz" }
+
+// FreeSnapshotTime moves t forward a second at a time until no snapshot in dir
+// has its name, so two runs in one second never overwrite each other.
+func FreeSnapshotTime(dir string, t time.Time) time.Time {
+	for {
+		if _, err := os.Stat(filepath.Join(dir, SnapshotName(t))); os.IsNotExist(err) {
+			return t
+		}
+		t = t.Add(time.Second)
+	}
+}
+
 // WriteSnapshot stores a snapshot as compressed JSON under dir.
 func WriteSnapshot(dir string, s Snapshot) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, s.Time.Format("2006-01-02T15-04-05Z")+".json.gz")
+	path := filepath.Join(dir, SnapshotName(s.Time))
 	return path, writeSnapshotFile(path, s)
+}
+
+// FromSnapshot returns a graph holding a stored snapshot, so a fact can read
+// an earlier run. Whole numbers come back from JSON as floats; they are turned
+// back into int64, as connectors write them.
+func FromSnapshot(s Snapshot) *Graph {
+	g := New()
+	for _, n := range s.Nodes {
+		if n.Attrs != nil {
+			n.Attrs, _ = wholeNumbers(n.Attrs).(map[string]any)
+		}
+		g.Node(n)
+	}
+	for _, e := range s.Edges {
+		g.Edge(e)
+	}
+	return g
+}
+
+func wholeNumbers(v any) any {
+	switch val := v.(type) {
+	case float64:
+		if val == float64(int64(val)) {
+			return int64(val)
+		}
+	case []any:
+		out := make([]any, len(val))
+		for i, x := range val {
+			out[i] = wholeNumbers(x)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(val))
+		for k, x := range val {
+			out[k] = wholeNumbers(x)
+		}
+		return out
+	}
+	return v
 }
 
 func writeSnapshotFile(path string, s Snapshot) error {

@@ -1,6 +1,6 @@
 # Connect Google Cloud
 
-Google Cloud unlocks the GCP pack: public buckets, uniform bucket access, Owner and Editor only for your own domains, no Editor on service accounts, no project-wide impersonation, and service account keys no older than 90 days.
+Google Cloud unlocks the GCP pack: public buckets, uniform bucket access, Owner and Editor only for your own domains, no Editor on service accounts, no project-wide impersonation, and service account keys no older than 90 days. With or without AWS, it also unlocks `recovery/backups-separate-and-retained` and `recovery/restore-exercised` for Cloud SQL, and lets `doors/no-live-key-in-public-bundle` tell whether a service account key found in public JavaScript is live.
 
 Firedrill reads through a **reader service account** that has read roles only and **no key**. You log in as it through `gcloud`, so nothing long-lived is stored.
 
@@ -25,7 +25,7 @@ You need permission to create service accounts in `HOME_PROJECT` and to change I
 ## 2. Turn on the APIs
 
 ```bash
-gcloud services enable iam.googleapis.com iamcredentials.googleapis.com cloudresourcemanager.googleapis.com policyanalyzer.googleapis.com --project HOME_PROJECT
+gcloud services enable iam.googleapis.com iamcredentials.googleapis.com cloudresourcemanager.googleapis.com policyanalyzer.googleapis.com sqladmin.googleapis.com --project HOME_PROJECT
 ```
 
 Calls are billed to the reader's own project, so other projects need no APIs turned on.
@@ -42,13 +42,15 @@ Don't create a key for it.
 
 ```bash
 for P in PROJECTS; do
-  for R in roles/viewer roles/iam.securityReviewer roles/policyanalyzer.activityAnalysisViewer; do
+  for R in roles/viewer roles/iam.securityReviewer roles/policyanalyzer.activityAnalysisViewer roles/iam.roleViewer; do
     gcloud projects add-iam-policy-binding "$P" --member "serviceAccount:firedrill-reader@HOME_PROJECT.iam.gserviceaccount.com" --role "$R" --condition None --quiet
   done
 done
 ```
 
 Activity Analysis Viewer is only for the last time each key was used. Without it, keys are still judged by age.
+
+Role Viewer lets Firedrill read the permissions of a custom role a binding names, with [roles.get](https://cloud.google.com/iam/docs/reference/rest/v1/projects.roles/get) (`iam.roles.get`). Without it, those bindings read as `power_known: false`, never as harmless, and the people facts give WARN. A custom role defined on the organization (`organizations/{org}/roles/...`) needs Role Viewer on the organization too; without it, the same applies.
 
 ## 5. Let yourself act as the reader
 
@@ -74,6 +76,56 @@ gcp:
   member_domains: [acme.com]   # your own email domains; defaults to google.domain
 ```
 
+Name production projects, shared with AWS accounts, under `production` (see [aws.md](aws.md#5-say-what-is-production)):
+
+```yaml
+production: [acme-prod]
+```
+
+A Cloud SQL instance labelled `env` or `environment` = `prod` or `production` is production too.
+
+The same list marks each project, and each IAM binding in it, `production`, which the people facts show next to each role someone holds. With nothing named under `production`, every project counts as production, and the facts say so.
+
+Who holds each role: a `user:` member is matched to a person by email, and a `group:` member through its Google group's members, which the Google Workspace connection reads (see [google-workspace.md](google-workspace.md)). A service account with admin or delete power needs an owner in `.firedrill/owners.yaml`:
+
+```yaml
+- principal: ci@acme-prod.iam.gserviceaccount.com
+  owner: "@acme/platform"    # a team or role, never an email
+  note: deploys the API
+```
+
+### What the backups drill can see
+
+Cloud SQL keeps automated backups in the instance's own project; the API has no setting for a copy in another project. So a Cloud SQL database reads `separate_copy: unknown`, and the drill warns, until you declare where its copy lives, such as a scheduled export to a bucket in another project, in `.firedrill/backups.yaml`:
+
+```yaml
+- database: orders                      # the instance name
+  copy_location: nightly export to gs://acme-backup-vault in acme-backup
+  owner: "@acme/platform"
+  verified: 2026-11-01
+```
+
+Retention is the number of daily backups kept (`retainedBackups`), read as days. Read replicas are judged through their primary; a replica is not a backup.
+
+### What the restore drill can see
+
+`recovery/restore-exercised` asks that each production database was restored from its backups within `recovery.restore_days` (90 unless set in `config.yaml`). Firedrill reads each instance's operations (`operations.list`, GET only) and keeps the latest that finished with no error:
+
+- **`CLONE`** runs on the instance being cloned, so a clone counts for that instance. It shows the data can be brought up elsewhere; the operation does not say whether it was a point-in-time clone.
+- **`RESTORE_VOLUME`** restores a backup into the instance it runs on, usually a scratch instance. The operation does not name the backup it came from, so it counts for every database in that project, and the result says so.
+- Imports, exports and backups are not restores. A failed or unfinished operation does not count.
+
+Google does not document how long Cloud SQL keeps operations, so an older restore, or one done another way, goes in `.firedrill/restores.yaml`:
+
+```yaml
+- database: orders                      # the instance name
+  restored: 2026-10-20
+  by: platform-team                     # a team or role, never an email
+  note: restored last night's backup into orders-restore-test; row counts matched
+```
+
+If an instance's operations cannot be read and nothing is declared, the drill warns rather than passing or failing. Only the newest 5,000 operations of an instance are read. AWS restores are not read (out of scope for now); an AWS database passes only with a restores.yaml entry.
+
 ## 8. Check it
 
 ```bash
@@ -94,11 +146,12 @@ firedrill run
 | `gcloud` refuses `--scopes` without `cloud-platform` | gcloud's own login always needs the full scope. That's why Firedrill uses the reader: its roles keep it to reads, whatever the scope |
 | `ACCESS_TOKEN_SCOPE_INSUFFICIENT` | You're on a Firedrill older than v0.1.0; upgrade |
 | A project shows ERROR `could not read` | The reader has no roles there, or the project ID is wrong. Repeat step 4 for it |
+| `could not read Cloud SQL ... not turned on` | Turn on `sqladmin.googleapis.com` in `HOME_PROJECT` (step 2). Only the backups drill is affected |
 | `Not connected yet: connect gcp` | No projects in config, or no login file. Do steps 6 and 7 |
 
 ## What Firedrill calls
 
-Every call is a GET, plus three exact POSTs the guard allows: the token exchange, minting the reader's token, and `getIamPolicy` on each listed project, which only reads. `firedrill run --dry-run` lists them all.
+Every call is a GET, including `GET https://sqladmin.googleapis.com/v1/projects/{project}/instances` and `GET https://sqladmin.googleapis.com/v1/projects/{project}/operations?instance={instance}` for Cloud SQL and `GET https://iam.googleapis.com/v1/{projects/{project} or organizations/{org}}/roles/{role}` once per custom role a binding names, plus three exact POSTs the guard allows: the token exchange, minting the reader's token, and `getIamPolicy` on each listed project, which only reads. `firedrill run --dry-run` lists them all.
 
 ## In CI
 

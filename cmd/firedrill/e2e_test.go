@@ -96,7 +96,7 @@ func TestFromCleanMachineToFirstFailThenFixedMeansFixed(t *testing.T) {
 	e := newEnv(t)
 	start := time.Now()
 	out := e.mustRun("init", "--yes", "--owner", "@arjun")
-	if !strings.Contains(out, "24 starter drills") || !strings.Contains(out, "salt") {
+	if !strings.Contains(out, "38 starter drills") || !strings.Contains(out, "salt") {
 		t.Fatalf("init: %s", out)
 	}
 	if info, err := os.Stat(filepath.Join(e.home, ".config/firedrill/salt")); err != nil || info.Mode().Perm() != 0o600 {
@@ -151,7 +151,7 @@ func TestFromCleanMachineToFirstFailThenFixedMeansFixed(t *testing.T) {
 		t.Fatalf("list:\n%s", out)
 	}
 	out = e.mustRun("explain", "agent/no-prod-secrets-in-agent-reach")
-	if !strings.Contains(out, "It passes when") || !strings.Contains(out, "CLOSED") {
+	if !strings.Contains(out, "It passes when") || !strings.Contains(out, "CLOSED") || !strings.Contains(out, "[declared]") {
 		t.Fatalf("explain:\n%s", out)
 	}
 
@@ -497,13 +497,13 @@ func TestHubInstallUpdateAndRefusals(t *testing.T) {
 	e.vars = append(e.vars, "FIREDRILL_SALT="+strings.Repeat("a", 64))
 	h := e.hubCopy()
 	e.mustRun("init", "--yes", "--owner", "@me")
-	if out := e.mustRun("hub", "--from", h, "index", h, "--out", filepath.Join(e.work, "index.json")); !strings.Contains(out, "24 drills, 83 test cases, 0 with problems") {
+	if out := e.mustRun("hub", "--from", h, "index", h, "--out", filepath.Join(e.work, "index.json")); !strings.Contains(out, "38 drills, 175 test cases, 0 with problems") {
 		t.Fatal(out)
 	}
 	if out := e.mustRun("test", filepath.Join(h, "drills")); !strings.Contains(out, "0 failing, 0 drills with problems") {
 		t.Fatal(out)
 	}
-	if out := e.mustRun("hub", "--from", h, "update", "--yes"); !strings.Contains(out, "0 replaced, 0 added, 24 current") {
+	if out := e.mustRun("hub", "--from", h, "update", "--yes"); !strings.Contains(out, "0 replaced, 0 added, 38 current") {
 		t.Fatalf("starters from init are recorded as current:\n%s", out)
 	}
 	local := filepath.Join(e.work, ".firedrill", "drills")
@@ -512,7 +512,7 @@ func TestHubInstallUpdateAndRefusals(t *testing.T) {
 	editFile(t, filepath.Join(local, "change", "no-solo-ship.drill.yaml"), "severity: critical", "severity: medium")
 	out := e.mustRun("hub", "--from", h, "update", "--yes")
 	if !strings.Contains(out, "- severity: medium\n+ severity: high") || !strings.Contains(out, "no-solo-ship: you edited it") ||
-		!strings.Contains(out, "1 replaced, 0 added, 22 current, 1 left alone") {
+		!strings.Contains(out, "1 replaced, 0 added, 36 current, 1 left alone") {
 		t.Fatalf("a hub change is shown and applied; an edited drill is left alone:\n%s", out)
 	}
 	if b, _ := os.ReadFile(filepath.Join(local, "change", "no-solo-ship.drill.yaml")); !strings.Contains(string(b), "severity: medium") {
@@ -562,5 +562,159 @@ func TestConnectLinksEveryGuide(t *testing.T) {
 	out, _ := e.run("connect", "gcp")
 	if !strings.Contains(out, guideBase+"gcp.md") || !strings.Contains(out, "policyanalyzer") {
 		t.Fatalf("connect gcp names the APIs and links its guide:\n%s", out)
+	}
+}
+
+func TestRunCallsNothingBeforeConnect(t *testing.T) {
+	e := newEnv(t)
+	bin := t.TempDir()
+	// Ambient credentials: a gh login, a token in the environment and AWS keys.
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\necho ambient-gh-token\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.vars = []string{"HOME=" + e.home, "PATH=" + bin + ":/usr/bin:/bin", "USER=tester", "NO_COLOR=1",
+		"FIREDRILL_SALT=" + strings.Repeat("a", 64), "GH_TOKEN=ambient-env-token",
+		"AWS_ACCESS_KEY_ID=AKIAACMEEXAMPLE", "AWS_SECRET_ACCESS_KEY=acme-example",
+		"FIREDRILL_ANTHROPIC_ADMIN_KEY=" + ambientAnthropicKey, "FIREDRILL_OPENAI_ADMIN_KEY=" + ambientOpenAIKey,
+		// Nothing may leave the machine: every request goes to a closed port.
+		"HTTPS_PROXY=http://127.0.0.1:1", "HTTP_PROXY=http://127.0.0.1:1"}
+	e.repo(".git", map[string]string{"config": "[remote \"origin\"]\n\turl = git@github.com:acme/api.git\n"})
+	e.mustRun("init", "--yes", "--owner", "@acme")
+	cfgPath := filepath.Join(e.work, ".firedrill/config.yaml")
+	cfg, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(cfg), "org: acme") || strings.Contains(string(cfg), "connected") {
+		t.Fatalf("init fills org and repos from the remote but connects nothing:\n%s", cfg)
+	}
+	cfg = append(cfg, []byte("aws:\n  accounts:\n    - profile: default\n")...)
+	if err := os.WriteFile(cfgPath, cfg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	callLog := filepath.Join(e.work, ".firedrill/local/calls.jsonl")
+	out, _ := e.run("run")
+	if !strings.Contains(out, "connect github") || !strings.Contains(out, "connect aws") ||
+		!strings.Contains(out, "connect anthropic or connect openai") || !strings.Contains(out, "connect aws or connect gcp") {
+		t.Fatalf("github, aws and the AI providers wait for connect:\n%s", out)
+	}
+	if b, _ := os.ReadFile(callLog); len(strings.TrimSpace(string(b))) != 0 {
+		t.Fatalf("a run before connect made calls:\n%s", b)
+	}
+
+	// A connect whose access check fails records nothing.
+	if out, code := e.run("connect", "github"); code == 0 || !strings.Contains(out, "Access check failed") {
+		t.Fatalf("%d %s", code, out)
+	}
+	for _, sys := range []string{"anthropic", "openai"} {
+		out, code := e.run("connect", sys)
+		if code == 0 || !strings.Contains(out, "Access check failed") || !strings.Contains(out, "only ever") {
+			t.Fatalf("connect %s says the key is only used with GET, and fails here: %d %s", sys, code, out)
+		}
+		if strings.Contains(out, ambientAnthropicKey) || strings.Contains(out, ambientOpenAIKey) {
+			t.Fatalf("connect %s printed the admin key", sys)
+		}
+	}
+	if b, _ := os.ReadFile(cfgPath); strings.Contains(string(b), "connected") {
+		t.Fatalf("a failed connect must not record consent:\n%s", b)
+	}
+
+	// What a successful connect records: from then on, runs call GitHub.
+	if err := os.WriteFile(cfgPath, append(cfg, []byte("connected: [github]\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.run("run")
+	b, _ := os.ReadFile(callLog)
+	if !strings.Contains(string(b), `"connector":"github"`) || !strings.Contains(string(b), "api.github.com") {
+		t.Fatalf("a connected GitHub is called:\n%s", b)
+	}
+	if strings.Contains(string(b), `"connector":"aws"`) || strings.Contains(string(b), `"connector":"anthropic"`) || strings.Contains(string(b), `"connector":"openai"`) {
+		t.Fatalf("aws and the AI providers are still not connected:\n%s", b)
+	}
+	// No admin key reaches the records.
+	_ = filepath.WalkDir(filepath.Join(e.work, ".firedrill"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if c, _ := os.ReadFile(p); strings.Contains(string(c), ambientAnthropicKey) || strings.Contains(string(c), ambientOpenAIKey) {
+			t.Errorf("%s holds an admin key", p)
+		}
+		return nil
+	})
+}
+
+// Ambient admin keys, built by concatenation.
+var (
+	ambientAnthropicKey = "sk-ant-admin01-" + "ambient" + "-0000"
+	ambientOpenAIKey    = "sk-admin-" + "ambient" + "-0000"
+)
+
+func TestDiffShowsWhatChangedBetweenTwoRuns(t *testing.T) {
+	e := newEnv(t)
+	e.mustRun("init", "--yes", "--owner", "@arjun")
+	api := e.repo("api", map[string]string{"README.md": "hello\n"})
+	out, _ := e.run("run", "--path", api)
+	if strings.Contains(out, "Changed since last run") {
+		t.Fatalf("the first run has nothing to compare with:\n%s", out)
+	}
+	if out, code := e.run("diff"); code == 0 || !strings.Contains(out, "only one run") {
+		t.Fatalf("diff with one run: %d\n%s", code, out)
+	}
+
+	e.repo("api", map[string]string{
+		".github/workflows/label.yml": "on: pull_request_target\npermissions:\n  contents: read\njobs:\n  label:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
+		"scripts/deploy.sh":           "DEPLOY_TOKEN=" + token + "\n",
+	})
+	out, _ = e.run("run", "--path", api)
+	if !strings.Contains(out, "Changed since last run (") || !strings.Contains(out, "Run firedrill diff to see them.") {
+		t.Fatalf("run does not say what changed:\n%s", out)
+	}
+	if strings.Contains(out, token) {
+		t.Fatal("a raw secret reached the output")
+	}
+
+	out = e.mustRun("diff")
+	for _, want := range []string{"Weakenings (2)", "Secret seen in a new place (1)", "scripts/deploy.sh", "Protection weakened (1)", "runs on pull_request_target"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("diff missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, token) {
+		t.Fatal("a raw secret reached the diff")
+	}
+	var rec struct {
+		Changes []struct {
+			Type      string `json:"type"`
+			Weakening bool   `json:"weakening"`
+		} `json:"changes"`
+		FromSHA256 string `json:"from_sha256"`
+		ToSHA256   string `json:"to_sha256"`
+	}
+	if err := json.Unmarshal([]byte(e.mustRun("diff", "--json")), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Changes) != 2 || rec.FromSHA256 == "" || rec.ToSHA256 == "" {
+		t.Fatalf("%+v", rec)
+	}
+	diffs, _ := filepath.Glob(filepath.Join(e.work, ".firedrill", "local", "diffs", "*.json"))
+	if len(diffs) != 1 {
+		t.Fatalf("diff files: %v", diffs)
+	}
+
+	// Nothing changes before the third run.
+	out, _ = e.run("run", "--path", api)
+	if !strings.Contains(out, "Nothing changed since last run (") {
+		t.Fatalf("third run:\n%s", out)
+	}
+	out = e.mustRun("diff")
+	if !regexp.MustCompile(`^Nothing changed since \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\.\n$`).MatchString(out) {
+		t.Fatalf("an empty diff is one line: %q", out)
+	}
+	// The earlier pair can still be asked for by its timestamps.
+	snaps, _ := filepath.Glob(filepath.Join(e.work, ".firedrill", "local", "snapshots", "*.json.gz"))
+	if len(snaps) != 3 {
+		t.Fatalf("snapshots: %v", snaps)
+	}
+	stamp := func(p string) string { return strings.TrimSuffix(filepath.Base(p), ".json.gz") }
+	out = e.mustRun("diff", "--from", stamp(snaps[0]), "--to", stamp(snaps[1]))
+	if !strings.Contains(out, "Weakenings (2)") {
+		t.Fatalf("diff by timestamp:\n%s", out)
 	}
 }

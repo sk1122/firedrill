@@ -20,7 +20,8 @@ jobs:
         with:
           go-version: "1.27"
       - name: Install Firedrill
-        run: go install github.com/sk1122/firedrill/cmd/firedrill@latest
+        # Pinned so a new release cannot change CI unreviewed. Bump on release.
+        run: go install github.com/sk1122/firedrill/cmd/firedrill@v0.1.1
       - name: Check out the records
         run: |
           if git fetch origin firedrill-tags; then

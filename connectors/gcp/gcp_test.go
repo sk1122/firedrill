@@ -256,11 +256,19 @@ func TestAvailableNeedsProjectsAndCredentials(t *testing.T) {
 	if ok, _ := c.Available(scope()); ok {
 		t.Fatal("no projects listed")
 	}
-	if ok, why := c.Available(scope("acme-prod")); !ok {
-		t.Fatalf("listed and credentials present: %s", why)
+	if ok, why := c.Available(scope("acme-prod")); ok || why != "connect gcp" {
+		t.Fatal("projects and credentials are not enough before connect gcp")
+	}
+	connected := func() connector.Scope {
+		s := scope("acme-prod")
+		s.Project.Config.Connected = []string{"gcp"}
+		return s
+	}
+	if ok, why := c.Available(connected()); !ok {
+		t.Fatalf("connected, listed and credentials present: %s", why)
 	}
 	c.ReadFile = func(string) ([]byte, error) { return nil, errors.New("missing") }
-	if ok, _ := c.Available(scope("acme-prod")); ok {
+	if ok, _ := c.Available(connected()); ok {
 		t.Fatal("missing credentials file")
 	}
 }

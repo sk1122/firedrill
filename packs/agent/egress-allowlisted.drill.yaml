@@ -1,0 +1,15 @@
+firedrill: v0
+id: agent/egress-allowlisted
+safeguard: "Each coding agent's committed settings restrict outbound network access to an allowlist."
+severity: high
+for_each: repos
+fetch:
+  agents: { fact: files.agent_configs }
+na_reason: "agents run with their defaults; check laptops with --include-home"
+pass_when:
+  - agents.found.filter(a, a.egress == "open").size() == 0
+  - agents.found.filter(a, a.egress_unbounded).size() == 0
+warn_when:
+  - agents.found.exists(a, a.egress == "partial" || a.egress == "unsupported")
+fix: "Limit what agents can reach to the hosts they need. Claude Code: set sandbox.enabled to true, sandbox.allowUnsandboxedCommands to false, list hosts in sandbox.network.allowedDomains, and add no bare WebFetch allow rule; a deny rule on WebFetch or curl alone does not stop other programs. Cursor: commit .cursor/sandbox.json with networkPolicy.default deny and an allow list. VS Code: run local MCP servers with sandboxEnabled and sandbox.network.allowedDomains. Never allow * or 0.0.0.0/0. Gemini CLI and local MCP servers under Claude Code and Cursor have no host allowlist, so they warn. This reads committed settings only: whether a sandbox actually enforces them on each machine is not checked."
+maps_to: [SOC2:CC6.6]

@@ -160,32 +160,48 @@ var guides = map[string]string{
 	"github": "github.md", "gcp": "gcp.md", "google": "google-workspace.md", "aws": "aws.md",
 	"files": "repo-files.md", "hr": "hr.md", "semgrep": "semgrep.md",
 	"dns": "domains.md", "ctlog": "domains.md", "web": "domains.md",
+	"anthropic": "anthropic.md", "openai": "openai.md",
 }
 
 var setupNotes = map[string]string{
-	"github": `GitHub needs read access: Metadata, Administration, Environments and Contents.
+	"github": `GitHub needs read access: Metadata, Administration, Environments and Contents on the repos,
+and organization Members to read who can reach them: members, teams and outside collaborators.
 On a laptop the GitHub CLI's login is reused. A gh token acts as whoever is logged in.
 In CI use a fine-grained token as FIREDRILL_GITHUB_TOKEN, limited to the listed repos.
-With a read-only token, ruleset bypass lists come from firedrill export rulesets, or read as unknown.`,
+With a read-only token, ruleset bypass lists come from firedrill export rulesets, or read as unknown.
+Without Members, repo settings are still read and only the people facts give ERROR.`,
 	"google": `Google needs a service account with domain-wide delegation, approved once by a super admin.
 1. Create a service account and a JSON key in Google Cloud.
-2. In the Admin console, grant it the scope https://www.googleapis.com/auth/admin.directory.user.readonly.
+2. In the Admin console, grant it the scopes
+   https://www.googleapis.com/auth/admin.directory.user.readonly,
+   https://www.googleapis.com/auth/admin.directory.user.security (the OAuth grants users gave
+   third-party apps; Google has no read-only scope for it, so the guard allows only GET) and
+   https://www.googleapis.com/auth/admin.directory.group.readonly (the members of groups that
+   hold a Google Cloud role, and of groups nested in them; no other group's members are read).
 3. Set google.domain and google.admin_email in config.yaml, the admin it acts as.
-4. Set GOOGLE_APPLICATION_CREDENTIALS to the key file's path.`,
+4. Set GOOGLE_APPLICATION_CREDENTIALS to the key file's path.
+Without the second scope, users are still read and only access/third-party-apps-reviewed gives ERROR.
+Without the third, who holds a role through a group reads as unknown, and the people facts give WARN.`,
 	"aws": `AWS uses the default credential chain, one profile per account under aws.accounts in config.yaml.
 Attach this read policy to each:
   iam:GetAccountAuthorizationDetails, iam:GetAccessKeyLastUsed, iam:ListAccessKeys,
-  iam:GenerateCredentialReport, iam:GetCredentialReport`,
+  iam:GenerateCredentialReport, iam:GetCredentialReport,
+  rds:DescribeDBInstances, rds:DescribeDBClusters, backup:ListCopyJobs
+Databases are read in each region under aws.regions, or the profile's own region.`,
 	"gcp": `Google Cloud reads through a reader service account with read roles only, and no key:
 1. Turn on the iam, iamcredentials, cloudresourcemanager and policyanalyzer APIs in one
    project, and create a service account, for example firedrill-reader, there.
-2. On each project, grant it Viewer, Security Reviewer and Activity Analysis Viewer
-   (roles/viewer, roles/iam.securityReviewer, roles/policyanalyzer.activityAnalysisViewer).
+2. On each project, grant it Viewer, Security Reviewer, Activity Analysis Viewer and Role Viewer
+   (roles/viewer, roles/iam.securityReviewer, roles/policyanalyzer.activityAnalysisViewer,
+   roles/iam.roleViewer; the last reads the permissions of custom roles, which stay unknown without it).
 3. Grant yourself Service Account Token Creator on it, then log in as it:
    gcloud auth application-default login --impersonate-service-account=<reader email>
 The IAM API needs the cloud-platform scope, so the reader's roles keep it to reads. In CI, or instead, set
 FIREDRILL_GCP_CREDENTIALS to a credentials file's path.
 List projects under gcp.projects in config.yaml. Owner domains come from gcp.member_domains, or google.domain.
+Cloud SQL backups are read through the sqladmin API, which Viewer covers: turn on
+sqladmin.googleapis.com in the reader's own project, where calls are billed.
+Name production projects under production in config.yaml; with none named, every project counts.
 Reads use GET, plus POST getIamPolicy on each listed project and the token calls, each by exact URL.`,
 
 	"files":   "Repo files need nothing for local checkouts: pass --path. Remote repos use the GitHub connection.",
@@ -194,12 +210,22 @@ Reads use GET, plus POST getIamPolicy on each listed project and the token calls
 	"dns":     "DNS uses the system resolver. List domains in config.yaml and run firedrill verify-domain.",
 	"ctlog":   "Certificate logs use the public crt.sh API, on domains verified with firedrill verify-domain.",
 	"web":     "Web checks only reach hosts under domains verified with firedrill verify-domain.",
+	"anthropic": `Anthropic needs an Admin API key (sk-ant-admin...) of your Claude Console organization.
+An admin key is powerful: it can create and delete keys and change members. Firedrill only ever
+sends it with GET to two paths, /v1/organizations/api_keys and /v1/organizations/workspaces; the
+guard refuses anything else. Set FIREDRILL_ANTHROPIC_ADMIN_KEY to it; it is never written anywhere.
+The Admin API shows no spend limit, so declare each workspace's limit in .firedrill/ai-keys.yaml.`,
+	"openai": `OpenAI needs an Admin key of your organization.
+An admin key is powerful: it can create and delete keys and change projects. Firedrill only ever
+sends it with GET to the projects list, each project's API keys and spend limit, and the
+organization's spend limit; the guard refuses anything else. Set FIREDRILL_OPENAI_ADMIN_KEY to it;
+it is never written anywhere.`,
 }
 
 func connectCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "connect <system>",
-		Short: "Check access to a system and print the exact permissions and setup steps",
+		Short: "Check access to a system, print its setup steps, and record it as connected",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -219,7 +245,7 @@ func connectCmd() *cobra.Command {
 				fmt.Fprintf(out, "\nStep by step: %s%s\n", guideBase, g)
 			}
 			ctx := cmd.Context()
-			rc, err := prepare(ctx, nil, false)
+			rc, err := prepareConnecting(ctx, nil, false, name)
 			if err != nil {
 				return err
 			}
@@ -248,7 +274,22 @@ func connectCmd() *cobra.Command {
 					return exitError{1}
 				}
 			}
-			fmt.Fprintf(out, "\nConnected. Read %d items.\n", len(g.Nodes("")))
+			// github, google, aws, gcp, anthropic and openai reach the network, so
+			// they run only once connect has recorded that someone connected them
+			// on purpose.
+			if err := config.MarkConnected(projectDir, name); err != nil {
+				return fmt.Errorf("connected, but could not record it in config.yaml: %w", err)
+			}
+			fmt.Fprintf(out, "\nConnected. Read %d items. Recorded %s under connected in config.yaml.\n", len(g.Nodes("")), name)
+			// A collection can fail on its own, such as a missing scope, while the
+			// rest worked. Its drills will give ERROR or WARN until it is fixed.
+			for _, n := range g.Nodes(graph.KindScan) {
+				if msg, _ := n.Attrs["error"].(string); msg != "" {
+					fmt.Fprintf(out, "Not readable yet: %s\n", msg)
+				} else if msg, _ := n.Attrs["partial"].(string); msg != "" {
+					fmt.Fprintf(out, "Read only in part: %s\n", msg)
+				}
+			}
 			return nil
 		},
 	}
@@ -466,6 +507,12 @@ func explainCmd() *cobra.Command {
 						fmt.Fprintf(out, "Failing: %s\n", strings.Join(strings.Fields(c.Expr), " "))
 					}
 				}
+				if lines := sourceLines(l.Header); len(lines) > 0 {
+					fmt.Fprintln(out, "Sources:")
+					for _, line := range lines {
+						fmt.Fprintf(out, "  %s\n", line)
+					}
+				}
 				b, _ := json.MarshalIndent(l.Evidence.Facts, "", "  ")
 				fmt.Fprintf(out, "Evidence:\n%s\n", b)
 				if l.Header.State == tag.Open && d.Fix != "" {
@@ -480,6 +527,23 @@ func explainCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&records, "records", "", "where records live")
 	return cmd
+}
+
+// sourceLines lists each fetch's source with its evidence tier, then each
+// inferred field read. Tags written before tiers show the source alone.
+func sourceLines(h tag.Header) []string {
+	var out []string
+	for _, e := range report.EvidenceOf(h) {
+		line := e.Alias
+		if e.Source != "" {
+			line += "  " + e.Source
+		}
+		if e.Tier != "" {
+			line += "  [" + e.Tier + "]"
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 func reportCmd() *cobra.Command {
@@ -513,10 +577,32 @@ func reportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			board, err := report.Build(tag.Store{Root: records}, est, drills, now)
+			// The noise rules come from config; without one, their defaults apply.
+			noise := run.RulesOf(config.Config{})
+			if p, err := config.Load(projectDir); err == nil {
+				noise = run.RulesOf(p.Config)
+			}
+			board, err := report.Build(tag.Store{Root: records}, est, drills, now, noise)
 			if err != nil {
 				return err
 			}
+			changes, err := run.LatestDiff(records)
+			if err != nil {
+				return err
+			}
+			report.AddChanges(board, changes)
+			// People, Agents and the graph pages read the latest run's snapshot.
+			var latest *graph.Snapshot
+			if files, err := run.RunSnapshots(filepath.Join(records, "snapshots")); err != nil {
+				return err
+			} else if len(files) > 0 {
+				s, err := graph.ReadSnapshot(files[len(files)-1])
+				if err != nil {
+					return err
+				}
+				latest = &s
+			}
+			report.AddViews(board, latest, changes, now)
 			if outDir == "" {
 				outDir = filepath.Join(projectDir, "report")
 			}
@@ -534,23 +620,41 @@ func reportCmd() *cobra.Command {
 	return cmd
 }
 
-// loadEstate reads the estate from Postgres when configured, otherwise it merges
-// snapshots in memory. A database failure falls back to snapshots, the truth.
+// loadEstate reads the estate from Postgres when configured and current with
+// the snapshots, otherwise it merges snapshots in memory, the truth. It only
+// reads: migrations and Sync happen in syncDatabase, after a run.
 func loadEstate(ctx context.Context, records string, now time.Time) (*graph.Estate, error) {
 	snaps := filepath.Join(records, "snapshots")
 	if url := os.Getenv("FIREDRILL_DATABASE_URL"); url != "" {
-		store, err := pg.Open(ctx, url)
-		if err == nil {
-			defer func() { _ = store.Close(ctx) }()
-			if _, err = store.Sync(ctx, snaps, now); err == nil {
-				if est, err := store.Estate(ctx); err == nil {
-					return est, nil
-				}
-			}
+		est, why := databaseEstate(ctx, url, snaps, now)
+		if est != nil {
+			return est, nil
 		}
-		fmt.Fprintln(os.Stderr, "WARN  Postgres was not usable, using snapshots")
+		fmt.Fprintln(os.Stderr, "WARN  Postgres "+why+", using snapshots")
 	}
 	return graph.RebuildEstate(snaps, now)
+}
+
+// databaseEstate reads the estate from a read-only connection, only when the
+// database holds exactly what the snapshots hold. Otherwise it says why not.
+func databaseEstate(ctx context.Context, url, snaps string, now time.Time) (*graph.Estate, string) {
+	store, err := pg.OpenReadOnly(ctx, url)
+	if err != nil {
+		return nil, "was not usable"
+	}
+	defer func() { _ = store.Close(ctx) }()
+	current, err := store.Current(ctx, snaps, now)
+	if err != nil {
+		return nil, "was not usable"
+	}
+	if !current {
+		return nil, "is behind the snapshots until the next firedrill run"
+	}
+	est, err := store.Estate(ctx)
+	if err != nil {
+		return nil, "was not usable"
+	}
+	return est, ""
 }
 
 func testCmd() *cobra.Command {

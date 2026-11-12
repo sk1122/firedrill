@@ -24,13 +24,22 @@ type Finding struct {
 	KeyID string // AWS access key ID, an identifier and never the secret
 }
 
-var prefixes = []struct {
+// prefixKind is a credential kind found by its shape alone.
+type prefixKind struct {
 	kind string
 	re   *regexp.Regexp
-}{
+}
+
+var prefixes = []prefixKind{
 	{"aws_access_key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)},
 	{"stripe_live", regexp.MustCompile(`\bsk_live_[0-9A-Za-z]{10,}\b`)},
+	// GitHub tokens that act as a person: a classic personal access token, a
+	// fine-grained one, an OAuth token and a GitHub App's user-to-server
+	// token. An app installation token (ghs_) acts as the app, not a person.
 	{"github_token", regexp.MustCompile(`\bghp_[0-9A-Za-z]{20,}\b`)},
+	{"github_pat", regexp.MustCompile(`\bgithub_pat_[0-9A-Za-z_]{22,}\b`)},
+	{"github_oauth", regexp.MustCompile(`\bgho_[0-9A-Za-z]{20,}\b`)},
+	{"github_user_token", regexp.MustCompile(`\bghu_[0-9A-Za-z]{20,}\b`)},
 	{"razorpay_live", regexp.MustCompile(`\brzp_live_[0-9A-Za-z]{10,}\b`)},
 }
 
@@ -102,11 +111,33 @@ func HighEntropy(v string) bool {
 // as env.X and calls are not values, a value ends at a backslash escape, and
 // values with a placeholder word are skipped.
 func Scan(text string) []Finding {
+	return scanLines(text, nil, nil, nil)
+}
+
+// scanLines is Scan with extra prefix kinds tried first, values already found
+// elsewhere skipped, and a function that names the kind of a credential-named
+// variable's value. Scan passes none of them.
+func scanLines(text string, extra []prefixKind, skip map[string]bool, generic func(name string) string) []Finding {
 	var out []Finding
+	kindOf := func(name string) string {
+		if generic == nil {
+			return "generic"
+		}
+		return generic(name)
+	}
+	all := append(append([]prefixKind(nil), extra...), prefixes...)
 	for i, line := range strings.Split(text, "\n") {
 		seen := map[string]bool{}
-		for _, p := range prefixes {
+		for v := range skip {
+			if strings.Contains(line, v) {
+				seen[v] = true
+			}
+		}
+		for _, p := range all {
 			for _, m := range p.re.FindAllString(line, -1) {
+				if seen[m] {
+					continue
+				}
 				seen[m] = true
 				f := Finding{Kind: p.kind, Line: i + 1, Value: m}
 				if p.kind == "aws_access_key" {
@@ -120,33 +151,54 @@ func Scan(text string) []Finding {
 			if !quoted && codeRef.MatchString(v) && !strings.HasPrefix(v, "eyJ") {
 				continue
 			}
-			if seen[v] || placeholder(v) || !HighEntropy(v) {
+			if seen[v] || (extra != nil && covered(seen, v)) || placeholder(v) || !HighEntropy(v) {
 				continue
 			}
 			seen[v] = true
-			out = append(out, Finding{Kind: "generic", Line: i + 1, Value: v})
+			out = append(out, Finding{Kind: kindOf(m[1]), Line: i + 1, Value: v})
 		}
-		if !credName.MatchString(line) {
+		name := credName.FindString(line)
+		if name == "" {
 			continue
 		}
 		for _, m := range fallback.FindAllStringSubmatch(line, -1) {
 			v := m[1]
-			if seen[v] || placeholder(v) || !HighEntropy(v) {
+			if seen[v] || (extra != nil && covered(seen, v)) || placeholder(v) || !HighEntropy(v) {
 				continue
 			}
 			seen[v] = true
-			out = append(out, Finding{Kind: "generic", Line: i + 1, Value: v})
+			out = append(out, Finding{Kind: kindOf(name), Line: i + 1, Value: v})
 		}
 	}
 	return out
 }
 
-// LooksLikeSecret is the record scanner's test for one value.
-func LooksLikeSecret(v string) bool {
+// covered reports a value that is part of a longer one already found on the
+// line, such as the password inside a database URL.
+func covered(seen map[string]bool, v string) bool {
+	for s := range seen {
+		if len(s) > len(v) && strings.Contains(s, v) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasKnownPrefix reports a value holding a credential with a known prefix,
+// such as sk_live_ or ghp_.
+func HasKnownPrefix(v string) bool {
 	for _, p := range prefixes {
 		if p.re.MatchString(v) {
 			return true
 		}
+	}
+	return false
+}
+
+// LooksLikeSecret is the record scanner's test for one value.
+func LooksLikeSecret(v string) bool {
+	if HasKnownPrefix(v) {
+		return true
 	}
 	if strings.ContainsAny(v, " \t\n/.@:") {
 		return false
@@ -166,7 +218,7 @@ func DefaultClasses() Classes {
 	return Classes{
 		ProdWords:    []string{"prod", "production"},
 		StagingWords: []string{"staging", "stage"},
-		ExamplePaths: []string{"testdata/", "fixtures/", "__tests__/", "test/", "tests/", "*_test.*", "*.example", "*.sample", "*.template"},
+		ExamplePaths: []string{"*.example", "*.sample", "*.template"},
 	}
 }
 

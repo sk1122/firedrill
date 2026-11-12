@@ -1,0 +1,20 @@
+firedrill: v0
+id: agent/agent-has-own-identity
+safeguard: "A coding agent never works through a human's credentials that can skip review."
+severity: high
+for_each: github.repos
+fetch:
+  tools:   { fact: files.agent_configs }
+  secrets: { fact: files.secrets }
+  bypass:  { fact: github.bypass_actors, args: { branch: default } }
+applies_when: tools.found.size() > 0
+na_reason: "no agent config was read for this repo under its GitHub name"
+pass_when:
+  - >-
+    secrets.found.filter(s, s.agent_readable
+    && s.kind in ["github_token", "github_pat", "github_oauth", "github_user_token"]).size() == 0
+  - bypass.people.size() == 0
+warn_when:
+  - "!bypass.known"
+fix: "Give the agent its own identity: a GitHub App or a bot account with write access and no bypass, so its pushes go through review. Remove any personal GitHub token from files the agent can read and revoke it. Then remove people from the default branch's bypass list, or keep agents out of that repo."
+maps_to: [SOC2:CC6.1, SOC2:CC8.1]

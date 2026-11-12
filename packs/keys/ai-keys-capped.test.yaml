@@ -1,0 +1,153 @@
+firedrill: v0
+drill: keys/ai-keys-capped
+cases:
+    - name: owned and capped
+      expect: PASS
+      facts:
+        keys:
+            found:
+                - cap_source: api
+                  capped: true
+                  days_since_created: 37
+                  has_owner: true
+                  hint: sk-...abcd
+                  key_id: key_acmeci
+                  limit_readable: true
+                  limit_scope: project
+                  name: agent
+                  owner: person:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                  owner_kind: user
+                  owner_source: provider
+                  project: proj_acmeprod
+                  project_name: acme-prod
+                  provider: openai
+                  status: active
+                  workspace: ""
+                  workspace_name: ""
+            providers:
+                - openai
+    - name: active key with no owner and no cap
+      expect: FAIL
+      facts:
+        keys:
+            found:
+                - cap_source: none
+                  capped: false
+                  days_since_created: 37
+                  has_owner: false
+                  hint: sk-...abcd
+                  key_id: key_acmeloop
+                  limit_readable: true
+                  limit_scope: none
+                  name: agent
+                  owner: ""
+                  owner_kind: unknown
+                  owner_source: ""
+                  project: proj_acmeprod
+                  project_name: acme-prod
+                  provider: openai
+                  status: active
+                  workspace: ""
+                  workspace_name: ""
+            providers:
+                - openai
+    - name: owner but no cap
+      expect: FAIL
+      facts:
+        keys:
+            found:
+                - cap_source: none
+                  capped: false
+                  days_since_created: 37
+                  has_owner: true
+                  hint: sk-...abcd
+                  key_id: key_acmeci
+                  limit_readable: true
+                  limit_scope: none
+                  name: agent
+                  owner: person:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                  owner_kind: user
+                  owner_source: provider
+                  project: proj_acmeprod
+                  project_name: acme-prod
+                  provider: openai
+                  status: active
+                  workspace: ""
+                  workspace_name: ""
+            providers:
+                - openai
+    - name: limit not readable and not declared
+      expect: WARN
+      facts:
+        keys:
+            found:
+                - cap_source: unknown
+                  capped: false
+                  days_since_created: 37
+                  has_owner: true
+                  hint: sk-...abcd
+                  key_id: apikey_01AcmeCI
+                  limit_readable: false
+                  limit_scope: unknown
+                  name: agent
+                  owner: person:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                  owner_kind: user
+                  owner_source: provider
+                  project: ""
+                  project_name: ""
+                  provider: anthropic
+                  status: active
+                  workspace: wrkspc_01AcmeProd
+                  workspace_name: acme-prod
+            providers:
+                - anthropic
+    - name: cap declared for the workspace
+      expect: PASS
+      facts:
+        keys:
+            found:
+                - cap_source: declared
+                  capped: true
+                  days_since_created: 37
+                  has_owner: true
+                  hint: sk-...abcd
+                  key_id: apikey_01AcmeCI
+                  limit_readable: true
+                  limit_scope: declared
+                  name: agent
+                  owner: person:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                  owner_kind: user
+                  owner_source: provider
+                  project: ""
+                  project_name: ""
+                  provider: anthropic
+                  status: active
+                  workspace: wrkspc_01AcmeProd
+                  workspace_name: acme-prod
+            providers:
+                - anthropic
+    - name: no active key
+      expect: N/A
+      facts:
+        keys:
+            found:
+                - cap_source: unknown
+                  capped: false
+                  days_since_created: 37
+                  has_owner: false
+                  hint: sk-...abcd
+                  key_id: apikey_01AcmeOld
+                  limit_readable: false
+                  limit_scope: unknown
+                  name: agent
+                  owner: ""
+                  owner_kind: unknown
+                  owner_source: ""
+                  project: ""
+                  project_name: ""
+                  provider: anthropic
+                  status: archived
+                  workspace: wrkspc_01AcmeProd
+                  workspace_name: acme-prod
+            providers:
+                - anthropic

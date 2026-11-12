@@ -270,6 +270,27 @@ func fieldNames(s *facts.Shape) string {
 
 // UsedPaths returns, per fetch alias, the field paths a drill's conditions read.
 func UsedPaths(d *Drill) map[string][]string {
+	var all []string
+	for _, c := range d.PassWhen {
+		all = append(all, c.Expr)
+	}
+	for _, c := range d.WarnWhen {
+		all = append(all, c.Expr)
+	}
+	if d.AppliesWhen != nil {
+		all = append(all, d.AppliesWhen.Expr)
+	}
+	return usedPaths(d, all)
+}
+
+// ConditionPaths returns, per alias, the field paths one condition reads. The
+// paths are spelled as UsedPaths spells them, and include every step on the
+// way to a field, so found is listed beside found.file.
+func ConditionPaths(d *Drill, expr string) map[string][]string {
+	return usedPaths(d, []string{expr})
+}
+
+func usedPaths(d *Drill, exprs []string) map[string][]string {
 	shapes := map[string]*facts.Shape{}
 	if def, ok := facts.Lookup(d.ForEach); ok && def.Shape.Elem != nil {
 		shapes["target"] = def.Shape.Elem
@@ -284,14 +305,8 @@ func UsedPaths(d *Drill) map[string][]string {
 		return nil
 	}
 	a := analyzer{shapes: shapes, used: map[string]map[string]bool{}, onErr: func(string) {}}
-	var all []Condition
-	all = append(all, d.PassWhen...)
-	all = append(all, d.WarnWhen...)
-	if d.AppliesWhen != nil {
-		all = append(all, *d.AppliesWhen)
-	}
-	for _, c := range all {
-		if ast, iss := env.Parse(c.Expr); iss == nil || iss.Err() == nil {
+	for _, expr := range exprs {
+		if ast, iss := env.Parse(expr); iss == nil || iss.Err() == nil {
 			if parsed, err := cel.AstToParsedExpr(ast); err == nil {
 				a.walk(parsed.GetExpr(), nil)
 			}
@@ -303,6 +318,28 @@ func UsedPaths(d *Drill) map[string][]string {
 			out[alias] = append(out[alias], p)
 		}
 		sort.Strings(out[alias])
+	}
+	return out
+}
+
+// LeafPaths keeps, per alias, only the paths no other path extends: the fields
+// actually read, not the steps on the way to them. An alias read whole keeps
+// the empty path.
+func LeafPaths(used map[string][]string) map[string][]string {
+	out := map[string][]string{}
+	for alias, paths := range used {
+		for _, p := range paths {
+			leaf := true
+			for _, q := range paths {
+				if q != p && (p == "" || strings.HasPrefix(q, p+".")) {
+					leaf = false
+					break
+				}
+			}
+			if leaf {
+				out[alias] = append(out[alias], p)
+			}
+		}
 	}
 	return out
 }

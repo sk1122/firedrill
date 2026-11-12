@@ -1,0 +1,95 @@
+firedrill: v0
+drill: doors/no-live-key-in-public-bundle
+cases:
+    - name: service account key in a bundle matches a live GCP key
+      expect: FAIL
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        secrets:
+            found:
+                - client_side: false
+                  hash: 5a1f0c3e9b7d2a4c6e8f0b1d3a5c7e9f
+                  host: www.acme.com
+                  key_id: 0123456789abcdef0123456789abcdef01234567
+                  kind: gcp_sa_key
+                  live: "yes"
+                  path: /assets/app.js
+            inspected: 4
+      inspected:
+        secrets: 4
+    - name: server-side secret, GCP not connected
+      expect: FAIL
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        secrets:
+            found:
+                - client_side: false
+                  hash: 5a1f0c3e9b7d2a4c6e8f0b1d3a5c7e9f
+                  host: www.acme.com
+                  key_id: ""
+                  kind: stripe_live
+                  live: unknown
+                  path: /assets/app.js.map
+            inspected: 4
+      inspected:
+        secrets: 4
+    - name: browser API key
+      expect: WARN
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        secrets:
+            found:
+                - client_side: true
+                  hash: 5a1f0c3e9b7d2a4c6e8f0b1d3a5c7e9f
+                  host: www.acme.com
+                  key_id: ""
+                  kind: google_api_key
+                  live: unknown
+                  path: /assets/maps.js
+            inspected: 4
+      inspected:
+        secrets: 4
+    - name: nothing found
+      expect: PASS
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        secrets:
+            found: []
+            inspected: 4
+      inspected:
+        secrets: 4
+    - name: client-side key known disabled
+      expect: PASS
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        secrets:
+            found:
+                - client_side: true
+                  hash: 5a1f0c3e9b7d2a4c6e8f0b1d3a5c7e9f
+                  host: www.acme.com
+                  key_id: 0123456789abcdef0123456789abcdef01234567
+                  kind: generic
+                  live: "no"
+                  path: /assets/app.js
+            inspected: 4
+      inspected:
+        secrets: 4
+    - name: no bundle inspected
+      expect: N/A
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        secrets:
+            found: []
+            inspected: 0

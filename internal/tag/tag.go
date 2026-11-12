@@ -43,6 +43,10 @@ type Condition struct {
 // Header is the part of a tag the chain covers. It holds a hash of the evidence
 // rather than the evidence, so evidence about a person can be redacted without
 // breaking the chain.
+//
+// FactTiers holds each fetch's evidence tier by alias, plus alias.path for each
+// inferred field a condition read. Tags written before tiers have none, and
+// omitempty keeps their header hashes as they were, so their chains verify.
 type Header struct {
 	DrillID      string            `json:"drill_id"`
 	DrillHash    string            `json:"drill_sha256"`
@@ -58,6 +62,7 @@ type Header struct {
 	Owner        string            `json:"owner,omitempty"`
 	Conditions   []Condition       `json:"conditions,omitempty"`
 	FactSources  map[string]string `json:"fact_sources,omitempty"`
+	FactTiers    map[string]string `json:"fact_tiers,omitempty"`
 	Time         time.Time         `json:"time"`
 	RanBy        string            `json:"ran_by"`
 	Attested     bool              `json:"attested"`
@@ -133,7 +138,7 @@ func (s Store) Write(t *Tag) (string, error) {
 	// Two runs in one second move the later tag forward, so history stays ordered.
 	path := ""
 	for {
-		path = filepath.Join(dir, t.Header.Time.UTC().Format("2006-01-02T15-04-05Z")+".json")
+		path = filepath.Join(dir, t.Header.Time.UTC().Format(tagTime)+".json")
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			break
 		}
@@ -211,6 +216,70 @@ func (s Store) Keys() ([]Key, error) {
 		return nil
 	})
 	return out, err
+}
+
+// tagTime is the layout of a tag's file name.
+const tagTime = "2006-01-02T15-04-05Z"
+
+// FirstTimes returns when each drill was first recorded, on any target, and
+// when the oldest tag of any drill was written, zero when there is none. It
+// reads file names only, so it costs one directory listing per target.
+func (s Store) FirstTimes() (map[string]time.Time, time.Time, error) {
+	keys, err := s.Keys()
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	first := map[string]time.Time{}
+	var oldest time.Time
+	for _, k := range keys {
+		t, ok, err := s.firstTime(k)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		if !ok {
+			continue
+		}
+		if f, seen := first[k.DrillID]; !seen || t.Before(f) {
+			first[k.DrillID] = t
+		}
+		if oldest.IsZero() || t.Before(oldest) {
+			oldest = t
+		}
+	}
+	return first, oldest, nil
+}
+
+// firstTime returns the time of the oldest tag of one drill and target. A file
+// name that is not a time is read for its header instead.
+func (s Store) firstTime(k Key) (time.Time, bool, error) {
+	dir := filepath.Join(append([]string{s.Root, "tags"}, append(strings.Split(k.DrillID, "/"), k.TargetSlug)...)...)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	var oldest time.Time
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".json")
+		if !ok {
+			continue
+		}
+		t, err := time.Parse(tagTime, name)
+		if err != nil {
+			b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				return time.Time{}, false, err
+			}
+			var tg Tag
+			if err := json.Unmarshal(b, &tg); err != nil {
+				return time.Time{}, false, fmt.Errorf("%s: %w", e.Name(), err)
+			}
+			t = tg.Header.Time
+		}
+		if oldest.IsZero() || t.Before(oldest) {
+			oldest = t
+		}
+	}
+	return oldest, !oldest.IsZero(), nil
 }
 
 // ChainStatus is the result of checking one history.

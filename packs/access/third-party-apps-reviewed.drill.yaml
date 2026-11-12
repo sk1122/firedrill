@@ -1,0 +1,12 @@
+firedrill: v0
+id: access/third-party-apps-reviewed
+safeguard: "No third-party OAuth app holds Gmail, Drive or admin access to the Google Workspace without a named owner and a review date that has not lapsed."
+severity: high
+fetch:
+  apps: { fact: identity.oauth_apps }
+applies_when: apps.size() > 0
+na_reason: "no third-party app has been granted access in Google Workspace"
+pass_when:
+  - apps.filter(a, a.high_risk && (a.owner == "" || !a.review_current)).size() == 0
+fix: "Review the app. If nobody needs it, remove its access under Security > API controls > App access control in the Admin console. Otherwise record its owner and the review date in .firedrill/apps.yaml (client_id, name, owner, reviewed)."
+maps_to: [SOC2:CC9.2, ISO27001:A.5.19]
