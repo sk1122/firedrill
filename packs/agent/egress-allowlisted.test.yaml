@@ -24,8 +24,18 @@ cases:
                   unguarded_destructive: []
             inspected: 1
             shared_credentials: []
+        boundary:
+            agents_configured: true
+            boundary: unknown
+            ci_agent_jobs: []
+            ci_agent_jobs_bounded: []
+            ci_agent_jobs_exposed: []
+            devcontainer: none
+            inspected: 1
+            managed: not_read
       inspected:
         agents: 1
+        boundary: 1
     - name: wildcard allowlist
       expect: FAIL
       target:
@@ -50,8 +60,18 @@ cases:
                   unguarded_destructive: []
             inspected: 1
             shared_credentials: []
+        boundary:
+            agents_configured: true
+            boundary: unknown
+            ci_agent_jobs: []
+            ci_agent_jobs_bounded: []
+            ci_agent_jobs_exposed: []
+            devcontainer: none
+            inspected: 1
+            managed: not_read
       inspected:
         agents: 1
+        boundary: 1
     - name: web tools restricted only
       expect: WARN
       target:
@@ -75,8 +95,18 @@ cases:
                   unguarded_destructive: []
             inspected: 1
             shared_credentials: []
+        boundary:
+            agents_configured: true
+            boundary: unknown
+            ci_agent_jobs: []
+            ci_agent_jobs_bounded: []
+            ci_agent_jobs_exposed: []
+            devcontainer: none
+            inspected: 1
+            managed: not_read
       inspected:
         agents: 1
+        boundary: 1
     - name: sandbox allowlist
       expect: PASS
       target:
@@ -102,8 +132,18 @@ cases:
                   unguarded_destructive: []
             inspected: 1
             shared_credentials: []
+        boundary:
+            agents_configured: true
+            boundary: unknown
+            ci_agent_jobs: []
+            ci_agent_jobs_bounded: []
+            ci_agent_jobs_exposed: []
+            devcontainer: none
+            inspected: 1
+            managed: not_read
       inspected:
         agents: 1
+        boundary: 1
     - name: no agent config
       expect: N/A
       target:
@@ -114,3 +154,159 @@ cases:
             found: []
             inspected: 0
             shared_credentials: []
+        boundary:
+            agents_configured: false
+            boundary: unknown
+            ci_agent_jobs: []
+            ci_agent_jobs_bounded: []
+            ci_agent_jobs_exposed: []
+            devcontainer: none
+            inspected: 0
+            managed: not_read
+    - name: CI job runs an agent with secrets and no egress control (UK AISI)
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found: []
+            inspected: 0
+            shared_credentials: []
+        boundary:
+            agents_configured: true
+            boundary: none
+            ci_agent_jobs:
+                - .github/workflows/claude.yml#review
+            ci_agent_jobs_bounded: []
+            ci_agent_jobs_exposed:
+                - .github/workflows/claude.yml#review
+            devcontainer: none
+            inspected: 1
+            managed: not_read
+      inspected:
+        agents: 0
+        boundary: 1
+    - name: CI agent job behind harden-runner block
+      expect: PASS
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found: []
+            inspected: 0
+            shared_credentials: []
+        boundary:
+            agents_configured: true
+            boundary: enforced
+            ci_agent_jobs:
+                - .github/workflows/claude.yml#review
+            ci_agent_jobs_bounded:
+                - .github/workflows/claude.yml#review
+            ci_agent_jobs_exposed: []
+            devcontainer: none
+            inspected: 1
+            managed: not_read
+      inspected:
+        agents: 0
+        boundary: 1
+    - name: committed allowlist but an open dev container
+      expect: WARN
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  egress: allowlist
+                  egress_hosts:
+                    - github.com
+                  egress_unbounded: false
+                  file: .claude/settings.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+        boundary:
+            agents_configured: true
+            boundary: none
+            ci_agent_jobs: []
+            ci_agent_jobs_bounded: []
+            ci_agent_jobs_exposed: []
+            devcontainer: open
+            inspected: 1
+            managed: not_read
+      inspected:
+        agents: 1
+        boundary: 1
+    - name: dev container firewall and a bounded CI job
+      expect: PASS
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  egress: allowlist
+                  egress_hosts:
+                    - github.com
+                  egress_unbounded: false
+                  file: .claude/settings.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+        boundary:
+            agents_configured: true
+            boundary: enforced
+            ci_agent_jobs:
+                - .github/workflows/claude.yml#review
+            ci_agent_jobs_bounded:
+                - .github/workflows/claude.yml#review
+            ci_agent_jobs_exposed: []
+            devcontainer: firewall
+            inspected: 2
+            managed: not_read
+      inspected:
+        agents: 1
+        boundary: 2
+    - name: one CI agent job bounded, another not, no secrets
+      expect: WARN
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found: []
+            inspected: 0
+            shared_credentials: []
+        boundary:
+            agents_configured: true
+            boundary: partial
+            ci_agent_jobs:
+                - .github/workflows/a.yml#triage
+                - .github/workflows/b.yml#fix
+            ci_agent_jobs_bounded:
+                - .github/workflows/a.yml#triage
+            ci_agent_jobs_exposed: []
+            devcontainer: none
+            inspected: 2
+            managed: not_read
+      inspected:
+        agents: 0
+        boundary: 2

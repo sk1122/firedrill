@@ -112,6 +112,9 @@ func doRun(ctx context.Context, out, errOut io.Writer, f runFlags) (int, error) 
 	res, err := run.Run(ctx, run.Config{
 		Project: rc.project, Drills: drills, Connectors: connector.All(), Scope: rc.scope,
 		Stream: stream, RanBy: ranBy(), Records: records, WriteRecords: allowed, DryRun: f.dryRun,
+		// Only a CI run writes the checksums file the workflow attests. A
+		// laptop run stays unattested.
+		Attest: inCI() && allowed,
 	})
 	if err != nil {
 		return 0, err
@@ -129,6 +132,11 @@ func doRun(ctx context.Context, out, errOut io.Writer, f runFlags) (int, error) 
 		return 2, nil
 	}
 	code := run.ExitCode(res.Outcomes, f.failOn)
+	if res.ChecksumsPath != "" {
+		if err := writeGitHubOutput("checksums", res.ChecksumsPath); err != nil {
+			return 0, err
+		}
+	}
 	if f.jsonPath != "" && allowed {
 		j := report.BuildJSON(res, rc.scope.Now, code)
 		j.DefaultOwner = rc.project.Config.DefaultOwner
@@ -298,21 +306,44 @@ func printCounts(out io.Writer, res *run.Result) {
 
 func verifyCmd() *cobra.Command {
 	var f runFlags
+	var online, asJSON bool
 	cmd := &cobra.Command{
-		Use:   "verify <drill>",
-		Short: "Rerun one drill and report whether its safeguard is now closed",
-		Args:  cobra.ExactArgs(1),
+		Use:   "verify [drill]",
+		Short: "Check the records, or rerun one drill and report whether its safeguard is now closed",
+		Long: "With no drill, verify checks the records offline and makes no call: every tag's hash chain,\n" +
+			"the chain of stored diffs and the snapshot files they name, and which tags an attestation\n" +
+			"sidecar covers (attested) or not (unattested). --online prints the gh attestation verify\n" +
+			"commands to check each attestation's signature yourself.\n\n" +
+			"With a drill, it reruns that drill and reports whether its safeguard is closed.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			records := f.records
+			if records == "" {
+				records = defaultRecords()
+			}
+			if len(args) == 0 {
+				rc, err := checkRecords(records, online)
+				if err != nil {
+					return err
+				}
+				if asJSON {
+					if err := printJSON(cmd.OutOrStdout(), rc); err != nil {
+						return err
+					}
+				} else {
+					printRecordsCheck(cmd.OutOrStdout(), rc)
+				}
+				if !rc.OK {
+					return exitError{1}
+				}
+				return nil
+			}
 			f.drill = args[0]
 			var buf strings.Builder
 			if _, err := doRun(cmd.Context(), &buf, cmd.ErrOrStderr(), f); err != nil {
 				return err
 			}
 			fmt.Fprint(cmd.OutOrStdout(), buf.String())
-			records := f.records
-			if records == "" {
-				records = defaultRecords()
-			}
 			store := tag.Store{Root: records}
 			keys, err := store.Keys()
 			if err != nil {
@@ -352,5 +383,7 @@ func verifyCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&f.paths, "path", nil, "local checkouts to read")
 	cmd.Flags().BoolVar(&f.includeHome, "include-home", false, "also read user-level agent files")
 	cmd.Flags().StringVar(&f.records, "records", "", "where records live (default .firedrill/local)")
+	cmd.Flags().BoolVar(&online, "online", false, "with no drill: print the gh attestation verify commands to run yourself")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "with no drill: print the check as JSON")
 	return cmd
 }

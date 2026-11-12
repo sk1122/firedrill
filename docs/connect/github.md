@@ -82,6 +82,12 @@ Without Members: read, `firedrill connect github` prints `Not readable yet:` wit
 
 If `github.org` is a user account rather than an org, there are no members or teams; repo collaborators are still read.
 
+## Who made a change (optional)
+
+After each run's diff, Firedrill asks GitHub's [organization audit log](https://docs.github.com/en/enterprise-cloud@latest/rest/orgs/orgs#get-the-audit-log-for-an-organization) who changed a ruleset, branch protection, repo access or an org role, for the window between the two runs only: `GET /orgs/{org}/audit-log` with a search phrase of one action or category, the repo and `created:<from>..<to>`, one page of 100, at most 50 audit calls a run across every source. The login it returns is hashed at once and never stored; a change shows the person's short ID, or the account's.
+
+The audit log needs GitHub Enterprise Cloud and a token of an organization owner with `read:audit_log` (a classic token or OAuth app; GitHub's reference names no fine-grained permission for it). With any other plan or token the call returns 403 or 404, the diff says `github_audit: not readable`, and each change keeps the window. Nothing else is affected.
+
 ## What your plan allows
 
 GitHub Free has no branch protection on private repos, and only Enterprise has environment reviewers on private repos. Firedrill reads your plan, and drills that ask for something your plan can't offer give N/A with the reason, never a FAIL you can't fix. If the token can't see your plan, GitHub's own "upgrade to enable" reply is used instead.

@@ -43,6 +43,8 @@ type Views struct {
 	Agents      []AgentRow
 	AgentNote   string
 	Graphs      []GraphPage
+	// SecretPagesCut counts secrets left without a page by MaxSecretPages.
+	SecretPagesCut int
 }
 
 // PersonRow is one person's power across systems. It is never a score.
@@ -85,6 +87,8 @@ type AgentRow struct {
 	Egress      string
 	EgressHosts []string
 	Unbounded   bool
+	// Keys are the keys behind the secrets it can read, and what each can do.
+	Keys []KeyRow
 }
 
 // ServerRow is one MCP server in an agent config.
@@ -96,6 +100,7 @@ type ServerRow struct {
 // SecretRow is a secret an agent can read, by fingerprint only.
 type SecretRow struct {
 	Fingerprint, File string
+	Href              string // its "what does this secret open?" page
 }
 
 // GraphPage is one drawn question.
@@ -145,6 +150,7 @@ func AddViews(b *Board, snap *graph.Snapshot, diff *run.DiffRecord, now time.Tim
 	}
 	ctx := &viewCtx{b: b, v: v, g: g, adj: graph.NewAdjacency(g), items: items, now: now, people: map[graph.ID]string{}, agents: map[graph.ID]string{}}
 	ctx.people_()
+	ctx.secretPages()
 	ctx.agents_()
 	ctx.graphs(diff)
 }
@@ -160,6 +166,9 @@ type viewCtx struct {
 	agents map[graph.ID]string // agent config ID to its row anchor
 	cut    map[graph.ID]bool
 	power  map[graph.ID]bool // people who get a graph page
+	// secrets indexes every fingerprint; secretHref links those with a page.
+	secrets    map[string]*secretInfo
+	secretHref map[string]string
 }
 
 func shortOf(id string) string {
@@ -295,7 +304,7 @@ func (c *viewCtx) agents_() {
 			readable[repo] = map[string]SecretRow{}
 		}
 		key := hash + "@" + file
-		readable[repo][key] = SecretRow{Fingerprint: "secret:" + hash[:min(12, len(hash))], File: file}
+		readable[repo][key] = SecretRow{Fingerprint: "secret:" + hash[:min(12, len(hash))], File: file, Href: c.secretHref[hash]}
 	}
 	bypassers := map[string]int{}
 	for _, e := range c.g.Edges(graph.EdgeCanBypass) {
@@ -340,6 +349,7 @@ func (c *viewCtx) agents_() {
 		for _, k := range keys {
 			row.Secrets = append(row.Secrets, readable[repo][k])
 		}
+		row.Keys = c.agentKeys(repo)
 		rule, ok := c.g.Get(graph.ID("github:branch-rule/" + repo + "/default"))
 		switch {
 		case !ok:

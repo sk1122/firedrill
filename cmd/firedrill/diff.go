@@ -151,6 +151,9 @@ func printDiff(out io.Writer, rec *run.DiffRecord) {
 			if g.Person != "" {
 				line = "    " + graph.ChangeLabel(c.Type) + ": " + c.Summary
 			}
+			if c.Actor != "" {
+				line += "  " + styleDim.Render("by "+c.Actors()+" ("+c.ActorSource+")")
+			}
 			if by := caughtBy(c); by != "" {
 				line += "  " + styleDim.Render(by)
 			}
@@ -158,6 +161,21 @@ func printDiff(out io.Writer, rec *run.DiffRecord) {
 		}
 	}
 	printSkipped(out, rec.Skipped)
+	printAudit(out, rec.Audit)
+}
+
+// printAudit says which audit sources could not say who made a change, so
+// their changes name only the window.
+func printAudit(out io.Writer, a *run.AuditNote) {
+	if a == nil {
+		return
+	}
+	for _, s := range a.NotReadable {
+		fmt.Fprintln(out, styleDim.Render("Audit source not readable, so changes name only the window: "+s))
+	}
+	if a.NotAsked > 0 {
+		fmt.Fprintln(out, styleDim.Render(fmt.Sprintf("%d audit questions not asked: the cap of %d calls per run was reached.", a.NotAsked, a.Cap)))
+	}
 }
 
 func printSkipped(out io.Writer, skipped []string) {

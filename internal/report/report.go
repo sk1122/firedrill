@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sk1122/firedrill/internal/attest"
 	"github.com/sk1122/firedrill/internal/drill"
 	"github.com/sk1122/firedrill/internal/graph"
 	"github.com/sk1122/firedrill/internal/run"
@@ -49,8 +50,11 @@ type Safeguard struct {
 	Unverified bool
 	Runs       []Run
 	Chain      string
-	Slug       string
-	Evidence   []EvidenceRow
+	// Attestation is the latest tag's state from the attestation sidecars:
+	// attested, unattested or checksums mismatch. Never from Header.Attested.
+	Attestation string
+	Slug        string
+	Evidence    []EvidenceRow
 	// ShadowUntil is set while the latest run was in shadow.
 	ShadowUntil string
 	// OpenDays counts days of the current unwaived open stretch, -1 when the
@@ -105,6 +109,9 @@ type Item struct {
 	Slug     string
 	Verdicts []ItemVerdict
 	Seen     string
+	// SecretHref links a secret's item page to its "what does this secret
+	// open?" page, relative to the item page.
+	SecretHref string
 }
 
 // ItemVerdict is one verdict that read an item.
@@ -167,6 +174,9 @@ type ChangeRow struct {
 	Weakening             bool
 	ItemHref              string
 	Drills                []DrillLink
+	// Actor names who made the change when an audit source said so, by
+	// short ID or label. Otherwise it happened between the two runs.
+	Actor, ActorSource, ActedAt string
 }
 
 // DrillLink points at a safeguard card on the board.
@@ -204,7 +214,11 @@ func AddChanges(b *Board, rec *run.DiffRecord) {
 		sec := &c.Sections[len(c.Sections)-1]
 		group := ChangeGroup{Title: g.Title, Person: g.Person != ""}
 		for _, ch := range g.Changes {
-			row := ChangeRow{Type: graph.ChangeLabel(ch.Type), Summary: ch.Summary, System: ch.System, Weakening: ch.Weakening, ItemHref: items[string(ch.Subject)]}
+			row := ChangeRow{Type: graph.ChangeLabel(ch.Type), Summary: ch.Summary, System: ch.System, Weakening: ch.Weakening, ItemHref: items[string(ch.Subject)],
+				Actor: ch.Actors(), ActorSource: ch.ActorSource}
+			if ch.ActedAt != nil {
+				row.ActedAt = ch.ActedAt.UTC().Format("2006-01-02 15:04 UTC")
+			}
 			for _, ref := range ch.CaughtBy {
 				href := "index.html"
 				if slug := tag.Slug(ref.Drill + "-" + tag.Slug(ref.Target)); cards[slug] {
@@ -249,6 +263,10 @@ func Build(store tag.Store, est *graph.Estate, drills []*drill.Drill, now time.T
 	if err != nil {
 		return nil, err
 	}
+	attested, err := attest.Check(store.Root)
+	if err != nil {
+		return nil, err
+	}
 	b := &Board{Generated: now.UTC().Format("2006-01-02 15:04 UTC"), failing: map[string]string{}}
 	packs := map[string][]Safeguard{}
 	reads := map[string][]ItemVerdict{}
@@ -278,6 +296,9 @@ func Build(store tag.Store, est *graph.Estate, drills []*drill.Drill, now time.T
 		start := max(len(hist)-LastRuns, 0)
 		for _, t := range hist[start:] {
 			sg.Runs = append(sg.Runs, Run{Verdict: t.Header.Verdict, Class: verdictClass(t.Header.Verdict), Date: t.Header.Time.Format("2006-01-02")})
+		}
+		if rel, err := filepath.Rel(store.Root, store.PathOf(last)); err == nil {
+			sg.Attestation = attested.State(rel)
 		}
 		st := tag.VerifyChain(hist)
 		switch {
@@ -666,6 +687,9 @@ type JSONResult struct {
 	Retired          []Finding `json:"retired"`
 	Skips            []string  `json:"waiting"`
 	ExitCode         int       `json:"exit_code"`
+	// Diff is what changed since the previous run of the same stream, nil on
+	// the first run.
+	Diff *DiffSummary `json:"diff,omitempty"`
 }
 
 func findingOf(o *run.Outcome, withFacts bool) Finding {
@@ -720,6 +744,7 @@ func BuildJSON(res *run.Result, now time.Time, exit int) JSONResult {
 	for _, s := range res.Skips {
 		j.Skips = append(j.Skips, s.DrillID+": "+s.Needs)
 	}
+	j.Diff = DiffSummaryOf(res.Diff)
 	return j
 }
 

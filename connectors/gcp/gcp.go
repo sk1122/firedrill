@@ -2,8 +2,8 @@
 // keys, and Cloud SQL backup settings and restore operations in every listed
 // Google Cloud project.
 // Every call is a GET, except
-// the token exchange and getIamPolicy on each listed project, each allowed by
-// exact URL.
+// the token exchange, getIamPolicy on each listed project and Cloud Logging's
+// entries.list, each a read allowed by exact URL.
 package gcp
 
 import (
@@ -71,8 +71,9 @@ func New() *Connector {
 func init() { connector.Register(New()) }
 
 // Policy allows GET on the four API hosts, the token exchange, getIamPolicy on
-// each listed project, and, when impersonating, the one generateAccessToken URL
-// in the credentials file, each by exact URL.
+// each listed project, Cloud Logging's entries.list (a read), and, when
+// impersonating, the one generateAccessToken URL in the credentials file, each
+// by exact URL.
 func Policy(projects []string, impersonationURL string) connector.Policy {
 	post := map[string]bool{tokenURL: true}
 	if impersonationURL != "" {
@@ -81,6 +82,9 @@ func Policy(projects []string, impersonationURL string) connector.Policy {
 	for _, p := range projects {
 		post[getIamPolicyURL(p)] = true
 	}
+	// Cloud Audit Logs entries.list: a POST that only reads, for who changed
+	// a project's IAM policy. See audit.go.
+	post[entriesListURL] = true
 	return connector.Policy{
 		Hosts:    map[string]bool{crmHost: true, iamHost: true, storageHost: true, analyzerHost: true, sqlHost: true},
 		PostURLs: post,
@@ -114,6 +118,7 @@ func (c *Connector) Collections() []connector.Collection {
 			"GET https://" + storageHost + "/storage/v1/b?project={project}",
 			"GET https://" + storageHost + "/storage/v1/b/{bucket}/iam",
 			"GET https://" + iamHost + "/v1/{projects/{project} or organizations/{org}}/roles/{role}, once per custom role a binding names",
+			"POST " + entriesListURL + ", only after a diff: who changed a project's IAM policy between the two runs (Admin Activity log; " + AuditPermission + ")",
 		},
 	}, {
 		Name:       CollectionBackups,

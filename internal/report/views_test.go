@@ -370,8 +370,11 @@ func TestViewsEmptyStates(t *testing.T) {
 		t.Fatalf("%s", p)
 	}
 	checkLinks(t, dir)
-	if len(b.Views.Graphs) != 2 {
-		t.Fatalf("production and changes only: %d", len(b.Views.Graphs))
+	if len(b.Views.Graphs) != 3 {
+		t.Fatalf("production, outside and changes only: %d", len(b.Views.Graphs))
+	}
+	if p := read(t, filepath.Join(dir, "graph/outside.html")); !strings.Contains(p, "Nothing outside reaches production within 3 hops") {
+		t.Fatalf("%s", p)
 	}
 }
 
@@ -425,8 +428,8 @@ func TestViewsScaleToHundredsOfPeople(t *testing.T) {
 		return err
 	})
 	t.Logf("300 people: %d pages drawn, %d KB of People, Agents and graph pages (item pages %d KB) in %s", len(b.Views.Graphs), size/1024, items/1024, took)
-	if len(b.Views.People) != 300 || len(b.Views.Graphs) != 102 {
-		t.Fatalf("100 people with power get a page, plus production and changes: %d people, %d pages", len(b.Views.People), len(b.Views.Graphs))
+	if len(b.Views.People) != 300 || len(b.Views.Graphs) != 103 {
+		t.Fatalf("100 people with power get a page, plus production, outside and changes: %d people, %d pages", len(b.Views.People), len(b.Views.Graphs))
 	}
 	if took > 20*time.Second || size > 8<<20 {
 		t.Fatalf("took %s and %d bytes", took, size)

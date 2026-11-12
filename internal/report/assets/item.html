@@ -26,6 +26,7 @@ a{color:var(--stock)}
 <a href="../index.html">Back to the board</a>
 <h1>{{.Item.Name}}</h1>
 <p class="meta">{{.Item.Kind}} · {{.Item.ID}} · last seen {{.Item.Seen}}{{if not .Item.Live}} · gone{{end}}</p>
+{{if .Item.SecretHref}}<p><a href="{{.Item.SecretHref}}">What does this secret open?</a></p>{{end}}
 {{if .Item.Verdicts}}
 <table><thead><tr><th>Date</th><th>Drill</th><th>Target</th><th>Verdict</th></tr></thead><tbody>
 {{range .Item.Verdicts}}<tr><td>{{.Date}}</td><td>{{.DrillID}}</td><td>{{.Target}}</td><td class="{{.Class}}">{{.Verdict}}</td></tr>{{end}}

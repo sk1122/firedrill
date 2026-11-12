@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sk1122/firedrill/connector"
+	"github.com/sk1122/firedrill/internal/attest"
 	"github.com/sk1122/firedrill/internal/config"
 	"github.com/sk1122/firedrill/internal/drill"
 	"github.com/sk1122/firedrill/internal/facts"
@@ -34,6 +35,14 @@ type Config struct {
 	WriteRecords bool
 	DryRun       bool
 	PhaseTwo     map[string]bool // connectors that read what others wrote
+	// Attest writes a checksums file of the tags and diff this run wrote, for
+	// the CI workflow to attest. Set only in GitHub Actions.
+	Attest bool
+	// Auditors answer who made a change, for the audit step. Nil means every
+	// connector that implements connector.Auditor.
+	Auditors []connector.Auditor
+	// AuditCap bounds audit calls per run; 0 means DefaultAuditCap.
+	AuditCap int
 }
 
 // Result is one run's outputs.
@@ -51,6 +60,12 @@ type Result struct {
 	// there is none. DiffPath is where it was stored, empty when not written.
 	Diff     *DiffRecord
 	DiffPath string
+	// TagPaths are the tag files this run wrote. ChecksumsPath is the
+	// checksums file listing them for attestation, empty when none was written.
+	TagPaths      []string
+	ChecksumsPath string
+	// ran lists the connectors this run collected from, for the audit step.
+	ran []string
 }
 
 // Skip is one drill waiting for a system.
@@ -107,6 +122,7 @@ func Run(ctx context.Context, c Config) (*Result, error) {
 	for _, conn := range append(append([]connector.Connector{}, phase1...), phase2...) {
 		ran = append(ran, conn.Name())
 	}
+	res.ran = ran
 
 	// Config goes first, since it names targets every other connector reads.
 	rest := phase1[:0:0]
@@ -176,7 +192,7 @@ func Run(ctx context.Context, c Config) (*Result, error) {
 	if !c.WriteRecords {
 		// Nothing is written, but the counts of what changed may still be printed.
 		if prev != nil {
-			if err := diffAgainst(prevPath, prev, snap, "", c, res, scope.Hasher); err != nil {
+			if err := diffAgainst(ctx, prevPath, prev, snap, "", c, res, scope.Hasher); err != nil {
 				return nil, fmt.Errorf("diff: %w", err)
 			}
 		}
@@ -185,9 +201,11 @@ func Run(ctx context.Context, c Config) (*Result, error) {
 	for _, o := range res.Outcomes {
 		t := toTag(o, c, scope)
 		tag.ScanTag(t, scope.Hasher)
-		if _, err := store.Write(t); err != nil {
+		path, err := store.Write(t)
+		if err != nil {
 			return nil, fmt.Errorf("write tag: %w", err)
 		}
+		res.TagPaths = append(res.TagPaths, path)
 	}
 	snap.Time = graph.FreeSnapshotTime(dir, snap.Time)
 	snapPath, err := graph.WriteSnapshot(dir, snap)
@@ -195,12 +213,21 @@ func Run(ctx context.Context, c Config) (*Result, error) {
 		return nil, fmt.Errorf("write snapshot: %w", err)
 	}
 	if prev != nil {
-		if err := diffAgainst(prevPath, prev, snap, snapPath, c, res, scope.Hasher); err != nil {
+		if err := diffAgainst(ctx, prevPath, prev, snap, snapPath, c, res, scope.Hasher); err != nil {
 			return nil, fmt.Errorf("diff: %w", err)
 		}
 	}
 	if _, err := graph.Compact(dir, scope.Now); err != nil {
 		return nil, fmt.Errorf("compact snapshots: %w", err)
+	}
+	if c.Attest {
+		files := append([]string{}, res.TagPaths...)
+		if res.DiffPath != "" {
+			files = append(files, res.DiffPath)
+		}
+		if res.ChecksumsPath, err = attest.WriteChecksums(c.Records, snap.Time, files); err != nil {
+			return nil, fmt.Errorf("write checksums for attestation: %w", err)
+		}
 	}
 	return res, nil
 }

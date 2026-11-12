@@ -68,7 +68,7 @@ ul.notes{margin:0;padding-left:18px;font:400 13px/1.6 "IBM Plex Mono",monospace;
 {{if $.All}}
 <h2>Cut points ({{len .Cuts}})</h2>
 {{if .Cuts}}<ul class="notes">{{range .Cuts}}<li><a href="{{.Href}}">person {{.Short}}</a>: {{.Why}}</li>{{end}}</ul>
-<p class="meta"><a href="graph/production.html">Who can reach production data alone?</a></p>
+<p class="meta"><a href="graph/production.html">Who can reach production data alone?</a> · <a href="graph/outside.html">What's reachable from outside?</a></p>
 {{else}}<p class="empty">No one person alone can get code to production, or is the only admin of a project, the org or Workspace.</p>{{end}}
 <h2>Admin or delete power nobody owns ({{len .Orphans}})</h2>
 {{if .Orphans}}<div class="box"><table><thead><tr><th>Principal</th><th>System</th><th>Kind</th><th>Power</th><th>Why</th></tr></thead><tbody>

@@ -50,6 +50,8 @@ done
 
 Activity Analysis Viewer is only for the last time each key was used. Without it, keys are still judged by age.
 
+Optional, to name who changed a project's IAM policy: Logs Viewer (`roles/logging.viewer`), which grants `logging.logEntries.list`. After each run's diff, Firedrill asks [Cloud Logging](https://docs.cloud.google.com/logging/docs/reference/v2/rest/v2/entries/list) for the project's Admin Activity entries with method `SetIamPolicy` in the window between the two runs only. The caller's address is hashed at once and never stored. Without the role, the diff says `gcp_audit: not readable` and each change keeps the window. Viewer may already include it; the call simply fails softly if not.
+
 Role Viewer lets Firedrill read the permissions of a custom role a binding names, with [roles.get](https://cloud.google.com/iam/docs/reference/rest/v1/projects.roles/get) (`iam.roles.get`). Without it, those bindings read as `power_known: false`, never as harmless, and the people facts give WARN. A custom role defined on the organization (`organizations/{org}/roles/...`) needs Role Viewer on the organization too; without it, the same applies.
 
 ## 5. Let yourself act as the reader
@@ -151,7 +153,7 @@ firedrill run
 
 ## What Firedrill calls
 
-Every call is a GET, including `GET https://sqladmin.googleapis.com/v1/projects/{project}/instances` and `GET https://sqladmin.googleapis.com/v1/projects/{project}/operations?instance={instance}` for Cloud SQL and `GET https://iam.googleapis.com/v1/{projects/{project} or organizations/{org}}/roles/{role}` once per custom role a binding names, plus three exact POSTs the guard allows: the token exchange, minting the reader's token, and `getIamPolicy` on each listed project, which only reads. `firedrill run --dry-run` lists them all.
+Every call is a GET, including `GET https://sqladmin.googleapis.com/v1/projects/{project}/instances` and `GET https://sqladmin.googleapis.com/v1/projects/{project}/operations?instance={instance}` for Cloud SQL and `GET https://iam.googleapis.com/v1/{projects/{project} or organizations/{org}}/roles/{role}` once per custom role a binding names, plus four exact POSTs the guard allows: the token exchange, minting the reader's token, `getIamPolicy` on each listed project, which only reads, and, only after a diff, `https://logging.googleapis.com/v2/entries:list`, which also only reads (filtered to one listed project's Admin Activity log, `SetIamPolicy` and the window between the two runs; at most 50 audit calls a run across every source). `firedrill run --dry-run` lists them all.
 
 ## In CI
 

@@ -33,6 +33,10 @@ firedrill run --dry-run
 
 It lists every call a run would make, without making any.
 
+## Who made a change (optional)
+
+After each run, Firedrill compares it with the last one. For GitHub, Google Workspace and Google Cloud it can also ask the system's own audit log who made each change, in the window between the two runs only: the organization audit log ([github.md](github.md#who-made-a-change-optional)), the Reports API ([google-workspace.md](google-workspace.md)) and Cloud Audit Logs ([gcp.md](gcp.md)). Each is optional and only adds a name, as a hashed ID: without its access, a change shows the window instead and the diff says which source was not readable. At most 50 audit calls a run. AWS CloudTrail is not built (out of scope for now).
+
 ## Where credentials live
 
 Never in `config.yaml`, and never in the repo. Firedrill reads them from your environment, your `gh` and `gcloud` logins, or your AWS profiles, and keeps them in memory only. Anthropic and OpenAI admin keys come from `FIREDRILL_ANTHROPIC_ADMIN_KEY` and `FIREDRILL_OPENAI_ADMIN_KEY` and are only ever sent with GET.

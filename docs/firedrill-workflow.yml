@@ -1,6 +1,10 @@
 # Copy to .github/workflows/firedrill.yml in your private Firedrill repo.
 # Secrets: FIREDRILL_GITHUB_TOKEN, a fine-grained read token for the listed repos,
 # and FIREDRILL_SALT. The built-in GITHUB_TOKEN writes only to this repo.
+# The attestation steps follow GitHub's documentation for artifact attestations;
+# they have not yet been exercised in a real Actions run. A private repo needs
+# GitHub Enterprise Cloud for attestations: elsewhere the attest step fails
+# softly and the tags stay unattested.
 name: firedrill
 on:
   schedule:
@@ -14,6 +18,10 @@ jobs:
     permissions:
       contents: write
       issues: write
+      # Artifact attestation of the run's tags: sign with the run's OIDC
+      # identity, and store the attestation.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -36,8 +44,27 @@ jobs:
           FIREDRILL_SALT: ${{ secrets.FIREDRILL_SALT }}
         run: |
           set +e
+          # In Actions, firedrill run also writes records/attest/<time>.sha256,
+          # one line per tag and diff it wrote, and sets the checksums output.
           firedrill run --records records --json result.json
           echo "code=$?" >> "$GITHUB_OUTPUT"
+      - name: Attest this run's tags
+        id: attest
+        if: steps.drills.outputs.checksums != ''
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: ${{ steps.drills.outputs.checksums }}
+      - name: Record the attestation
+        if: steps.attest.outcome == 'success'
+        env:
+          CHECKSUMS: ${{ steps.drills.outputs.checksums }}
+          ATTESTATION_ID: ${{ steps.attest.outputs.attestation-id }}
+          ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          firedrill attest record --records records --checksums "$CHECKSUMS" \
+            --attestation-id "$ATTESTATION_ID" --attestation-url "$ATTESTATION_URL" --bundle "$BUNDLE"
       - name: Push the records
         run: |
           cd records
@@ -51,9 +78,11 @@ jobs:
             git push origin HEAD:firedrill-tags
           fi
       - name: Write the step summary
+        env:
+          ISSUES_URL: ${{ github.server_url }}/${{ github.repository }}/issues
         run: |
           if [ -f result.json ]; then
-            firedrill report --summary result.json >> "$GITHUB_STEP_SUMMARY"
+            firedrill report --summary result.json --issues-url "$ISSUES_URL" >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Open and close issues
         env:
@@ -106,6 +135,22 @@ jobs:
               gh issue close "$existing" --comment "Closed by a passing run. [CI run]($RUN_URL)"
             fi
           done
+      - name: Open or update the weekly issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUES_URL: ${{ github.server_url }}/${{ github.repository }}/issues
+        run: |
+          [ -f result.json ] || exit 0
+          # The body is the step summary: the diff, weakenings first, and the
+          # open safeguards. It goes through a file, never through the shell.
+          firedrill report --summary result.json --issues-url "$ISSUES_URL" > weekly.md
+          gh label create firedrill-weekly --color D3261A --description "Firedrill weekly: what changed" --force
+          existing=$(gh issue list --state open --label firedrill-weekly --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file weekly.md
+          else
+            gh issue create --title "Firedrill weekly: what changed" --label firedrill-weekly --body-file weekly.md
+          fi
       - name: Write the board
         if: always()
         run: firedrill report --records records --out report

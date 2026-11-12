@@ -44,7 +44,7 @@ ul.skipped{margin:0;padding-left:18px;color:var(--muted);font:400 13px/1.5 "IBM 
 <ul class="changes">
 {{range .Rows}}<li{{if .Weakening}} class="weak"{{end}}>
 <p class="what">{{if .ItemHref}}<a href="{{.ItemHref}}">{{.Summary}}</a>{{else}}{{.Summary}}{{end}}</p>
-<p class="why"><span class="kind">{{.Type}}</span> · {{.System}}{{if .Drills}} · also caught by {{range $i, $d := .Drills}}{{if $i}}, {{end}}<a href="{{$d.Href}}">{{$d.Drill}}</a>{{end}}{{end}}</p>
+<p class="why"><span class="kind">{{.Type}}</span> · {{.System}}{{if .Actor}} · by {{.Actor}} ({{.ActorSource}}{{if .ActedAt}}, {{.ActedAt}}{{end}}){{else}} · between the two runs{{end}}{{if .Drills}} · also caught by {{range $i, $d := .Drills}}{{if $i}}, {{end}}<a href="{{$d.Href}}">{{$d.Drill}}</a>{{end}}{{end}}</p>
 </li>{{end}}
 </ul>
 {{end}}

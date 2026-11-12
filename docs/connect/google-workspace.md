@@ -66,6 +66,8 @@ Approval can take a few minutes to apply.
 
 Already connected with fewer scopes? Edit the same client ID's entry, add the missing ones, and run `firedrill connect google` again.
 
+Optional: add `https://www.googleapis.com/auth/admin.reports.audit.readonly` to name who made a change. After each run's diff, Firedrill asks the [Reports API](https://developers.google.com/workspace/admin/reports/reference/rest/v1/activities/list) (`GET https://admin.googleapis.com/admin/reports/v1/activity/users/all/applications/{admin, token or groups}`) for events in the window between the two runs only: `GRANT_ADMIN_PRIVILEGE` and `ASSIGN_ROLE` for a new admin, `SUSPEND_USER` and `UNSUSPEND_USER`, `authorize` for an OAuth grant, `add_user` for a group member. No address goes in the URL; the addresses in the answer are hashed at once and never stored. Without the scope, the diff says `google_reports: not readable` and each change keeps the window.
+
 `admin_email` must be an admin whose role can read groups, such as a super admin or a Groups Admin, for the third scope to work.
 
 ## 4. Point Firedrill at it

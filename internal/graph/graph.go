@@ -175,12 +175,15 @@ const (
 	// another host.
 	KindPublicSecret = "public_secret"
 	KindPageScript   = "page_script"
-	KindLeaver       = "hr_leaver"
-	KindConfigHost   = "config_host"
-	KindConfigDomain = "config_domain"
-	KindOAuthApp     = "oauth_app"
-	KindDatabase     = "database"
-	KindAIKey        = "ai_key"
+	// Whether the places a repo's agents run have an egress boundary the agent
+	// cannot change: CI jobs, dev containers and managed settings.
+	KindEgressBoundary = "egress_boundary"
+	KindLeaver         = "hr_leaver"
+	KindConfigHost     = "config_host"
+	KindConfigDomain   = "config_domain"
+	KindOAuthApp       = "oauth_app"
+	KindDatabase       = "database"
+	KindAIKey          = "ai_key"
 	// GitHub people. A user's login lives only in Private, like an email.
 	KindGitHubUser = "github_user"
 	KindGitHubTeam = "github_team"

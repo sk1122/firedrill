@@ -57,6 +57,7 @@ func (c *Connector) Collections() []connector.Collection {
 			"GET https://api.github.com/repos/{repo}/rulesets/{id}",
 			"GET https://api.github.com/repos/{repo}/environments",
 			"GET https://api.github.com/repos/{repo}/actions/permissions/workflow",
+			"GET https://api.github.com/orgs/{org}/audit-log?phrase=..., only after a diff: who changed a ruleset, branch protection, repo access or org role between the two runs (" + AuditPermission + ")",
 		},
 	}, {
 		Name:       CollectionPeople,

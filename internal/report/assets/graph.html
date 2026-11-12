@@ -35,7 +35,7 @@ ul.notes{margin:0;padding-left:18px;font:400 13px/1.6 "IBM Plex Mono",monospace;
 {{if .Hidden}}<p class="meta">{{.Hidden}} more not drawn: the drawing stops at the nearest 60. <a href="{{.RowsHref}}">See every row</a>.</p>{{end}}
 {{if .Nodes}}<div class="box">{{.SVG}}</div>{{else}}<p class="meta">Nothing to draw.</p>{{end}}
 <p class="legend"><span><span class="sw" style="background:#F4F2EA"></span>GitHub</span><span><span class="sw" style="background:#3cc986"></span>GCP</span><span><span class="sw" style="background:#E8A317"></span>Google</span><span><span class="sw" style="background:#d9d6cb"></span>person</span><span><span class="sw" style="background:#B9B6AB"></span>files and agents</span><span><span class="sw" style="background:#8A877C"></span>web</span><span>thick red or amber border: read by a failing drill</span><span>dashed red border: cut point</span><span>hover an edge for its kind</span></p>
-{{if .Notes}}<ul class="notes">{{range .Notes}}<li><a href="{{.Href}}">{{.Text}}</a></li>{{end}}</ul>{{end}}
+{{if .Notes}}<ul class="notes">{{range .Notes}}<li>{{if .Href}}<a href="{{.Href}}">{{.Text}}</a>{{else}}{{.Text}}{{end}}</li>{{end}}</ul>{{end}}
 </main>
 </body>
 </html>

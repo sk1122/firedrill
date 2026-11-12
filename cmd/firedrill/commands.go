@@ -547,7 +547,7 @@ func sourceLines(h tag.Header) []string {
 }
 
 func reportCmd() *cobra.Command {
-	var records, outDir, summary string
+	var records, outDir, summary, issuesURL string
 	cmd := &cobra.Command{
 		Use:   "report",
 		Short: "Write the HTML board",
@@ -562,7 +562,7 @@ func reportCmd() *cobra.Command {
 				if err := json.Unmarshal(b, &j); err != nil {
 					return err
 				}
-				fmt.Fprint(cmd.OutOrStdout(), report.Summary(j))
+				fmt.Fprint(cmd.OutOrStdout(), report.SummaryWith(j, issuesURL))
 				return nil
 			}
 			drills, _, err := drill.LoadDir(filepath.Join(projectDir, "drills"))
@@ -617,6 +617,7 @@ func reportCmd() *cobra.Command {
 	cmd.Flags().StringVar(&records, "records", "", "where records live")
 	cmd.Flags().StringVar(&outDir, "out", "", "where to write the board")
 	cmd.Flags().StringVar(&summary, "summary", "", "print the step summary from a --json result file")
+	cmd.Flags().StringVar(&issuesURL, "issues-url", "", "with --summary: the repo's issues page, to link each caught change to its drill's issue")
 	return cmd
 }
 

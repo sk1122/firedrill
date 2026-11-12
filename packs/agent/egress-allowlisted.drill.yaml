@@ -5,11 +5,14 @@ severity: high
 for_each: repos
 fetch:
   agents: { fact: files.agent_configs }
+  boundary: { fact: files.egress_boundary }
 na_reason: "agents run with their defaults; check laptops with --include-home"
 pass_when:
   - agents.found.filter(a, a.egress == "open").size() == 0
   - agents.found.filter(a, a.egress_unbounded).size() == 0
+  - boundary.ci_agent_jobs_exposed.size() == 0
 warn_when:
   - agents.found.exists(a, a.egress == "partial" || a.egress == "unsupported")
-fix: "Limit what agents can reach to the hosts they need. Claude Code: set sandbox.enabled to true, sandbox.allowUnsandboxedCommands to false, list hosts in sandbox.network.allowedDomains, and add no bare WebFetch allow rule; a deny rule on WebFetch or curl alone does not stop other programs. Cursor: commit .cursor/sandbox.json with networkPolicy.default deny and an allow list. VS Code: run local MCP servers with sandboxEnabled and sandbox.network.allowedDomains. Never allow * or 0.0.0.0/0. Gemini CLI and local MCP servers under Claude Code and Cursor have no host allowlist, so they warn. This reads committed settings only: whether a sandbox actually enforces them on each machine is not checked."
+  - boundary.agents_configured && boundary.boundary in ["none", "partial"]
+fix: "Limit what agents can reach to the hosts they need. Claude Code: set sandbox.enabled to true, sandbox.allowUnsandboxedCommands to false, list hosts in sandbox.network.allowedDomains, and add no bare WebFetch allow rule; a deny rule on WebFetch or curl alone does not stop other programs. Cursor: commit .cursor/sandbox.json with networkPolicy.default deny and an allow list. VS Code: run local MCP servers with sandboxEnabled and sandbox.network.allowedDomains. Never allow * or 0.0.0.0/0. Gemini CLI and local MCP servers under Claude Code and Cursor have no host allowlist, so they warn. Outside the agent: give each CI job that runs a coding agent step-security/harden-runner as its first step with egress-policy block and an allowed-endpoints list, or no network; and give developers a dev container whose firewall is set up outside the agent (an init-firewall script with NET_ADMIN, as in Claude Code's reference container) or managed settings with sandbox.network.allowManagedDomainsOnly. A CI job that runs an agent with no egress control and with secrets or a write token fails. This reads what is configured in files: whether a sandbox or firewall actually enforces it on each machine or run is not checked."
 maps_to: [SOC2:CC6.6]

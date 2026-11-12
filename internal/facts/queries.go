@@ -464,6 +464,36 @@ func registerFiles() {
 		},
 	})
 	Register(Def{
+		// Whether the places a repo's agents run have an egress boundary the
+		// agent cannot change: CI jobs running a coding agent, dev containers,
+		// and with --include-home Claude Code's managed settings. It shows a
+		// boundary is configured, not that it works on a given machine.
+		Name: "files.egress_boundary", Scanning: true,
+		Shape: Obj(map[string]*Shape{
+			"ci_agent_jobs": List(Str), "ci_agent_jobs_bounded": List(Str), "ci_agent_jobs_exposed": List(Str),
+			"devcontainer": Str, "managed": Str, "agents_configured": Bool, "boundary": Str, "inspected": Int,
+		}),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			repo := a.TargetName()
+			r := Result{Source: "file"}
+			data := map[string]any{"ci_agent_jobs": []any{}, "ci_agent_jobs_bounded": []any{}, "ci_agent_jobs_exposed": []any{},
+				"devcontainer": "none", "managed": "not_read", "agents_configured": false, "boundary": "unknown"}
+			if n, ok := g.Get(graph.ID("egress-boundary:" + repo)); ok {
+				maps.Copy(data, attrsOf(n, "ci_agent_jobs", "ci_agent_jobs_bounded", "ci_agent_jobs_exposed",
+					"devcontainer", "managed", "agents_configured", "boundary"))
+				r.Read = append(r.Read, n.ID)
+			}
+			inspected, partial, scanID, ok := scanOf(g, "egress_boundary", repo)
+			if ok {
+				r.Read = append(r.Read, scanID)
+			}
+			r.Inspected, r.Partial = inspected, partial
+			data["inspected"] = int64(inspected)
+			r.Data = data
+			return r, nil
+		},
+	})
+	Register(Def{
 		Name: "files.workflows", Scanning: true,
 		Shape: foundShape(map[string]*Shape{
 			"file": Str, "permissions": Str, "unpinned_actions": List(Str), "pull_request_target_checkout": Bool,

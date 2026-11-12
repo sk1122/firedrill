@@ -3,6 +3,7 @@ package connectors_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -215,6 +216,11 @@ func TestAmbientCredentialsAreNotConsent(t *testing.T) {
 		if strings.Contains(p, "/operations") {
 			t.Errorf("a restore read left before connect: %s", p)
 		}
+		// Nor any audit read: GitHub's audit log, Google's Reports API or
+		// Cloud Logging's entries.list.
+		if strings.Contains(p, "/audit-log") || strings.Contains(p, "/admin/reports/") || strings.Contains(p, "entries:list") {
+			t.Errorf("an audit read left before connect: %s", p)
+		}
 	}
 
 	// What connect records after a successful access check.
@@ -237,5 +243,59 @@ func TestAmbientCredentialsAreNotConsent(t *testing.T) {
 		if net.get(s) == 0 || logged[s] == 0 {
 			t.Errorf("%s: no calls after connect (sent %d, logged %d)", s, net.get(s), logged[s])
 		}
+	}
+}
+
+// No audit source answers before its system is connected on purpose, with
+// ambient credentials present: each refuses without a request.
+func TestAuditSourcesNeedConsent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(consentConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := config.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	net := &counter{n: map[string]int{}}
+	gh := github.New()
+	gh.Next = net.for_("github")
+	gc := gcp.New()
+	gc.Next = net.for_("gcp")
+	gc.ReadFile = func(string) ([]byte, error) {
+		return []byte(`{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":"r"}`), nil
+	}
+	gw := google.New()
+	gw.Next = net.for_("google")
+	key := filepath.Join(t.TempDir(), "key.json")
+	_ = os.WriteFile(key, []byte(`{}`), 0o600)
+	log := &connector.CallLog{}
+	s := connector.Scope{Project: p, Now: now, Log: log, Hasher: graph.NewHasher("s"), Token: "ambient-gh-token",
+		Getenv: func(k string) string {
+			switch k {
+			case gcp.CredentialsEnv:
+				return "/acme/gcp.json"
+			case google.CredentialsEnv:
+				return key
+			}
+			return ""
+		}}
+	q := connector.AuditQuery{Org: "acme", Repo: "acme/api", Action: "repository_ruleset", Application: "admin", Event: "GRANT_ADMIN_PRIVILEGE",
+		Project: "acme-prod", Method: "SetIamPolicy", From: now.AddDate(0, 0, -7), To: now}
+	for _, a := range []connector.Auditor{gh, gc, gw} {
+		if a.AuditReady(s) {
+			t.Errorf("%s is ready before connect", a.Name())
+		}
+		if _, err := a.Audit(context.Background(), s, q); !errors.Is(err, connector.ErrAuditUnreadable) {
+			t.Errorf("%s: %v", a.Name(), err)
+		}
+	}
+	for _, name := range []string{"github", "gcp", "google"} {
+		if net.get(name) != 0 {
+			t.Errorf("%s: a request left before connect", name)
+		}
+	}
+	if len(log.Calls()) != 0 {
+		t.Fatalf("%+v", log.Calls())
 	}
 }
