@@ -39,12 +39,14 @@ Never in `config.yaml`, and never in the repo. Firedrill reads them from your en
 
 ## Registers you keep
 
-Some evidence no API shows. Three files under `.firedrill/` hold it, each entry naming an owner (a handle or team, never an email) and a date someone checked it:
+Some evidence no API shows. Files under `.firedrill/` hold it. The first four name an owner in each entry (a handle or team, never an email); the first three also a date someone checked it:
 
 | File | What it declares | Read by |
 | --- | --- | --- |
 | `apps.yaml` | Owner and last review of each third-party OAuth app | `access/third-party-apps-reviewed` |
 | `backups.yaml` | A copy of a database in another account or project | `recovery/backups-separate-and-retained` |
 | `ai-keys.yaml` | Owner and monthly spend limit of an AI key, workspace or project | `keys/ai-keys-capped` |
+| `owners.yaml` | The team that owns a principal no person holds: a GCP service account's address, or a graph ID such as `github:app/123456` or `github:deploy-key/acme/api`, with `principal`, `owner` and an optional `note` | `people.admins`, `people.unlinked` |
+| `people.yaml` | A flat map of GitHub login to the email of the person who holds it, such as `ana-acme: ana@acme.example`. Logins match case-insensitively, and several may name one person. A login with no entry stays unlinked; it is never guessed. This file holds emails and never reaches a record | `people.accounts`, `people.admins`, `people.unlinked` |
 
 Declared evidence is shown as declared in each result.

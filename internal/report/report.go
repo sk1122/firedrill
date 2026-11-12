@@ -227,6 +227,7 @@ var coverageKinds = map[string]bool{
 	graph.KindIdentityUser: true, graph.KindAWSPrincipal: true, graph.KindAgentConfig: true, graph.KindWorkflow: true,
 	graph.KindTFBucket: true, graph.KindManifest: true, graph.KindOAuthApp: true, graph.KindDatabase: true, graph.KindAIKey: true,
 	graph.KindGitHubUser: true, graph.KindGitHubTeam: true, graph.KindGitHubApp: true, graph.KindDeployKey: true,
+	graph.KindGCPBinding: true, graph.KindGoogleGroup: true,
 }
 
 // Build assembles the board from tags and the estate. Shadow is judged at each
@@ -447,22 +448,36 @@ func verdictClass(v string) string {
 	return "err"
 }
 
+// needsOwner says whether an item has power someone must answer for: a repo,
+// a host, an admin account, an org owner, and a GCP binding that is admin or
+// whose power is unknown. A Google-managed service agent answers to Google.
 func needsOwner(it *graph.EstateItem) bool {
+	admin, _ := it.Attrs["is_admin"].(bool)
 	switch it.Kind {
 	case graph.KindGitHubRepo, graph.KindHost:
 		return true
 	case graph.KindIdentityUser, graph.KindAWSPrincipal:
-		admin, _ := it.Attrs["is_admin"].(bool)
 		excluded, _ := it.Attrs["excluded"].(bool)
 		return admin && !excluded
+	case graph.KindGitHubUser:
+		return it.Attrs["org_role"] == "admin"
+	case graph.KindGCPBinding:
+		known, _ := it.Attrs["power_known"].(bool)
+		managed, _ := it.Attrs["google_managed"].(bool)
+		return (admin || !known) && !managed
 	}
 	return false
 }
 
+// ownersOf lists what someone answers for: an owns edge from a register or
+// config, a person who holds it, or a person who holds it through a group. A
+// GCP project's owns edges only say what is in it.
 func ownersOf(est *graph.Estate) map[graph.ID]bool {
 	out := map[graph.ID]bool{}
 	for e := range est.Edges {
-		if e.Kind == graph.EdgeOwns || e.Kind == graph.EdgeSamePerson {
+		switch {
+		case e.Kind == graph.EdgeOwns && strings.HasPrefix(string(e.From), "gcp:project/"):
+		case e.Kind == graph.EdgeOwns, e.Kind == graph.EdgeSamePerson, e.Kind == graph.EdgeViaGroup:
 			out[e.To] = true
 		}
 	}
@@ -483,6 +498,20 @@ func displayName(it *graph.EstateItem) string {
 	// estate.
 	if h, ok := strings.CutPrefix(id, "github:user/"); ok {
 		return "GitHub user " + h[:min(8, len(h))]
+	}
+	// People and groups show by a short hashed ID too: their addresses never
+	// reach the estate.
+	for prefix, words := range map[string]string{"person:": "person ", "google:group/": "Google group ", "google:user/": "Google user "} {
+		if h, ok := strings.CutPrefix(id, prefix); ok {
+			return words + h[:min(8, len(h))]
+		}
+	}
+	if it.Kind == graph.KindGCPBinding {
+		role, _ := it.Attrs["role"].(string)
+		project, _ := it.Attrs["project"].(string)
+		who, _ := it.Attrs["member_type"].(string)
+		h := id[strings.LastIndex(id, "/")+1:]
+		return fmt.Sprintf("%s for a %s (%s) in %s", role, strings.ReplaceAll(who, "_", " "), h[:min(8, len(h))], project)
 	}
 	if it.Kind == graph.KindGitHubTeam {
 		if s, ok := it.Attrs["slug"].(string); ok && s != "" {

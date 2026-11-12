@@ -59,8 +59,12 @@ type Skip struct {
 	Needs   string
 }
 
-// DefaultPhaseTwo names the connectors that depend on hosts from others.
-func DefaultPhaseTwo() map[string]bool { return map[string]bool{"dns": true, "web": true} }
+// DefaultPhaseTwo names the connectors that depend on what others wrote: DNS
+// and web on hosts from certificate logs and config, and Google on the GCP
+// bindings that name a group, since only those groups' members are read.
+func DefaultPhaseTwo() map[string]bool {
+	return map[string]bool{"dns": true, "web": true, "google": true}
+}
 
 // Run executes the steps: plan, collect, link, decide, record.
 func Run(ctx context.Context, c Config) (*Result, error) {
@@ -121,7 +125,7 @@ func Run(ctx context.Context, c Config) (*Result, error) {
 		return res, nil
 	}
 
-	link(res.Graph, scope.Hasher)
+	link(res.Graph, scope.Hasher, c.Project)
 
 	store := tag.Store{Root: c.Records}
 	// The previous run is read before this one writes, so facts and the diff
@@ -282,19 +286,6 @@ func collectOne(ctx context.Context, conn connector.Connector, s connector.Scope
 			failMu.Unlock()
 			return
 		}
-	}
-}
-
-// link matches accounts to people and marks accounts the same person holds.
-func link(g *graph.Graph, h graph.Hasher) {
-	for _, n := range g.Nodes(graph.KindIdentityUser) {
-		email, _ := n.Private["email"].(string)
-		if email == "" {
-			continue
-		}
-		person := graph.ID("person:" + h.Email(email))
-		g.Node(graph.Node{ID: person, Kind: graph.KindPerson, Source: "link", SeenAt: n.SeenAt})
-		g.Edge(graph.Edge{From: person, To: n.ID, Kind: graph.EdgeSamePerson, Source: "link"})
 	}
 }
 

@@ -36,6 +36,7 @@ func init() { connector.Register(New()) }
 const (
 	CollectionUsers  = "directory users"
 	CollectionTokens = "oauth tokens"
+	CollectionGroups = "groups"
 )
 
 // TokensScope is the scope tokens.list needs. Google offers no read-only
@@ -46,6 +47,10 @@ const TokensScope = admin.AdminDirectoryUserSecurityScope
 
 // TokenScanner names the scan record of the OAuth grants read.
 const TokenScanner = "oauth_tokens"
+
+// UserScanner names the scan record of the directory users read, so a fact
+// can tell Google not read from a domain with no users.
+const UserScanner = "google_users"
 
 // Collections lists what it reads.
 func (c *Connector) Collections() []connector.Collection {
@@ -65,6 +70,15 @@ func (c *Connector) Collections() []connector.Collection {
 			"POST https://oauth2.googleapis.com/token",
 			"GET https://admin.googleapis.com/admin/directory/v1/users?domain={domain}",
 			"GET https://admin.googleapis.com/admin/directory/v1/users/{user ID}/tokens, once per user",
+		},
+	}, {
+		Name:       CollectionGroups,
+		Nodes:      []string{graph.KindGoogleGroup},
+		Permission: GroupsScope,
+		Calls: []string{
+			"POST https://oauth2.googleapis.com/token",
+			"GET https://admin.googleapis.com/admin/directory/v1/groups?customer=my_customer, only when a GCP binding names a group",
+			"GET https://admin.googleapis.com/admin/directory/v1/groups/{group ID}/members, once per group a GCP binding names and each group nested in one",
 		},
 	}}
 }
@@ -106,14 +120,22 @@ func (c *Connector) service(ctx context.Context, s connector.Scope, scope string
 
 // Collect reads every user in the domain, or every user's OAuth grants.
 func (c *Connector) Collect(ctx context.Context, col connector.Collection, s connector.Scope, out graph.Writer) error {
-	if col.Name == CollectionTokens {
+	switch col.Name {
+	case CollectionTokens:
 		return c.collectTokens(ctx, s, out)
+	case CollectionGroups:
+		return c.collectGroups(ctx, s, out)
 	}
 	svc, err := c.service(ctx, s, admin.AdminDirectoryUserReadonlyScope)
 	if err != nil {
 		return err
 	}
-	return listUsers(ctx, svc, s, func(u *admin.User) { write(u, s, out) })
+	n := 0
+	if err := listUsers(ctx, svc, s, func(u *admin.User) { n++; write(u, s, out) }); err != nil {
+		return err
+	}
+	graph.WriteScan(out, "google", UserScanner, "", n, "", s.Now)
+	return nil
 }
 
 func listUsers(ctx context.Context, svc *admin.Service, s connector.Scope, each func(*admin.User)) error {
@@ -137,6 +159,18 @@ func write(u *admin.User, s connector.Scope, out graph.Writer) {
 		},
 		Private: map[string]any{"email": strings.ToLower(u.PrimaryEmail)},
 	})
+}
+
+// aliasesOf lists a user's other addresses, lowercased, so the link step can
+// match a GCP binding or people.yaml entry that names one of them.
+func aliasesOf(u *admin.User) []string {
+	var out []string
+	for _, a := range append(append([]string{}, u.Aliases...), u.NonEditableAliases...) {
+		if a = strings.ToLower(strings.TrimSpace(a)); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // normalizeTime turns Google's zero time, meaning never, into empty.

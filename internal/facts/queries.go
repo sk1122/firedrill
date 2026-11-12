@@ -22,6 +22,7 @@ func init() {
 	registerBackups()
 	registerAIKeys()
 	registerGitHubPeople()
+	registerPeople()
 }
 
 func registerTargets() {

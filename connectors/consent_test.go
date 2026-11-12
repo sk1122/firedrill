@@ -207,6 +207,10 @@ func TestAmbientCredentialsAreNotConsent(t *testing.T) {
 		if strings.Contains(p, "/members") || strings.Contains(p, "/teams") || strings.Contains(p, "/collaborators") || strings.Contains(p, "/outside_collaborators") {
 			t.Errorf("a people call left before connect: %s", p)
 		}
+		// Nor Google groups, read for linking, or GCP custom roles.
+		if strings.Contains(p, "/groups") || strings.Contains(p, "/roles/") {
+			t.Errorf("a linking call left before connect: %s", p)
+		}
 	}
 
 	// What connect records after a successful access check.

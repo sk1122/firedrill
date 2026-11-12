@@ -181,10 +181,14 @@ const (
 	KindGitHubTeam = "github_team"
 	KindGitHubApp  = "github_app"
 	KindDeployKey  = "deploy_key"
+	// A Google group, read only when a GCP binding names it. Its address lives
+	// only in Private, like a user's.
+	KindGoogleGroup = "google_group"
 	// Registers the team keeps in .firedrill, and the thresholds in config.yaml.
 	KindConfigApp      = "config_app"
 	KindConfigBackup   = "config_backup"
 	KindConfigAIKey    = "config_ai_key"
+	KindConfigOwner    = "config_owner"
 	KindConfigSettings = "config_settings"
 	KindScan           = "scan"
 	KindConnectorFail  = "connector_failure"
@@ -209,6 +213,13 @@ const (
 	// EdgeCanBypass links a GitHub user, app or deploy key to a repo whose
 	// default branch review it can skip. Teams and roles are expanded to users.
 	EdgeCanBypass = "can_bypass"
+	// EdgeBoundTo links a Google group to a GCP IAM binding that names it as
+	// its member. Written by the link step.
+	EdgeBoundTo = "bound_to"
+	// EdgeViaGroup links a person to a GCP IAM binding they hold through a
+	// Google group, nested groups included. A binding they hold directly is a
+	// same_person edge instead. Written by the link step.
+	EdgeViaGroup = "via_group"
 )
 
 // ScanID names the record of what a scanner inspected. Scope is a repo, a

@@ -110,6 +110,7 @@ func (c *Connector) Collections() []connector.Collection {
 			"GET https://" + analyzerHost + "/v1/projects/{project}/locations/global/activityTypes/serviceAccountKeyLastAuthentication/activities:query",
 			"GET https://" + storageHost + "/storage/v1/b?project={project}",
 			"GET https://" + storageHost + "/storage/v1/b/{bucket}/iam",
+			"GET https://" + iamHost + "/v1/{projects/{project} or organizations/{org}}/roles/{role}, once per custom role a binding names",
 		},
 	}, {
 		Name:       CollectionBackups,
@@ -281,15 +282,16 @@ func (c *Connector) Collect(ctx context.Context, col connector.Collection, s con
 	// One project that cannot be read gives ERROR on that project's drills;
 	// the others still run. Only when none can be read does the connector fail.
 	var errs []error
+	roles := &customRoles{seen: map[string]Power{}}
 	for _, p := range s.Project.Config.GCP.Projects {
-		if err := c.collectProject(ctx, a, p, s, out); err != nil {
+		if err := c.collectProject(ctx, a, p, roles, s, out); err != nil {
 			if errors.Is(err, connector.ErrBlocked) {
 				return err
 			}
 			errs = append(errs, fmt.Errorf("gcp project %s: %w", p, err))
 			out.Node(graph.Node{ID: graph.ID("gcp:project/" + p), Kind: graph.KindGCPProject, Source: "gcp", SeenAt: s.Now,
 				Attrs: map[string]any{"name": p, "number": "", "member_domains": memberDomains(s), "partial": []any{},
-					"error": err.Error()}})
+					"production": s.Project.Config.IsProduction(p), "error": err.Error()}})
 		}
 	}
 	if len(errs) == len(s.Project.Config.GCP.Projects) {
@@ -312,7 +314,7 @@ func memberDomains(s connector.Scope) []any {
 	return out
 }
 
-func (c *Connector) collectProject(ctx context.Context, a *api, project string, s connector.Scope, out graph.Writer) error {
+func (c *Connector) collectProject(ctx context.Context, a *api, project string, roles *customRoles, s connector.Scope, out graph.Writer) error {
 	var policy struct {
 		Bindings []struct {
 			Role      string    `json:"role"`
@@ -327,7 +329,16 @@ func (c *Connector) collectProject(ctx context.Context, a *api, project string, 
 	projID := graph.ID("gcp:project/" + project)
 	var partial []any
 	number := ""
+	production := s.Project.Config.IsProduction(project)
 	for _, b := range policy.Bindings {
+		power := PredefinedPower(b.Role)
+		if IsCustomRole(b.Role) {
+			p, err := roles.power(ctx, a, b.Role, &partial)
+			if err != nil {
+				return err
+			}
+			power = p
+		}
 		for _, m := range b.Members {
 			mem := parseMember(m, project)
 			if mem.number != "" {
@@ -339,6 +350,8 @@ func (c *Connector) collectProject(ctx context.Context, a *api, project string, 
 					"project": project, "role": b.Role, "member_type": mem.kind, "member_domain": mem.domain,
 					"google_managed": mem.googleManaged, "default_account": mem.defaultAccount,
 					"conditional": b.Condition != nil, "member": mem.public,
+					"is_admin": power.Admin, "destructive": power.Destructive, "power_known": power.Known,
+					"production": production,
 				},
 				Private: map[string]any{"email": mem.email}})
 			out.Edge(graph.Edge{From: projID, To: id, Kind: graph.EdgeOwns, Source: "gcp"})
@@ -353,6 +366,7 @@ func (c *Connector) collectProject(ctx context.Context, a *api, project string, 
 	}
 	out.Node(graph.Node{ID: projID, Kind: graph.KindGCPProject, Source: "gcp", SeenAt: s.Now, Attrs: map[string]any{
 		"name": project, "number": number, "member_domains": memberDomains(s), "partial": partial,
+		"production": production,
 	}})
 	return nil
 }

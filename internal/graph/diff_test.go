@@ -723,15 +723,15 @@ func TestDiffGitHubPeople(t *testing.T) {
 	// A new writes_to edge from an outside collaborator is a weakening; from a
 	// member it is not.
 	snap := run(true)
-	c := edgeDiff(Edge{From: dee, To: repo, Kind: EdgeWritesTo, Source: "github"}, true, snap, run(false))
+	c := edgeDiff(Edge{From: dee, To: repo, Kind: EdgeWritesTo, Source: "github"}, true, snap, run(false), nil)
 	if c.Type != ChangeWeakened || !c.Weakening {
 		t.Fatalf("%+v", c)
 	}
-	c = edgeDiff(Edge{From: ana, To: repo, Kind: EdgeWritesTo, Source: "github"}, true, snap, run(false))
+	c = edgeDiff(Edge{From: ana, To: repo, Kind: EdgeWritesTo, Source: "github"}, true, snap, run(false), nil)
 	if c.Type != ChangeAdded || c.Weakening {
 		t.Fatalf("%+v", c)
 	}
-	c = edgeDiff(Edge{From: ana, To: "github:team/acme/core", Kind: EdgeMemberOf, Source: "github"}, true, snap, run(false))
+	c = edgeDiff(Edge{From: ana, To: "github:team/acme/core", Kind: EdgeMemberOf, Source: "github"}, true, snap, run(false), nil)
 	if c.Weakening || !strings.Contains(c.Summary, "is a member of team acme/core") {
 		t.Fatalf("%+v", c)
 	}

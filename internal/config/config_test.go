@@ -137,3 +137,45 @@ func TestRegistersAndThresholds(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnersAndPeople(t *testing.T) {
+	write := func(dir, name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	write(dir, "config.yaml", "github: {org: acme}\n")
+	write(dir, "owners.yaml", "- {principal: CI@acme-prod.iam.gserviceaccount.com, owner: platform-team, note: deploys}\n- {principal: \"github:app/77\", owner: \"@release\"}\n")
+	write(dir, "people.yaml", "ana-dev: ana@acme.example\nAna-Old: ana@acme.example\ncy-acme: cy@acme.example\n")
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Owners) != 2 || p.Owners[0].Note != "deploys" {
+		t.Fatalf("%+v", p.Owners)
+	}
+	if p.PersonOf("ANA-DEV") != "ana@acme.example" || p.PersonOf("ana-old") != "ana@acme.example" || p.PersonOf("nobody") != "" {
+		t.Fatal("logins match case-insensitively, and several may name one person")
+	}
+
+	bad := []struct{ file, body string }{
+		{"owners.yaml", "- {principal: ci@acme-prod.iam.gserviceaccount.com}\n"},
+		{"owners.yaml", "- {owner: platform-team}\n"},
+		{"owners.yaml", "- {principal: ci@acme-prod.iam.gserviceaccount.com, owner: ravi@acme.example}\n"},
+		{"owners.yaml", "- {principal: ravi@acme.example, owner: platform-team}\n"},
+		{"owners.yaml", "- {principal: some app, owner: platform-team}\n"},
+		{"owners.yaml", "- {principal: \"github:app/1\", owner: a}\n- {principal: \"github:app/1\", owner: b}\n"},
+		{"people.yaml", "ana-dev: ana\n"},
+		{"people.yaml", "ana-dev: ana@acme.example\nANA-DEV: bo@acme.example\n"},
+	}
+	for _, b := range bad {
+		d := t.TempDir()
+		write(d, "config.yaml", "github: {org: acme}\n")
+		write(d, b.file, b.body)
+		if _, err := Load(d); err == nil {
+			t.Errorf("%s %q: want an error", b.file, b.body)
+		}
+	}
+}

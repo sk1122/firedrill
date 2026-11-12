@@ -47,7 +47,7 @@ var (
 	// graphID is a node ID: a known source prefix and a path-like remainder with
 	// no spaces, so a secret that merely starts with a prefix still has to pass
 	// the segment check below.
-	graphID = regexp.MustCompile(`^(api-doc|aws|codeowners|config-host|config-app|config-backup|config-ai-key|config|dns-cname|dns|domain|file|gcp|github|google|host|manifest|mcp|person|repo|scan|secret|semgrep|source-map|web|agent|tf|anthropic|openai):[A-Za-z0-9._/@:#=+~-]+$`)
+	graphID = regexp.MustCompile(`^(api-doc|aws|codeowners|config-host|config-app|config-backup|config-ai-key|config-owner|config|dns-cname|dns|domain|file|gcp|github|google|host|manifest|mcp|person|repo|scan|secret|semgrep|source-map|web|agent|tf|anthropic|openai):[A-Za-z0-9._/@:#=+~-]+$`)
 	// providerID is an AI provider's object ID: a type word, an underscore and
 	// an opaque ID, such as apikey_01..., wrkspc_01..., user_01... (Anthropic)
 	// or key_..., proj_..., svc_acct_... (OpenAI). It names a key, workspace or

@@ -291,3 +291,46 @@ func TestDisplayNameOfGitHubPeople(t *testing.T) {
 		}
 	}
 }
+
+// An admin binding is owned by the person who holds it, directly or through a
+// group, or by its owners.yaml entry. A project's own owns edges own nothing.
+func TestUnownedUsesLinksAndOwnersRegister(t *testing.T) {
+	g := graph.New()
+	bind := func(id graph.ID, member string, attrs map[string]any) {
+		a := map[string]any{"project": "acme-prod", "role": "roles/owner", "member_type": member, "is_admin": true, "power_known": true}
+		for k, v := range attrs {
+			a[k] = v
+		}
+		g.Node(graph.Node{ID: id, Kind: graph.KindGCPBinding, Attrs: a, SeenAt: now})
+		g.Edge(graph.Edge{From: "gcp:project/acme-prod", To: id, Kind: graph.EdgeOwns})
+	}
+	bind("gcp:binding/acme-prod/roles/owner/aaaa1111", "user", nil)
+	bind("gcp:binding/acme-prod/roles/owner/bbbb2222", "group", nil)
+	bind("gcp:binding/acme-prod/roles/owner/cccc3333", "service_account", nil)
+	bind("gcp:binding/acme-prod/roles/owner/dddd4444", "service_account", nil)
+	bind("gcp:binding/acme-prod/roles/editor/eeee5555", "service_account", map[string]any{"google_managed": true})
+	bind("gcp:binding/acme-prod/roles/viewer/ffff6666", "user", map[string]any{"is_admin": false})
+	g.Node(graph.Node{ID: "person:1234567890abcdef", Kind: graph.KindPerson, Attrs: map[string]any{"systems": []any{"gcp"}}, SeenAt: now})
+	g.Edge(graph.Edge{From: "person:1234567890abcdef", To: "gcp:binding/acme-prod/roles/owner/aaaa1111", Kind: graph.EdgeSamePerson})
+	g.Edge(graph.Edge{From: "person:1234567890abcdef", To: "gcp:binding/acme-prod/roles/owner/bbbb2222", Kind: graph.EdgeViaGroup})
+	g.Edge(graph.Edge{From: "config-owner:ci@acme-prod.iam.gserviceaccount.com", To: "gcp:binding/acme-prod/roles/owner/cccc3333", Kind: graph.EdgeOwns})
+	g.Node(graph.Node{ID: "google:group/9999aaaa8888bbbb", Kind: graph.KindGoogleGroup, Attrs: map[string]any{"members_known": true}, SeenAt: now})
+	e := graph.NewEstate()
+	e.Merge(graph.TakeSnapshot(g, now))
+	b, err := Build(tag.Store{Root: t.TempDir()}, e, nil, now, run.Rules{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Unowned) != 1 || b.Unowned[0].ID != "gcp:binding/acme-prod/roles/owner/dddd4444" ||
+		b.Unowned[0].Name != "roles/owner for a service account (dddd4444) in acme-prod" {
+		t.Fatalf("%+v", b.Unowned)
+	}
+	for _, it := range b.Items {
+		if it.ID == "google:group/9999aaaa8888bbbb" && it.Name != "Google group 9999aaaa" {
+			t.Fatalf("a group shows by a short hashed ID: %q", it.Name)
+		}
+	}
+	if got := displayName(&graph.EstateItem{ID: "person:1234567890abcdef", Kind: graph.KindPerson}); got != "person 12345678" {
+		t.Fatal(got)
+	}
+}

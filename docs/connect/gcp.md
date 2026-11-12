@@ -42,13 +42,15 @@ Don't create a key for it.
 
 ```bash
 for P in PROJECTS; do
-  for R in roles/viewer roles/iam.securityReviewer roles/policyanalyzer.activityAnalysisViewer; do
+  for R in roles/viewer roles/iam.securityReviewer roles/policyanalyzer.activityAnalysisViewer roles/iam.roleViewer; do
     gcloud projects add-iam-policy-binding "$P" --member "serviceAccount:firedrill-reader@HOME_PROJECT.iam.gserviceaccount.com" --role "$R" --condition None --quiet
   done
 done
 ```
 
 Activity Analysis Viewer is only for the last time each key was used. Without it, keys are still judged by age.
+
+Role Viewer lets Firedrill read the permissions of a custom role a binding names, with [roles.get](https://cloud.google.com/iam/docs/reference/rest/v1/projects.roles/get) (`iam.roles.get`). Without it, those bindings read as `power_known: false`, never as harmless, and the people facts give WARN. A custom role defined on the organization (`organizations/{org}/roles/...`) needs Role Viewer on the organization too; without it, the same applies.
 
 ## 5. Let yourself act as the reader
 
@@ -81,6 +83,16 @@ production: [acme-prod]
 ```
 
 A Cloud SQL instance labelled `env` or `environment` = `prod` or `production` is production too.
+
+The same list marks each project, and each IAM binding in it, `production`, which the people facts show next to each role someone holds. With nothing named under `production`, every project counts as production, and the facts say so.
+
+Who holds each role: a `user:` member is matched to a person by email, and a `group:` member through its Google group's members, which the Google Workspace connection reads (see [google-workspace.md](google-workspace.md)). A service account with admin or delete power needs an owner in `.firedrill/owners.yaml`:
+
+```yaml
+- principal: ci@acme-prod.iam.gserviceaccount.com
+  owner: "@acme/platform"    # a team or role, never an email
+  note: deploys the API
+```
 
 ### What the backups drill can see
 
@@ -120,7 +132,7 @@ firedrill run
 
 ## What Firedrill calls
 
-Every call is a GET, including `GET https://sqladmin.googleapis.com/v1/projects/{project}/instances` for Cloud SQL, plus three exact POSTs the guard allows: the token exchange, minting the reader's token, and `getIamPolicy` on each listed project, which only reads. `firedrill run --dry-run` lists them all.
+Every call is a GET, including `GET https://sqladmin.googleapis.com/v1/projects/{project}/instances` for Cloud SQL and `GET https://iam.googleapis.com/v1/{projects/{project} or organizations/{org}}/roles/{role}` once per custom role a binding names, plus three exact POSTs the guard allows: the token exchange, minting the reader's token, and `getIamPolicy` on each listed project, which only reads. `firedrill run --dry-run` lists them all.
 
 ## In CI
 

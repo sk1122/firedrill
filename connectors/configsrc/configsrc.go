@@ -4,6 +4,7 @@ package configsrc
 
 import (
 	"context"
+	"strings"
 
 	"github.com/sk1122/firedrill/connector"
 	"github.com/sk1122/firedrill/internal/graph"
@@ -22,7 +23,7 @@ func init() { connector.Register(New()) }
 // Collections lists what it reads.
 func (c *Connector) Collections() []connector.Collection {
 	return []connector.Collection{{Name: "config", Nodes: []string{graph.KindTargetRepo, graph.KindConfigDomain, graph.KindConfigHost,
-		graph.KindConfigSettings, graph.KindConfigApp, graph.KindConfigBackup, graph.KindConfigAIKey}}}
+		graph.KindConfigSettings, graph.KindConfigApp, graph.KindConfigBackup, graph.KindConfigAIKey, graph.KindConfigOwner}}}
 }
 
 // Available is always true.
@@ -48,6 +49,7 @@ func (c *Connector) Collect(_ context.Context, _ connector.Collection, s connect
 		out.Edge(graph.Edge{From: graph.ID("config-host:" + h.Host), To: graph.ID("host:" + h.Host), Kind: graph.EdgeOwns, Source: "config"})
 	}
 	writeRegisters(s, out)
+	writeOwners(s, out)
 	return nil
 }
 
@@ -57,7 +59,7 @@ const SettingsID = graph.ID("config:settings")
 
 // writeRegisters writes the thresholds and the registers a team keeps: owners
 // and reviews of third-party apps, copies of databases, and owners and limits
-// of AI keys.
+// of AI keys, and owners of principals no person holds.
 func writeRegisters(s connector.Scope, out graph.Writer) {
 	cfg := s.Project.Config
 	out.Node(graph.Node{ID: SettingsID, Kind: graph.KindConfigSettings, Source: "config", SeenAt: s.Now,
@@ -90,5 +92,29 @@ func writeRegisters(s connector.Scope, out graph.Writer) {
 		out.Node(graph.Node{ID: graph.ID("config-ai-key:" + k.Provider + "/" + ref), Kind: graph.KindConfigAIKey, Source: "config", SeenAt: s.Now,
 			Attrs: map[string]any{"provider": k.Provider, "key_id": k.KeyID, "workspace": k.Workspace, "project": k.Project,
 				"owner": k.Owner, "monthly_limit_usd": limit, "verified": k.Verified}})
+	}
+}
+
+// OwnerID names the node of one owners.yaml entry.
+func OwnerID(principal string) graph.ID {
+	return graph.ID("config-owner:" + strings.ToLower(strings.TrimSpace(principal)))
+}
+
+// writeOwners writes each owners.yaml entry, and an owns edge to a principal
+// named by its graph ID. A service account appears in one binding per project
+// and role, which only exist once GCP is read, so the link step writes those
+// edges.
+func writeOwners(s connector.Scope, out graph.Writer) {
+	for _, o := range s.Project.Owners {
+		id := OwnerID(o.Principal)
+		pr := strings.ToLower(strings.TrimSpace(o.Principal))
+		if !strings.Contains(pr, "@") {
+			pr = strings.TrimSpace(o.Principal)
+		}
+		out.Node(graph.Node{ID: id, Kind: graph.KindConfigOwner, Source: "config", SeenAt: s.Now,
+			Attrs: map[string]any{"principal": pr, "owner": o.Owner, "note": o.Note}})
+		if !strings.Contains(pr, "@") {
+			out.Edge(graph.Edge{From: id, To: graph.ID(pr), Kind: graph.EdgeOwns, Source: "config"})
+		}
 	}
 }

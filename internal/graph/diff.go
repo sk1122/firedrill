@@ -125,11 +125,13 @@ var stableAttrs = map[string][]string{
 	KindAgentConfig:  {"allowed_commands", "denied_commands", "deny_read_paths", "unguarded_destructive", "mcp_servers", "gitignored"},
 	KindWorkflow: {"permissions", "triggers", "secrets", "unpinned_actions", "pull_request_target_checkout",
 		"unfrozen_installs", "cloud_key_secrets", "uses_oidc"},
-	KindManifest:   {"manager", "lockfile", "lockfile_committed", "install_scripts", "install_scripts_known"},
-	KindGCPBinding: {"conditional"},
+	KindManifest: {"manager", "lockfile", "lockfile_committed", "install_scripts", "install_scripts_known"},
+	// The power of a binding is set by its role, which is part of its ID; it
+	// changes only when a custom role's permissions do.
+	KindGCPBinding: {"conditional", "is_admin", "destructive", "power_known"},
 	KindGCPBucket:  {"public_grants", "public_access_prevention", "uniform_access"},
 	KindGCPKey:     {"disabled"},
-	KindGCPProject: {"member_domains"},
+	KindGCPProject: {"member_domains", "production"},
 	KindCNAME:      {"target", "target_resolves"},
 	KindHost:       {},
 	KindSourceMap:  {},
@@ -153,6 +155,18 @@ var stableAttrs = map[string][]string{
 	KindGitHubTeam: {"privacy", "parent"},
 	KindGitHubApp:  {},
 	KindDeployKey:  {},
+	// Google groups that hold a GCP role. Who is in one is in its member_of
+	// edges.
+	KindGoogleGroup: {"external_members", "all_users", "members_known"},
+	KindConfigOwner: {"owner"},
+}
+
+// addedLater are attributes a snapshot from before they existed lacks. Their
+// first appearance is not a change, or an upgrade would read every admin
+// binding as a new admin.
+var addedLater = map[string]map[string]bool{
+	KindGCPBinding: {"is_admin": true, "destructive": true, "power_known": true},
+	KindGCPProject: {"production": true},
 }
 
 // Compared reports whether the diff compares a node kind.
@@ -213,8 +227,17 @@ func Diff(old, new Snapshot) DiffResult {
 
 	oldEdges, newEdges := edgeSet(old), edgeSet(new)
 	dropNode := map[ID]bool{}
+	before := linkedKinds(old)
+	power := groupPower(new)
 	edgeChange := func(e Edge, isNew bool) {
-		if !covered(edgeScope(e, old, new)) {
+		for _, sc := range edgeScopes(e, old, new) {
+			if !covered(sc) {
+				return
+			}
+		}
+		// An earlier run from before the link step joined this kind of account
+		// would read every link as new.
+		if e.Source == "link" && !before[linkKey(e)] {
 			return
 		}
 		nodes := removed
@@ -222,6 +245,9 @@ func Diff(old, new Snapshot) DiffResult {
 			nodes = added
 		}
 		switch {
+		case isNew && (e.Kind == EdgeViaGroup || (e.Kind == EdgeMemberOf && e.Source == "google" && power[e.To] != "")):
+			// A person's new GCP power through a group is its own row: the new
+			// binding or group only says it appeared.
 		case e.Kind == EdgeFoundIn && nodes[ID(string(e.From)+"@"+strings.TrimPrefix(string(e.To), "file:"))]:
 			return // the occurrence tells it
 		case e.Kind == EdgeDeploysTo && nodes[e.To]:
@@ -232,7 +258,7 @@ func Diff(old, new Snapshot) DiffResult {
 		case nodes[e.From] || nodes[e.To]:
 			return // the node tells it
 		}
-		res.Changes = append(res.Changes, edgeDiff(e, isNew, new, old))
+		res.Changes = append(res.Changes, edgeDiff(e, isNew, new, old, power))
 	}
 	for _, e := range newEdges {
 		if _, ok := oldEdges[e]; !ok {
@@ -327,6 +353,9 @@ type scope struct {
 }
 
 func (s scope) label() string {
+	if s.scanner == "google_groups" {
+		return "google groups"
+	}
 	if s.name == "" {
 		return s.source
 	}
@@ -472,6 +501,97 @@ func nodeScope(n Node) scope {
 	return scope{source: n.Source}
 }
 
+// edgeScopes is what an edge depends on. An edge the link step wrote, or an
+// owners.yaml entry's owns edge, joins two systems, so it depends on both:
+// the account's, and for a group's bindings, the groups read.
+func edgeScopes(e Edge, old, new Snapshot) []scope {
+	owner := strings.HasPrefix(string(e.From), "config-owner:")
+	if e.Source != "link" && !owner {
+		return []scope{edgeScope(e, old, new)}
+	}
+	var out []scope
+	if owner {
+		out = append(out, scope{source: "config"})
+	}
+	for _, id := range []ID{e.From, e.To} {
+		if strings.HasPrefix(string(id), "person:") || strings.HasPrefix(string(id), "config-owner:") {
+			continue
+		}
+		if strings.HasPrefix(string(id), "google:group/") {
+			out = append(out, scope{source: "google", scanner: "google_groups"})
+			continue
+		}
+		if n, ok := nodeIn(id, new); ok {
+			out = append(out, nodeScope(n))
+		} else if n, ok := nodeIn(id, old); ok {
+			out = append(out, nodeScope(n))
+		}
+	}
+	if e.Kind == EdgeViaGroup {
+		out = append(out, scope{source: "google", scanner: "google_groups"})
+	}
+	return out
+}
+
+// linkKey names the kind of link an edge is: its kind and the system of the
+// account it reaches.
+func linkKey(e Edge) string {
+	to, _, _ := strings.Cut(string(e.To), "/")
+	return e.Kind + " " + to
+}
+
+// linkedKinds lists the kinds of link a snapshot holds.
+func linkedKinds(s Snapshot) map[string]bool {
+	out := map[string]bool{}
+	for _, e := range s.Edges {
+		if e.Source == "link" {
+			out[linkKey(e)] = true
+		}
+	}
+	return out
+}
+
+// groupPower gives each Google group the strongest GCP power it passes to its
+// members, admin or destructive, through its own bindings or those of any
+// group it is nested in.
+func groupPower(s Snapshot) map[ID]string {
+	nodes := map[ID]Node{}
+	for _, n := range s.Nodes {
+		nodes[n.ID] = n
+	}
+	out := map[ID]string{}
+	set := func(id ID, p string) bool {
+		if p == "" || out[id] == "admin" || out[id] == p {
+			return false
+		}
+		out[id] = p
+		return true
+	}
+	for _, e := range s.Edges {
+		if e.Kind != EdgeBoundTo {
+			continue
+		}
+		b := nodes[e.To]
+		switch {
+		case isTrue(b.Attrs["is_admin"]):
+			set(e.From, "admin")
+		case isTrue(b.Attrs["destructive"]):
+			set(e.From, "destructive")
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, e := range s.Edges {
+			if e.Kind == EdgeMemberOf && e.Source == "google" && strings.HasPrefix(string(e.From), "google:group/") {
+				if set(e.From, out[e.To]) {
+					changed = true
+				}
+			}
+		}
+	}
+	return out
+}
+
 func edgeScope(e Edge, old, new Snapshot) scope {
 	if e.Kind == EdgeGrantedTo {
 		return scope{source: e.Source, scanner: "oauth_tokens"}
@@ -489,6 +609,9 @@ func edgeScope(e Edge, old, new Snapshot) scope {
 			org, _, _ := strings.Cut(rest, "/")
 			return scope{source: "github", scanner: "github_people", name: org}
 		}
+	}
+	if e.Source == "google" && e.Kind == EdgeMemberOf {
+		return scope{source: "google", scanner: "google_groups"}
 	}
 	switch e.Source {
 	case "files":
@@ -596,6 +719,9 @@ func compareNode(a, b Node) []Change {
 		if b.Kind == KindGCPBucket && attr == "public_grants" && (a.Attrs["policy_readable"] == false || b.Attrs["policy_readable"] == false) {
 			continue // an unreadable policy lists no grants, which is not the same as none
 		}
+		if _, had := a.Attrs[attr]; !had && addedLater[b.Kind][attr] {
+			continue
+		}
 		before, after := norm(a.Attrs[attr]), norm(b.Attrs[attr])
 		if same(before, after) {
 			continue
@@ -653,8 +779,14 @@ func addedNode(n Node) Change {
 		switch {
 		case member == "allUsers" || member == "allAuthenticatedUsers":
 			weak(ChangePublic, "new public grant: "+label(n))
-		case role == "roles/owner" || role == "roles/editor":
+		case role == "roles/owner" || role == "roles/editor" || isTrue(n.Attrs["is_admin"]):
 			weak(ChangeNewAdmin, "new admin grant: "+label(n))
+		case isTrue(n.Attrs["destructive"]):
+			weak(ChangeWeakened, "new grant that can delete data: "+label(n))
+		}
+	case KindGoogleGroup:
+		if isTrue(n.Attrs["external_members"]) {
+			weak(ChangeWeakened, "new "+label(n)+" holds a GCP role and has members outside the Workspace domain")
 		}
 	case KindGCPBucket:
 		if l := listOf(norm(n.Attrs["public_grants"])); len(l) > 0 {
@@ -695,18 +827,25 @@ func removedNode(n Node) Change {
 		c.Type, c.Weakening, c.Summary = ChangeWeakened, true, "gone: "+label(n)
 	case KindConfigAIKey:
 		c.Type, c.Weakening, c.Summary = ChangeWeakened, true, "gone: "+label(n)
+	case KindConfigOwner:
+		c.Type, c.Weakening, c.Summary = ChangeWeakened, true, "gone: "+label(n)+"; its principal no longer has an owner"
 	}
 	return c
 }
 
 // ---- edges
 
-func edgeDiff(e Edge, isNew bool, new, old Snapshot) Change {
+func edgeDiff(e Edge, isNew bool, new, old Snapshot, power map[ID]string) Change {
 	ee := e
 	c := Change{Subject: e.From, Kind: "edge:" + e.Kind, Edge: &ee, System: e.Source}
 	from, to := edgeEnd(e.From, new, old), edgeEnd(e.To, new, old)
 	if !isNew {
 		c.Type, c.Summary = ChangeRemoved, fmt.Sprintf("gone: %s %s %s", from, edgeWords(e.Kind), to)
+		if e.Kind == EdgeOwns && strings.HasPrefix(string(e.From), "config-owner:") {
+			// The principal is still there, or its removal would tell it.
+			c.Subject = e.To
+			c.Type, c.Weakening, c.Summary = ChangeWeakened, true, fmt.Sprintf("%s no longer has an owner in owners.yaml", to)
+		}
 		return c
 	}
 	c.Type, c.Weakening = ChangeAdded, false
@@ -728,6 +867,30 @@ func edgeDiff(e Edge, isNew bool, new, old Snapshot) Change {
 		}
 	case EdgeGrantedTo:
 		c.Type, c.Weakening, c.Summary = ChangeOAuthGrant, true, fmt.Sprintf("new OAuth grant: %s granted %s access", to, from)
+	case EdgeSamePerson, EdgeViaGroup:
+		c.Summary = fmt.Sprintf("new link: %s %s %s", from, edgeWords(e.Kind), to)
+		b, ok := nodeIn(e.To, new)
+		if !ok || b.Kind != KindGCPBinding {
+			break
+		}
+		how := "directly"
+		if e.Kind == EdgeViaGroup {
+			how = "through a group"
+		}
+		switch {
+		case isTrue(b.Attrs["is_admin"]):
+			c.Type, c.Weakening, c.Summary = ChangeNewAdmin, true, fmt.Sprintf("%s now holds %s %s", from, to, how)
+		case isTrue(b.Attrs["destructive"]):
+			c.Type, c.Weakening, c.Summary = ChangeWeakened, true, fmt.Sprintf("%s can now delete data: holds %s %s", from, to, how)
+		}
+	case EdgeMemberOf:
+		c.Summary = fmt.Sprintf("new link: %s %s %s", from, edgeWords(e.Kind), to)
+		switch power[e.To] {
+		case "admin":
+			c.Type, c.Weakening, c.Summary = ChangeNewAdmin, true, fmt.Sprintf("%s joined %s, which holds an admin GCP role", from, to)
+		case "destructive":
+			c.Type, c.Weakening, c.Summary = ChangeWeakened, true, fmt.Sprintf("%s joined %s, which can delete GCP data", from, to)
+		}
 	default:
 		c.Summary = fmt.Sprintf("new link: %s %s %s", from, edgeWords(e.Kind), to)
 	}
@@ -758,6 +921,10 @@ func edgeWords(kind string) string {
 		return "can push to"
 	case EdgeCanBypass:
 		return "can bypass review on"
+	case EdgeViaGroup:
+		return "holds, through a group,"
+	case EdgeBoundTo:
+		return "holds"
 	}
 	return kind
 }
@@ -799,6 +966,12 @@ func idLabel(id ID) string {
 		return "GitHub app " + strings.TrimPrefix(s, "github:app/")
 	case strings.HasPrefix(s, "github:deploy-key/"):
 		return "deploy keys of " + strings.TrimPrefix(s, "github:deploy-key/")
+	case strings.HasPrefix(s, "google:user/"):
+		return "Google account " + short(strings.TrimPrefix(s, "google:user/"))
+	case strings.HasPrefix(s, "google:group/"):
+		return "Google group " + short(strings.TrimPrefix(s, "google:group/"))
+	case strings.HasPrefix(s, "config-owner:"):
+		return "owners.yaml entry for " + strings.TrimPrefix(s, "config-owner:")
 	}
 	return s
 }
@@ -900,6 +1073,11 @@ func label(n Node) string {
 		}
 	case KindDeployKey:
 		return "deploy keys of " + strings.TrimPrefix(id, "github:deploy-key/")
+	case KindGoogleGroup:
+		// Never the address: the ID is its hash.
+		return "Google group " + short(strings.TrimPrefix(id, "google:group/"))
+	case KindConfigOwner:
+		return "owners.yaml entry for " + str(n, "principal")
 	}
 	return idLabel(n.ID)
 }
@@ -1095,6 +1273,21 @@ func classifyAttr(attr string, before, after any) (string, bool, string) {
 			return ChangeNewKey, true, fmt.Sprintf("the key is active again (was %s)", show(before))
 		}
 		return ChangeChanged, false, changed
+	case "external_members":
+		if on {
+			return ChangeWeakened, true, "now has members outside the Workspace domain"
+		}
+		return ChangeChanged, false, "no longer has members outside the Workspace domain"
+	case "destructive":
+		if on {
+			return ChangeWeakened, true, "can now delete data or backups"
+		}
+		return ChangeChanged, false, "can no longer delete data or backups"
+	case "all_users":
+		if on {
+			return ChangeWeakened, true, "now includes every user in the account"
+		}
+		return ChangeChanged, false, "no longer includes every user in the account"
 	case "has_owner":
 		if off {
 			return ChangeWeakened, true, "it no longer has an owner"

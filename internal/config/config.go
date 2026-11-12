@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -262,17 +263,50 @@ type AIKey struct {
 	Verified        string   `yaml:"verified"`
 }
 
+// Owner is one entry of owners.yaml: the team or role that answers for a
+// principal no person holds, such as a GCP service account or a GitHub app.
+type Owner struct {
+	// Principal is a GCP service account's address, or a graph ID such as
+	// github:app/123, github:deploy-key/acme/api or github:team/acme/ops.
+	Principal string `yaml:"principal"`
+	Owner     string `yaml:"owner"`
+	Note      string `yaml:"note"`
+}
+
 // Project is everything under one .firedrill directory.
 type Project struct {
 	Dir     string
 	Config  Config
 	Waivers []Waiver
 	Hosts   []Host
+	// People maps a GitHub login to the email of the person who holds it.
+	// Several logins may map to one email. Keys match case-insensitively.
 	People  map[string]string
 	Apps    []App
 	Backups []Backup
 	AIKeys  []AIKey
+	Owners  []Owner
 }
+
+// PersonOf returns the email people.yaml gives a GitHub login, matching the
+// login case-insensitively, or "" when there is no entry.
+func (p *Project) PersonOf(login string) string {
+	if e, ok := p.People[login]; ok {
+		return e
+	}
+	for k, e := range p.People {
+		if strings.EqualFold(k, login) {
+			return e
+		}
+	}
+	return ""
+}
+
+// serviceAccountLike matches a GCP service account's address.
+var serviceAccountLike = regexp.MustCompile(`^[a-z0-9._-]+@[a-z0-9.-]+\.gserviceaccount\.com$`)
+
+// principalLike matches a graph ID an owners.yaml entry may name.
+var principalLike = regexp.MustCompile(`^(github|gcp):[A-Za-z0-9._/@:-]+$`)
 
 // emailLike matches an email address. Registers name owners by handle or
 // team, never by email, since every register lands in records.
@@ -283,7 +317,8 @@ func isDate(s string) bool {
 	return err == nil
 }
 
-// validateRegisters checks apps.yaml, backups.yaml and ai-keys.yaml.
+// validateRegisters checks apps.yaml, backups.yaml, ai-keys.yaml, owners.yaml
+// and people.yaml.
 func (p *Project) validateRegisters() error {
 	owner := func(file string, i int, o string) error {
 		if emailLike.MatchString(o) {
@@ -330,6 +365,35 @@ func (p *Project) validateRegisters() error {
 			return err
 		}
 	}
+	seen := map[string]bool{}
+	for i, o := range p.Owners {
+		pr := strings.ToLower(strings.TrimSpace(o.Principal))
+		switch {
+		case pr == "" || o.Owner == "":
+			return fmt.Errorf("owners.yaml entry %d: principal and owner are required", i+1)
+		case strings.Contains(pr, "@") && !serviceAccountLike.MatchString(pr):
+			return fmt.Errorf("owners.yaml entry %d: principal must be a service account or a graph ID; a person's address belongs in people.yaml", i+1)
+		case !strings.Contains(pr, "@") && !principalLike.MatchString(o.Principal):
+			return fmt.Errorf("owners.yaml entry %d: principal must be a service account or a graph ID such as github:app/123", i+1)
+		case seen[pr]:
+			return fmt.Errorf("owners.yaml entry %d: %s is listed twice", i+1, o.Principal)
+		}
+		seen[pr] = true
+		if err := owner("owners.yaml", i, o.Owner); err != nil {
+			return err
+		}
+	}
+	logins := map[string]string{}
+	for login, email := range p.People {
+		if !emailLike.MatchString(email) {
+			return fmt.Errorf("people.yaml: %s must map to an email address", login)
+		}
+		l := strings.ToLower(login)
+		if prev, ok := logins[l]; ok && !strings.EqualFold(prev, email) {
+			return fmt.Errorf("people.yaml: %s is listed twice with different emails", login)
+		}
+		logins[l] = email
+	}
 	return nil
 }
 
@@ -350,7 +414,7 @@ func Load(dir string) (*Project, error) {
 		return nil, errors.New("config.yaml: google.review_days and recovery.min_retention_days must be 0 or more")
 	}
 	for name, out := range map[string]any{"waivers.yaml": &p.Waivers, "hosts.yaml": &p.Hosts, "people.yaml": &p.People,
-		"apps.yaml": &p.Apps, "backups.yaml": &p.Backups, "ai-keys.yaml": &p.AIKeys} {
+		"apps.yaml": &p.Apps, "backups.yaml": &p.Backups, "ai-keys.yaml": &p.AIKeys, "owners.yaml": &p.Owners} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if os.IsNotExist(err) {
 			continue

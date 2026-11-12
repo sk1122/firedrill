@@ -173,12 +173,15 @@ Without Members, repo settings are still read and only the people facts give ERR
 	"google": `Google needs a service account with domain-wide delegation, approved once by a super admin.
 1. Create a service account and a JSON key in Google Cloud.
 2. In the Admin console, grant it the scopes
-   https://www.googleapis.com/auth/admin.directory.user.readonly and
-   https://www.googleapis.com/auth/admin.directory.user.security (the second reads the OAuth grants
-   users gave third-party apps; Google has no read-only scope for it, so the guard allows only GET).
+   https://www.googleapis.com/auth/admin.directory.user.readonly,
+   https://www.googleapis.com/auth/admin.directory.user.security (the OAuth grants users gave
+   third-party apps; Google has no read-only scope for it, so the guard allows only GET) and
+   https://www.googleapis.com/auth/admin.directory.group.readonly (the members of groups that
+   hold a Google Cloud role, and of groups nested in them; no other group's members are read).
 3. Set google.domain and google.admin_email in config.yaml, the admin it acts as.
 4. Set GOOGLE_APPLICATION_CREDENTIALS to the key file's path.
-Without the second scope, users are still read and only access/third-party-apps-reviewed gives ERROR.`,
+Without the second scope, users are still read and only access/third-party-apps-reviewed gives ERROR.
+Without the third, who holds a role through a group reads as unknown, and the people facts give WARN.`,
 	"aws": `AWS uses the default credential chain, one profile per account under aws.accounts in config.yaml.
 Attach this read policy to each:
   iam:GetAccountAuthorizationDetails, iam:GetAccessKeyLastUsed, iam:ListAccessKeys,
@@ -188,8 +191,9 @@ Databases are read in each region under aws.regions, or the profile's own region
 	"gcp": `Google Cloud reads through a reader service account with read roles only, and no key:
 1. Turn on the iam, iamcredentials, cloudresourcemanager and policyanalyzer APIs in one
    project, and create a service account, for example firedrill-reader, there.
-2. On each project, grant it Viewer, Security Reviewer and Activity Analysis Viewer
-   (roles/viewer, roles/iam.securityReviewer, roles/policyanalyzer.activityAnalysisViewer).
+2. On each project, grant it Viewer, Security Reviewer, Activity Analysis Viewer and Role Viewer
+   (roles/viewer, roles/iam.securityReviewer, roles/policyanalyzer.activityAnalysisViewer,
+   roles/iam.roleViewer; the last reads the permissions of custom roles, which stay unknown without it).
 3. Grant yourself Service Account Token Creator on it, then log in as it:
    gcloud auth application-default login --impersonate-service-account=<reader email>
 The IAM API needs the cloud-platform scope, so the reader's roles keep it to reads. In CI, or instead, set
@@ -197,6 +201,7 @@ FIREDRILL_GCP_CREDENTIALS to a credentials file's path.
 List projects under gcp.projects in config.yaml. Owner domains come from gcp.member_domains, or google.domain.
 Cloud SQL backups are read through the sqladmin API, which Viewer covers: turn on
 sqladmin.googleapis.com in the reader's own project, where calls are billed.
+Name production projects under production in config.yaml; with none named, every project counts.
 Reads use GET, plus POST getIamPolicy on each listed project and the token calls, each by exact URL.`,
 
 	"files":   "Repo files need nothing for local checkouts: pass --path. Remote repos use the GitHub connection.",

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -185,5 +186,43 @@ func TestAnnotateGroupsByPerson(t *testing.T) {
 	}
 	if !slices.Equal(titles, []string{"Person aaaa1111", "New key held", "Person aaaa1111"}) {
 		t.Fatalf("groups %v", titles)
+	}
+}
+
+// Linking joins GitHub and GCP accounts to people, so one person's changes
+// across systems read as one story.
+func TestAnnotateGroupsGitHubAndGCPByPerson(t *testing.T) {
+	res, _ := runPeople(t, peopleEstate{})
+	snap := graph.TakeSnapshot(res.Graph, testNow)
+	ana := personID("ana@acme.example")
+	var gh, binding graph.ID
+	for _, e := range res.Graph.Edges(graph.EdgeSamePerson) {
+		if e.From != ana {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(string(e.To), "github:user/"):
+			gh = e.To
+		case strings.HasPrefix(string(e.To), "gcp:binding/"):
+			binding = e.To
+		}
+	}
+	if gh == "" || binding == "" {
+		t.Fatalf("ana is not linked to her GitHub account and GCP binding")
+	}
+	d := graph.DiffResult{Changes: []graph.Change{
+		{Type: graph.ChangeNewAdmin, Subject: gh, Weakening: true},
+		{Type: graph.ChangeNewAdmin, Subject: binding, Weakening: true},
+		{Type: graph.ChangeNewAdmin, Subject: graph.ID("google:user/" + salt.Email("ana@acme.example")), Weakening: true},
+	}}
+	Annotate(&d, graph.Snapshot{}, snap, Caught{})
+	want := PersonShortID(ana)
+	for _, ch := range d.Changes {
+		if ch.Person != want {
+			t.Fatalf("not grouped under ana: %+v", ch)
+		}
+	}
+	if groups := GroupChanges(d.Changes); len(groups) != 1 || groups[0].Person != want || len(groups[0].Changes) != 3 {
+		t.Fatalf("%+v", groups)
 	}
 }
