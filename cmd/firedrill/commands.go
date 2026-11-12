@@ -591,6 +591,18 @@ func reportCmd() *cobra.Command {
 				return err
 			}
 			report.AddChanges(board, changes)
+			// People, Agents and the graph pages read the latest run's snapshot.
+			var latest *graph.Snapshot
+			if files, err := run.RunSnapshots(filepath.Join(records, "snapshots")); err != nil {
+				return err
+			} else if len(files) > 0 {
+				s, err := graph.ReadSnapshot(files[len(files)-1])
+				if err != nil {
+					return err
+				}
+				latest = &s
+			}
+			report.AddViews(board, latest, changes, now)
 			if outDir == "" {
 				outDir = filepath.Join(projectDir, "report")
 			}

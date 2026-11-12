@@ -30,7 +30,13 @@ var prefixes = []struct {
 }{
 	{"aws_access_key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)},
 	{"stripe_live", regexp.MustCompile(`\bsk_live_[0-9A-Za-z]{10,}\b`)},
+	// GitHub tokens that act as a person: a classic personal access token, a
+	// fine-grained one, an OAuth token and a GitHub App's user-to-server
+	// token. An app installation token (ghs_) acts as the app, not a person.
 	{"github_token", regexp.MustCompile(`\bghp_[0-9A-Za-z]{20,}\b`)},
+	{"github_pat", regexp.MustCompile(`\bgithub_pat_[0-9A-Za-z_]{22,}\b`)},
+	{"github_oauth", regexp.MustCompile(`\bgho_[0-9A-Za-z]{20,}\b`)},
+	{"github_user_token", regexp.MustCompile(`\bghu_[0-9A-Za-z]{20,}\b`)},
 	{"razorpay_live", regexp.MustCompile(`\brzp_live_[0-9A-Za-z]{10,}\b`)},
 }
 

@@ -1,6 +1,6 @@
 # Connect Google Workspace
 
-Google Workspace unlocks `access/admins-use-mfa`, `access/all-users-use-mfa`, the Workspace half of `access/no-dormant-admins`, `access/third-party-apps-reviewed`, and, with an HR export, `access/leavers-locked-out`.
+Google Workspace unlocks `access/admins-use-mfa`, `access/all-users-use-mfa`, the Workspace half of `access/no-dormant-admins`, `access/third-party-apps-reviewed`, `access/every-admin-is-someone`, and, with an HR export, `access/leavers-gone-everywhere`.
 
 Firedrill reads the user directory: each user's admin status, 2-Step Verification enrollment and enforcement, last login and creation date. It also reads the OAuth grants each user gave third-party apps: which app, which scopes. Emails are kept in memory and stored only as hashes.
 

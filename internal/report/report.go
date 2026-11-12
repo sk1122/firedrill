@@ -128,7 +128,11 @@ type Board struct {
 	Unowned   []Item
 	Items     []Item
 	Changes   Changes
+	Views     *Views
 	Fonts     template.CSS
+	// failing maps each node a currently failing drill read to that drill's
+	// severity, the highest when several did.
+	failing map[string]string
 }
 
 // Changes is the Changes page: the latest snapshot diff.
@@ -245,7 +249,7 @@ func Build(store tag.Store, est *graph.Estate, drills []*drill.Drill, now time.T
 	if err != nil {
 		return nil, err
 	}
-	b := &Board{Generated: now.UTC().Format("2006-01-02 15:04 UTC")}
+	b := &Board{Generated: now.UTC().Format("2006-01-02 15:04 UTC"), failing: map[string]string{}}
 	packs := map[string][]Safeguard{}
 	reads := map[string][]ItemVerdict{}
 	for _, k := range keys {
@@ -284,6 +288,13 @@ func Build(store tag.Store, est *graph.Estate, drills []*drill.Drill, now time.T
 		}
 		if row, ok := attentionOf(hist, sg); ok {
 			b.Attention = append(b.Attention, row)
+		}
+		if last.Verdict == tag.Fail {
+			for _, id := range hist[len(hist)-1].Evidence.Read {
+				if cur, ok := b.failing[id]; !ok || severityRank[last.Severity] < severityRank[cur] {
+					b.failing[id] = last.Severity
+				}
+			}
 		}
 		pack, _, _ := strings.Cut(k.DrillID, "/")
 		packs[pack] = append(packs[pack], sg)
@@ -583,6 +594,11 @@ func Write(dir string, b *Board) (string, error) {
 	defer func() { _ = f.Close() }()
 	if err := tmpl.ExecuteTemplate(f, "index.html", b); err != nil {
 		return "", err
+	}
+	if b.Views != nil {
+		if err := writeViews(dir, tmpl, b); err != nil {
+			return "", err
+		}
 	}
 	for _, it := range b.Items {
 		page, err := os.Create(filepath.Join(dir, "items", it.Slug+".html"))

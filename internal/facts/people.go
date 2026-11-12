@@ -42,6 +42,25 @@ func registerPeople() {
 		Fn: peopleAccounts,
 	})
 	Register(Def{
+		Name: "people.powers", AnyConnector: peopleSystems,
+		Shape: Obj(map[string]*Shape{
+			"found": List(Obj(map[string]*Shape{
+				"id": Str, "email": Str, "systems": List(Str), "external": Bool, "leaver": Bool,
+				"github_present": Bool, "github_org_role": Str, "github_repos": List(Str), "github_admin_repos": List(Str),
+				"github_bypass": List(Str),
+				"gcp_roles":     List(Str), "gcp_admin": List(Str), "gcp_destructive": List(Str), "prod_destructive": List(Str),
+				"gcp_power_known": Bool,
+				"google_present":  Bool, "google_active": Bool, "google_admin": Bool,
+			})),
+			"systems_read":        List(Str),
+			"group_members_known": Bool,
+			"bypass_known":        Bool,
+			"production_basis":    Str,
+			"unlinked":            Obj(map[string]*Shape{"github": Int, "gcp": Int, "total": Int, "bypass_repos": List(Str)}),
+		}),
+		Fn: peoplePowers,
+	})
+	Register(Def{
 		Name: "people.unlinked", AnyConnector: peopleSystems,
 		Shape: Obj(map[string]*Shape{
 			"found": List(Obj(map[string]*Shape{
@@ -57,7 +76,7 @@ func registerPeople() {
 			"found": List(Obj(map[string]*Shape{
 				"system": Str, "kind": Str, "id": Str, "role": Str, "project": Str, "production": Bool,
 				"linked": Bool, "person": Str, "people": List(Str), "owner": Str, "unowned": Bool,
-				"current": Bool, "current_known": Bool, "power_known": Bool,
+				"current": Bool, "current_known": Bool, "power_known": Bool, "members_known": Bool, "departed": Bool,
 			})),
 			"systems_read":     List(Str),
 			"production_basis": Str,
@@ -259,6 +278,29 @@ func (x *peopleIndex) current(pid graph.ID) bool {
 	return false
 }
 
+// departed says whether a person has left, or has a Google account and every
+// one of them is suspended. A person with no Google account is not known to
+// have gone.
+func (x *peopleIndex) departed(pid graph.ID) bool {
+	p, ok := x.g.Get(pid)
+	if !ok {
+		return false
+	}
+	if x.isLeaver(p) {
+		return true
+	}
+	accounts, active := 0, 0
+	for _, acc := range x.accounts[pid] {
+		if n, ok := x.g.Get(acc); ok && n.Kind == graph.KindIdentityUser {
+			accounts++
+			if !isTrue(n.Attrs["suspended"]) {
+				active++
+			}
+		}
+	}
+	return accounts > 0 && active == 0
+}
+
 func (x *peopleIndex) production(b graph.Node) bool {
 	if !x.anyMark {
 		return true
@@ -291,23 +333,32 @@ func powerKnown(b graph.Node) bool {
 
 var orgRank = map[string]int{"none": 0, "outside": 1, "member": 2, "admin": 3}
 
-func peopleAccounts(g graph.Reader, a Args) (Result, error) {
-	x, err := newPeopleIndex(g, a, "people.accounts")
-	if err != nil {
-		return Result{}, err
-	}
-	rows := []any{}
+// personRow is what every account of one person holds, read once and shared
+// by people.accounts and people.powers.
+type personRow struct {
+	node                          graph.Node
+	email                         string
+	systems                       []any
+	googPresent, googSusp, googAd bool
+	ghPresent                     bool
+	orgRole                       string
+	admin, write, bypass          map[string]bool
+	roles                         []any
+}
+
+// personRows joins each person to their accounts: a Google user, GitHub users,
+// and GCP roles held directly or through a group.
+func (x *peopleIndex) personRows() []personRow {
+	g := x.g
+	var out []personRow
 	for _, p := range x.persons() {
 		x.r.Read = append(x.r.Read, p.ID)
-		email, _ := p.Private["email"].(string)
-		systems, _ := p.Attrs["systems"].([]any)
-		if systems == nil {
-			systems = []any{}
+		row := personRow{node: p, orgRole: "none", admin: map[string]bool{}, write: map[string]bool{}, bypass: map[string]bool{}, roles: []any{}}
+		row.email, _ = p.Private["email"].(string)
+		row.systems, _ = p.Attrs["systems"].([]any)
+		if row.systems == nil {
+			row.systems = []any{}
 		}
-		goog := map[string]any{"present": false, "suspended": false, "is_admin": false}
-		gh := map[string]any{"present": false, "org_role": "none"}
-		admin, write, bypass := map[string]bool{}, map[string]bool{}, map[string]bool{}
-		roles := []any{}
 		for _, acc := range x.accounts[p.ID] {
 			n, ok := g.Get(acc)
 			if !ok {
@@ -316,57 +367,160 @@ func peopleAccounts(g graph.Reader, a Args) (Result, error) {
 			x.r.Read = append(x.r.Read, n.ID)
 			switch n.Kind {
 			case graph.KindIdentityUser:
-				goog["present"] = true
-				goog["suspended"] = isTrue(n.Attrs["suspended"])
-				goog["is_admin"] = isTrue(n.Attrs["is_admin"]) || isTrue(n.Attrs["is_delegated_admin"])
+				row.googPresent = true
+				row.googSusp = isTrue(n.Attrs["suspended"])
+				row.googAd = isTrue(n.Attrs["is_admin"]) || isTrue(n.Attrs["is_delegated_admin"])
 			case graph.KindGitHubUser:
-				gh["present"] = true
-				if role := strAttr(n, "org_role"); orgRank[role] > orgRank[gh["org_role"].(string)] {
-					gh["org_role"] = role
+				row.ghPresent = true
+				if role := strAttr(n, "org_role"); orgRank[role] > orgRank[row.orgRole] {
+					row.orgRole = role
 				}
 				for r := range x.repo[graph.EdgeAdminOf][n.ID] {
-					admin[r] = true
+					row.admin[r] = true
 				}
 				for r := range x.repo[graph.EdgeWritesTo][n.ID] {
-					write[r] = true
+					row.write[r] = true
 				}
 				for r := range x.repo[graph.EdgeCanBypass][n.ID] {
-					bypass[r] = true
+					row.bypass[r] = true
 				}
 			case graph.KindGCPBinding:
-				roles = append(roles, x.roleRow(n, "direct"))
+				row.roles = append(row.roles, x.roleRow(n, "direct"))
 			}
 		}
 		for _, b := range x.viaGroup[p.ID] {
 			if n, ok := g.Get(b); ok {
-				roles = append(roles, x.roleRow(n, "group"))
+				row.roles = append(row.roles, x.roleRow(n, "group"))
 			}
 		}
-		sort.SliceStable(roles, func(i, j int) bool {
-			ri, rj := roles[i].(map[string]any), roles[j].(map[string]any)
+		sort.SliceStable(row.roles, func(i, j int) bool {
+			ri, rj := row.roles[i].(map[string]any), row.roles[j].(map[string]any)
 			return fmt.Sprint(ri["project"], ri["role"], ri["via"]) < fmt.Sprint(rj["project"], rj["role"], rj["via"])
 		})
-		gh["repos_admin"], gh["repos_write"], gh["repos_bypass"] = sortedKeys(admin), sortedKeys(write), sortedKeys(bypass)
-		rows = append(rows, map[string]any{
-			"id": string(p.ID), "email": email, "systems": systems, "external": isTrue(p.Attrs["external"]),
-			"leaver": x.isLeaver(p), "google": goog, "github": gh, "gcp": map[string]any{"roles": roles},
-		})
+		out = append(out, row)
 	}
-	un := x.unlinkedRows()
+	return out
+}
+
+// groupsKnown says whether the members of every group that holds a GCP role
+// were read.
+func (x *peopleIndex) groupsKnown() bool {
+	for _, gid := range x.groupOf {
+		if !x.groupKnown(gid) {
+			return false
+		}
+	}
+	return true
+}
+
+// unlinkedCounts counts unlinked accounts by system.
+func (x *peopleIndex) unlinkedCounts(un []map[string]any) map[string]any {
 	counts := map[string]int64{"github": 0, "gcp": 0}
 	for _, row := range un {
 		counts[row["system"].(string)]++
 	}
-	known := true
-	for _, gid := range x.groupOf {
-		if !x.groupKnown(gid) {
-			known = false
-		}
+	return map[string]any{"github": counts["github"], "gcp": counts["gcp"], "total": int64(len(un))}
+}
+
+func peopleAccounts(g graph.Reader, a Args) (Result, error) {
+	x, err := newPeopleIndex(g, a, "people.accounts")
+	if err != nil {
+		return Result{}, err
+	}
+	rows := []any{}
+	for _, p := range x.personRows() {
+		goog := map[string]any{"present": p.googPresent, "suspended": p.googSusp, "is_admin": p.googAd}
+		gh := map[string]any{"present": p.ghPresent, "org_role": p.orgRole,
+			"repos_admin": sortedKeys(p.admin), "repos_write": sortedKeys(p.write), "repos_bypass": sortedKeys(p.bypass)}
+		rows = append(rows, map[string]any{
+			"id": string(p.node.ID), "email": p.email, "systems": p.systems, "external": isTrue(p.node.Attrs["external"]),
+			"leaver": x.isLeaver(p.node), "google": goog, "github": gh, "gcp": map[string]any{"roles": p.roles},
+		})
 	}
 	return x.result(map[string]any{
-		"found": rows, "systems_read": x.readList, "group_members_known": known, "production_basis": x.productionBasis(),
-		"unlinked": map[string]any{"github": counts["github"], "gcp": counts["gcp"], "total": int64(len(un))},
+		"found": rows, "systems_read": x.readList, "group_members_known": x.groupsKnown(), "production_basis": x.productionBasis(),
+		"unlinked": x.unlinkedCounts(x.unlinkedRows()),
 	})
+}
+
+// peoplePowers is people.accounts flattened for drills: one row per person
+// with what their accounts can do, by system. A drill matches people by id,
+// never by email, so no address reaches a verdict's evidence.
+func peoplePowers(g graph.Reader, a Args) (Result, error) {
+	x, err := newPeopleIndex(g, a, "people.powers")
+	if err != nil {
+		return Result{}, err
+	}
+	groups := x.groupsKnown()
+	rows := []any{}
+	for _, p := range x.personRows() {
+		repos := map[string]bool{}
+		for r := range p.admin {
+			repos[r] = true
+		}
+		for r := range p.write {
+			repos[r] = true
+		}
+		roles, admin, destructive, prod := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+		known := groups
+		for _, r := range p.roles {
+			m := r.(map[string]any)
+			project := m["project"].(string)
+			roles[project+":"+m["role"].(string)] = true
+			if m["is_admin"] == true {
+				admin[project] = true
+			}
+			if m["destructive"] == true {
+				destructive[project] = true
+				if m["production"] == true {
+					prod[project] = true
+				}
+			}
+			if m["power_known"] != true {
+				known = false
+			}
+		}
+		rows = append(rows, map[string]any{
+			"id": string(p.node.ID), "email": p.email, "systems": p.systems, "external": isTrue(p.node.Attrs["external"]),
+			"leaver":         x.isLeaver(p.node),
+			"github_present": p.ghPresent, "github_org_role": p.orgRole, "github_repos": sortedKeys(repos),
+			"github_admin_repos": sortedKeys(p.admin), "github_bypass": sortedKeys(p.bypass),
+			"gcp_roles": sortedKeys(roles), "gcp_admin": sortedKeys(admin), "gcp_destructive": sortedKeys(destructive),
+			"prod_destructive": sortedKeys(prod), "gcp_power_known": known,
+			"google_present": p.googPresent, "google_active": p.googPresent && !p.googSusp, "google_admin": p.googAd,
+		})
+	}
+	un := x.unlinkedRows()
+	counts := x.unlinkedCounts(un)
+	// Repos where a GitHub account no person answers for can skip review: its
+	// cloud power cannot be joined, so a drill on the repo cannot clear it.
+	bypass := map[string]bool{}
+	for _, row := range un {
+		if row["system"] == "github" && row["kind"] == "person" {
+			for r := range x.repo[graph.EdgeCanBypass][graph.ID(row["id"].(string))] {
+				bypass[r] = true
+			}
+		}
+	}
+	counts["bypass_repos"] = sortedKeys(bypass)
+	return x.result(map[string]any{
+		"found": rows, "systems_read": x.readList, "group_members_known": groups, "bypass_known": x.bypassKnown(),
+		"production_basis": x.productionBasis(), "unlinked": counts,
+	})
+}
+
+// bypassKnown says whether who can bypass review was read for every default
+// branch rule. With GitHub not read there is nothing to know.
+func (x *peopleIndex) bypassKnown() bool {
+	if !x.read["github"] {
+		return true
+	}
+	for _, n := range x.g.Nodes(graph.KindBranchRule) {
+		if strings.HasSuffix(string(n.ID), "/default") && !isTrue(n.Attrs["bypass_actors_known"]) {
+			return false
+		}
+	}
+	return true
 }
 
 // isAdminGitHub says whether a GitHub account owns the org or administers a repo.
@@ -480,13 +634,15 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 		return Result{}, err
 	}
 	rows := []any{}
-	add := func(system, kind string, id graph.ID, role, project string, production bool, people []graph.ID, linked, powerKnown bool) {
+	add := func(system, kind string, id graph.ID, role, project string, production bool, people []graph.ID, linked, powerKnown, membersKnown bool) {
 		owner := x.owners[id]
 		ids := []any{}
 		cur := len(people) > 0
+		departed := false
 		for _, p := range people {
 			ids = append(ids, string(p))
 			cur = cur && x.current(p)
+			departed = departed || x.departed(p)
 		}
 		person := ""
 		if len(people) == 1 {
@@ -496,6 +652,7 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 			"system": system, "kind": kind, "id": string(id), "role": role, "project": project, "production": production,
 			"linked": linked, "person": person, "people": ids, "owner": owner, "unowned": !linked && owner == "",
 			"current": cur, "current_known": x.read["google"], "power_known": powerKnown,
+			"members_known": membersKnown, "departed": departed,
 		})
 		x.r.Read = append(x.r.Read, id)
 	}
@@ -517,7 +674,7 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 				continue
 			}
 			p := single(n.ID)
-			add("google", "person", n.ID, role, "", false, p, len(p) > 0, true)
+			add("google", "person", n.ID, role, "", false, p, len(p) > 0, true, true)
 		}
 	}
 	if x.read["github"] {
@@ -528,10 +685,10 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 			}
 			p := single(n.ID)
 			if strAttr(n, "org_role") == "admin" {
-				add("github", kind, n.ID, "org owner of "+strAttr(n, "org"), "", false, p, len(p) > 0, true)
+				add("github", kind, n.ID, "org owner of "+strAttr(n, "org"), "", false, p, len(p) > 0, true, true)
 			}
 			for _, repo := range sortedKeys(x.repo[graph.EdgeAdminOf][n.ID]) {
-				add("github", kind, n.ID, "admin of "+repo.(string), "", false, p, len(p) > 0, true)
+				add("github", kind, n.ID, "admin of "+repo.(string), "", false, p, len(p) > 0, true, true)
 			}
 		}
 		for _, n := range g.Nodes(graph.KindGitHubTeam) {
@@ -549,7 +706,7 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 				}
 			}
 			for _, repo := range repos {
-				add("github", "group", n.ID, "admin of "+repo.(string)+" through the team", "", false, uniq(people), all && len(people) > 0, true)
+				add("github", "group", n.ID, "admin of "+repo.(string)+" through the team", "", false, uniq(people), all && len(people) > 0, true, true)
 			}
 		}
 	}
@@ -561,7 +718,7 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 			}
 			kind := bindingKind(b)
 			var people []graph.ID
-			linked := false
+			linked, members := false, true
 			switch kind {
 			case "person":
 				people = single(b.ID)
@@ -570,13 +727,15 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 				if gid, ok := x.groupOf[b.ID]; ok && x.groupKnown(gid) {
 					people = uniq(x.members[b.ID])
 					linked = len(people) > 0
+				} else {
+					members = false
 				}
 			}
 			// A Google-managed service agent answers to Google, not to the team.
 			if kind == "service_account" && isTrue(b.Attrs["google_managed"]) && x.owners[b.ID] == "" {
 				x.owners[b.ID] = "google-managed"
 			}
-			add("gcp", kind, b.ID, strAttr(b, "role"), strAttr(b, "project"), x.production(b), people, linked, known)
+			add("gcp", kind, b.ID, strAttr(b, "role"), strAttr(b, "project"), x.production(b), people, linked, known, members)
 		}
 	}
 	return x.result(map[string]any{"found": rows, "systems_read": x.readList, "production_basis": x.productionBasis()})

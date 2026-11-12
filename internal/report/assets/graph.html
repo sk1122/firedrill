@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' role='img' aria-label='Firedrill'%3E %3Cpath d='M64 20h128l32 32v184H32V52z' fill='%23F4F2EA' stroke='%2316161A' stroke-width='8' stroke-linejoin='round'/%3E %3Ccircle cx='128' cy='56' r='13' fill='%2324272C'/%3E%3Ccircle cx='128' cy='56' r='6' fill='%23F4F2EA'/%3E %3Cpath d='M32 92h192v14H32z' fill='%2316161A'/%3E %3Cg fill='%2316161A'%3E %3Crect x='82' y='124' width='22' height='88'/%3E %3Crect x='110' y='124' width='64' height='20'/%3E %3Crect x='110' y='160' width='46' height='18'/%3E %3C/g%3E %3Ccircle cx='190' cy='200' r='15' fill='%23D3261A'/%3E %3C/svg%3E">
+<title>Firedrill Graph</title>
+<link rel="stylesheet" href="../fonts.css">
+<style>
+:root{--stock:#F4F2EA;--red:#D3261A;--green:#0B8A4E;--amber:#E8A317;--grey:#8A877C;--enamel:#24272C;--dim:#3A3E45;--muted:#B9B6AB}
+*{box-sizing:border-box}
+body{margin:0;background:var(--enamel);color:var(--stock);font:400 15px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:32px 16px 64px}
+h1{font:700 clamp(28px,6vw,40px)/1.05 "Big Shoulders Stencil",Impact,sans-serif;letter-spacing:.03em;text-transform:uppercase;margin:8px 0;overflow-wrap:anywhere}
+.meta{color:var(--muted);font:400 13px/1.5 "IBM Plex Mono",monospace;overflow-wrap:anywhere}
+a{color:var(--stock)}
+.box{overflow:auto;max-width:100%;border:1px solid var(--dim);background:#2d3036;margin:12px 0}
+svg{display:block}
+svg text{font:400 12px "IBM Plex Mono",monospace;fill:#16161A}
+svg text.zone{font:600 12px "IBM Plex Sans",sans-serif;fill:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+svg .edge{fill:none;stroke:#8A877C;stroke-width:1.3}
+svg .edge.new{stroke:#D3261A;stroke-width:2.4}
+svg a:focus-visible rect{outline:2px solid var(--amber)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--muted)}
+.sw{display:inline-block;width:12px;height:12px;border:1px solid #16161A;vertical-align:-1px;margin-right:4px}
+ul.notes{margin:0;padding-left:18px;font:400 13px/1.6 "IBM Plex Mono",monospace;overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<main>
+<a href="../index.html">Back to the board</a> · <a href="../people.html">People</a> · <a href="../agents.html">Agents</a>
+<h1>{{.Question}}</h1>
+<p>{{.Lead}}</p>
+<p class="meta">{{.Nodes}} nodes, {{.Edges}} edges drawn{{range .Zones}} · {{.Name}} {{.Nodes}}{{end}}</p>
+{{if .Hidden}}<p class="meta">{{.Hidden}} more not drawn: the drawing stops at the nearest 60. <a href="{{.RowsHref}}">See every row</a>.</p>{{end}}
+{{if .Nodes}}<div class="box">{{.SVG}}</div>{{else}}<p class="meta">Nothing to draw.</p>{{end}}
+<p class="legend"><span><span class="sw" style="background:#F4F2EA"></span>GitHub</span><span><span class="sw" style="background:#3cc986"></span>GCP</span><span><span class="sw" style="background:#E8A317"></span>Google</span><span><span class="sw" style="background:#d9d6cb"></span>person</span><span><span class="sw" style="background:#B9B6AB"></span>files and agents</span><span><span class="sw" style="background:#8A877C"></span>web</span><span>thick red or amber border: read by a failing drill</span><span>dashed red border: cut point</span><span>hover an edge for its kind</span></p>
+{{if .Notes}}<ul class="notes">{{range .Notes}}<li><a href="{{.Href}}">{{.Text}}</a></li>{{end}}</ul>{{end}}
+</main>
+</body>
+</html>

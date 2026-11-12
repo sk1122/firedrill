@@ -1,0 +1,231 @@
+firedrill: v0
+drill: agent/agent-has-own-identity
+cases:
+    - name: a personal GitHub token in a file the agent reads
+      expect: FAIL
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        bypass:
+            apps: []
+            count: 0
+            known: true
+            people: []
+            teams: []
+        secrets:
+            found:
+                - agent_readable: true
+                  env_class: unknown
+                  file: .claude/settings.local.json
+                  gitignored: true
+                  hash: 9f2c4e1a7b3d5f60a8c2e4b6d8f0a1c3
+                  in_agent_config: true
+                  key_id: ""
+                  kind: github_token
+                  line: 3
+            inspected: 4
+            shared_prod_staging: []
+        tools:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  file: .claude/settings.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        secrets: 4
+        tools: 1
+    - name: a human can bypass review where the agent pushes
+      expect: FAIL
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        bypass:
+            apps: []
+            count: 1
+            known: true
+            people:
+                - id: github:user/ana
+                  login: ""
+                  through: []
+                  via:
+                    - role
+            teams: []
+        secrets:
+            found: []
+            inspected: 4
+            shared_prod_staging: []
+        tools:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  file: .claude/settings.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        secrets: 4
+        tools: 1
+    - name: the agent has no human token and nobody can bypass
+      expect: PASS
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        bypass:
+            apps: []
+            count: 0
+            known: true
+            people: []
+            teams: []
+        secrets:
+            found:
+                - agent_readable: false
+                  env_class: unknown
+                  file: .env.local
+                  gitignored: true
+                  hash: 9f2c4e1a7b3d5f60a8c2e4b6d8f0a1c3
+                  in_agent_config: true
+                  key_id: ""
+                  kind: github_oauth
+                  line: 3
+            inspected: 4
+            shared_prod_staging: []
+        tools:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  file: .claude/settings.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        secrets: 4
+        tools: 1
+    - name: who can bypass is unknown
+      expect: WARN
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        bypass:
+            apps: []
+            count: 0
+            known: false
+            people: []
+            teams: []
+        secrets:
+            found: []
+            inspected: 4
+            shared_prod_staging: []
+        tools:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  file: .claude/settings.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        secrets: 4
+        tools: 1
+    - name: no agent config in the repo
+      expect: N/A
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        bypass:
+            apps: []
+            count: 1
+            known: true
+            people:
+                - id: github:user/ana
+                  login: ""
+                  through: []
+                  via:
+                    - role
+            teams: []
+        secrets:
+            found:
+                - agent_readable: true
+                  env_class: unknown
+                  file: scripts/deploy.sh
+                  gitignored: true
+                  hash: 9f2c4e1a7b3d5f60a8c2e4b6d8f0a1c3
+                  in_agent_config: true
+                  key_id: ""
+                  kind: github_token
+                  line: 3
+            inspected: 4
+            shared_prod_staging: []
+        tools:
+            found: []
+            inspected: 0
+            shared_credentials: []
+      inspected:
+        secrets: 4
+    - name: files read under the checkout's name, not the GitHub name
+      expect: N/A
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        protection_available: true
+      facts:
+        bypass:
+            apps: []
+            count: 1
+            known: true
+            people:
+                - id: github:user/ana
+                  login: ""
+                  through: []
+                  via:
+                    - role
+            teams: []
+        secrets:
+            found: []
+            inspected: 0
+            shared_prod_staging: []
+        tools:
+            found: []
+            inspected: 0
+            shared_credentials: []

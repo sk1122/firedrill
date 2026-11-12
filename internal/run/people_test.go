@@ -1,8 +1,11 @@
 package run
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -34,7 +37,9 @@ func personID(email string) graph.ID { return graph.ID("person:" + salt.Email(em
 //     Security Admin with none, and the Google APIs service agent is Editor;
 //   - readers is a group Google could not read; friend@mail.example, outside
 //     the domain, can delete objects; cy holds a custom role nobody could read;
-//   - dee left on 2026-10-01 and still has an active account.
+//   - dee left on 2026-10-01 and still has an active account;
+//   - acme/api deploys to production; Ana-Dev can bypass its review, and its
+//     agent config sits beside Ana's own GitHub token.
 type peopleEstate struct {
 	groupsErr    string // the groups scan's error, as a missing scope gives
 	githubOrgErr string
@@ -121,8 +126,20 @@ func (e peopleEstate) connectors() []connector.Connector {
 				Attrs: map[string]any{"org": "acme", "org_role": role, "type": "user"}, Private: map[string]any{"login": login}})
 			return id
 		}
-		u("Ana-Dev", "admin")
+		ana := u("Ana-Dev", "admin")
 		u("ghost-owner", "admin")
+		w.Node(graph.Node{ID: "github:repo/acme/api", Kind: graph.KindGitHubRepo, Source: "github", SeenAt: testNow,
+			Attrs: map[string]any{"name": "acme/api", "private": true, "plan": "team", "protection_available": true}})
+		w.Node(graph.Node{ID: "github:env/acme/api/production", Kind: graph.KindEnvironment, Source: "github", SeenAt: testNow,
+			Attrs: map[string]any{"required_reviewers": []any{}, "prevent_self_review": false, "admin_bypass": true, "protected_branches_only": false}})
+		w.Edge(graph.Edge{From: "github:repo/acme/api", To: "github:env/acme/api/production", Kind: graph.EdgeDeploysTo, Source: "github"})
+		w.Node(graph.Node{ID: "github:branch-rule/acme/api/default", Kind: graph.KindBranchRule, Source: "github", SeenAt: testNow,
+			Attrs: map[string]any{"required_approvals": int64(1), "dismiss_stale": true, "code_owner_review": false, "bypass": "allowed",
+				"bypass_source": "api", "force_push_allowed": false, "deletion_allowed": false, "bypass_actors_known": true,
+				"bypass_actors": []any{map[string]any{"kind": "user", "id": string(ana), "via": "org_admin", "through": ""}}}})
+		w.Node(graph.Node{ID: graph.ScanID("github_repo_people", "acme/api"), Kind: graph.KindScan, Source: "github", SeenAt: testNow,
+			Attrs: map[string]any{"scanner": "github_repo_people", "scope": "acme/api", "inspected": int64(1)}})
+		w.Edge(graph.Edge{From: ana, To: "github:repo/acme/api", Kind: graph.EdgeCanBypass, Source: "github"})
 		cy := u("cy-acme", "member")
 		w.Edge(graph.Edge{From: cy, To: "github:repo/acme/api", Kind: graph.EdgeAdminOf, Source: "github"})
 		w.Node(graph.Node{ID: "github:app/77", Kind: graph.KindGitHubApp, Source: "github", SeenAt: testNow, Attrs: map[string]any{"org": "acme", "name": "release-bot"}})
@@ -132,8 +149,28 @@ func (e peopleEstate) connectors() []connector.Connector {
 		w.Node(graph.Node{ID: personID("dee@acme.example"), Kind: graph.KindLeaver, Source: "hr", SeenAt: testNow,
 			Attrs: map[string]any{"leave_date": "2026-10-01"}, Private: map[string]any{"email": "dee@acme.example"}})
 	}}
-	return []connector.Connector{configsrc.New(), google, gcp, github, hr}
+	files := &fake{name: "files", available: true, write: func(w graph.Writer) {
+		w.Node(graph.Node{ID: "agent:acme/api/.claude/settings.json", Kind: graph.KindAgentConfig, Source: "files", SeenAt: testNow,
+			Attrs: map[string]any{"repo": "acme/api", "tool": "claude-code", "scope": "repo", "file": ".claude/settings.json",
+				"allowed_commands": []any{}, "denied_commands": []any{}, "deny_read_paths": []any{}, "unguarded_destructive": []any{},
+				"mcp_servers": []any{}, "gitignored": false, "local_override": false}})
+		graph.WriteScan(w, "files", "agent_configs", "acme/api", 1, "", testNow)
+		hash := h.Sum(anaToken)
+		w.Node(graph.Node{ID: graph.ID("secret:" + hash + "@acme/api/.claude/settings.local.json:2"), Kind: graph.KindSecretSeen, Source: "files", SeenAt: testNow,
+			Attrs: map[string]any{"repo": "acme/api", "kind": "github_token", "file": ".claude/settings.local.json", "line": int64(2),
+				"env_class": "unknown", "hash": hash, "agent_readable": true, "key_id": "", "in_agent_config": true, "gitignored": true}})
+		graph.WriteScan(w, "files", "secrets", "acme/api", 3, "", testNow)
+	}}
+	return []connector.Connector{configsrc.New(), google, gcp, github, hr, files}
 }
+
+// anaToken is a fake classic personal access token of Ana's, as an agent
+// could read it. Only its hash is ever written.
+const anaToken = "ghp_" + "Zx8mQ2pL9vT4rW7yB1nC6dF3Zx8mQ2pL9vT4"
+
+// tier2Drills are the four cross-system drills.
+var tier2Drills = []string{"paths/no-single-person-code-to-prod-data", "access/leavers-gone-everywhere",
+	"access/every-admin-is-someone", "agent/agent-has-own-identity"}
 
 func peopleProject() *config.Project {
 	p := &config.Project{Config: config.Config{DefaultOwner: "@default"},
@@ -154,6 +191,7 @@ fetch:
   accounts: { fact: people.accounts }
   unlinked: { fact: people.unlinked }
   admins:   { fact: people.admins }
+  powers:   { fact: people.powers }
 pass_when:
   - >-
     accounts.found.all(p, p.id != "" && p.email != "" && size(p.systems) >= 0 && (p.external || !p.external)
@@ -173,7 +211,19 @@ pass_when:
     admins.found.all(a, a.system != "" && a.kind != "" && a.id != "" && a.role != "" && a.project == a.project
     && (a.production || !a.production) && (a.linked || !a.linked) && a.person == a.person && size(a.people) >= 0
     && a.owner == a.owner && (a.unowned || !a.unowned) && (a.current || !a.current)
-    && (a.current_known || !a.current_known) && (a.power_known || !a.power_known))
+    && (a.current_known || !a.current_known) && (a.power_known || !a.power_known)
+    && (a.members_known || !a.members_known) && (a.departed || !a.departed))
+  - >-
+    powers.found.all(p, p.id != "" && p.email == p.email && size(p.systems) >= 0 && (p.external || !p.external)
+    && (p.leaver || !p.leaver) && (p.github_present || !p.github_present) && p.github_org_role != ""
+    && size(p.github_repos) >= 0 && size(p.github_admin_repos) >= 0 && size(p.github_bypass) >= 0
+    && size(p.gcp_roles) >= 0 && size(p.gcp_admin) >= 0 && size(p.gcp_destructive) >= 0 && size(p.prod_destructive) >= 0
+    && (p.gcp_power_known || !p.gcp_power_known)
+    && (p.google_present || !p.google_present) && (p.google_active || !p.google_active) && (p.google_admin || !p.google_admin))
+  - >-
+    size(powers.systems_read) > 0 && (powers.group_members_known || !powers.group_members_known)
+    && (powers.bypass_known || !powers.bypass_known) && powers.production_basis == powers.production_basis
+    && powers.unlinked.total == powers.unlinked.github + powers.unlinked.gcp && size(powers.unlinked.bypass_repos) >= 0
   - size(admins.systems_read) > 0 && admins.production_basis == admins.production_basis
 fix: "Nothing to fix: this drill only reads fields."
 `
@@ -193,7 +243,11 @@ func peopleDrill(t *testing.T) *drill.Drill {
 func runPeople(t *testing.T, e peopleEstate) (*Result, Config) {
 	t.Helper()
 	// The leavers drill brings in the HR connector.
-	c := baseConfig(t, []*drill.Drill{peopleDrill(t), loadDrill(t, "access/leavers-locked-out")}, e.connectors()...)
+	drills := []*drill.Drill{peopleDrill(t)}
+	for _, id := range tier2Drills {
+		drills = append(drills, loadDrill(t, id))
+	}
+	c := baseConfig(t, drills, e.connectors()...)
 	c.Project = peopleProject()
 	c.Scope.Project = c.Project
 	res, err := Run(context.Background(), c)
@@ -246,7 +300,7 @@ func TestPeopleFactsValidateAndWarnWhenPartial(t *testing.T) {
 		t.Fatalf("%+v", o)
 	}
 	// dee left and still has an active account.
-	if o := outcome(t, res, "access/leavers-locked-out"); o.Verdict != tag.Fail {
+	if o := outcome(t, res, "access/leavers-gone-everywhere"); o.Verdict != tag.Fail {
 		t.Fatalf("linking must not hide a leaver: %+v", o)
 	}
 	// The groups scope missing: WARN, and every group binding is unlinked.
@@ -479,5 +533,88 @@ func TestNoEmailOrLoginReachesARecord(t *testing.T) {
 		if strings.Contains(string(b), "@acme.example") || strings.Contains(string(b), "@partner.example") || strings.Contains(string(b), "@mail.example") {
 			t.Errorf("%s holds an address in its attributes: %s", n.ID, b)
 		}
+	}
+}
+
+// The four cross-system drills over the mixed estate: each fails for the
+// reason its incident or audit finding names, and people.powers puts one
+// person's power across GitHub, GCP and Google on one row.
+func TestTier2DrillsOverAMixedEstate(t *testing.T) {
+	res, _ := runPeople(t, peopleEstate{})
+	for id, want := range map[string]string{
+		// Ana can bypass review on acme/api, which deploys to production, and
+		// holds Owner on acme-prod.
+		"paths/no-single-person-code-to-prod-data": "first: person " + salt.Email("ana@acme.example")[:8],
+		// dee left and still has an active Google account.
+		"access/leavers-gone-everywhere": "first: person " + salt.Email("dee@acme.example")[:8],
+		// ghost-owner owns the GitHub org and maps to nobody.
+		"access/every-admin-is-someone": "no person or owner answers for it",
+		// Ana's own token sits in a file the agent reads.
+		"agent/agent-has-own-identity": "in .claude/settings.local.json",
+	} {
+		o := outcome(t, res, id)
+		if o.Verdict != tag.Fail || !strings.Contains(o.Reason, want) {
+			t.Errorf("%s: %s %q, want FAIL naming %q", id, o.Verdict, o.Reason, want)
+		}
+	}
+	powers, _ := factData(t, res.Graph, "people.powers")
+	var ana map[string]any
+	for _, r := range rows(powers) {
+		if r["id"] == string(personID("ana@acme.example")) {
+			ana = r
+		}
+	}
+	if ana == nil || !slices.Equal(ana["github_bypass"].([]any), []any{"acme/api"}) || !slices.Equal(ana["prod_destructive"].([]any), []any{"acme-prod"}) ||
+		ana["google_admin"] != true || ana["google_active"] != true || ana["github_org_role"] != "admin" ||
+		!slices.Equal(ana["gcp_admin"].([]any), []any{"acme-prod"}) {
+		t.Fatalf("one person's power on one row: %+v", ana)
+	}
+	if powers["group_members_known"] != false {
+		t.Fatal("the readers group could not be read")
+	}
+	for _, r := range rows(powers) {
+		if r["id"] == string(personID("cy@acme.example")) && r["gcp_power_known"] != false {
+			t.Fatalf("cy holds a custom role nobody could read: %+v", r)
+		}
+	}
+}
+
+// Tags, snapshots and diffs of the four cross-system drills hold no address,
+// login or token: drills match people by ID, and evidence keeps only what
+// conditions read.
+func TestTier2RecordsHoldNoAddressOrLogin(t *testing.T) {
+	_, c := runPeople(t, peopleEstate{})
+	c.Scope.Now = testNow.AddDate(0, 0, 7)
+	if _, err := Run(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	tags := 0
+	_ = filepath.WalkDir(c.Records, func(p string, d os.DirEntry, err error) error {
+		// The fields drill reads email on purpose, to check its shape.
+		if err != nil || d.IsDir() || strings.Contains(p, "people-fields") {
+			return err
+		}
+		b, _ := os.ReadFile(p)
+		if strings.HasSuffix(p, ".gz") {
+			z, err := gzip.NewReader(bytes.NewReader(b))
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ = io.ReadAll(z)
+		}
+		for _, id := range tier2Drills {
+			if strings.Contains(p, tag.Slug(id)) || strings.Contains(p, filepath.FromSlash(id)) {
+				tags++
+			}
+		}
+		for _, s := range []string{"@acme.example", "@partner.example", "@mail.example", "Ana-Dev", "ana-dev", "ghost-owner", "cy-acme", anaToken} {
+			if strings.Contains(string(b), s) {
+				t.Errorf("%s holds %s", p, s)
+			}
+		}
+		return nil
+	})
+	if tags < 4 {
+		t.Fatalf("expected tags of the four drills under %s, found %d", c.Records, tags)
 	}
 }

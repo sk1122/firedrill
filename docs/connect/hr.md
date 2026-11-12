@@ -1,6 +1,6 @@
 # HR leavers
 
-`access/leavers-locked-out` checks that everyone who has left the company has no active Google Workspace account. It needs [Workspace connected](google-workspace.md) and a list of leavers from your HR system.
+`access/leavers-gone-everywhere` checks that everyone who has left the company holds no active Google Workspace account, no GCP role and no GitHub org membership or repo access. It judges whichever of Google Workspace, GCP and GitHub are connected, and needs at least one of them and a list of leavers from your HR system. It supersedes `access/leavers-locked-out`, which checked Google Workspace only.
 
 ## 1. Export the leavers
 

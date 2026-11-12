@@ -86,7 +86,7 @@ td.mono{font-family:"IBM Plex Mono",monospace;font-size:13px}
 <div class="count"><b>{{.Counts.Skip}}</b><span>Skip</span></div>
 <div class="count"><b>{{.Counts.Error}}</b><span>Error</span></div>
 </section>
-<p class="changes-link"><a href="changes.html">{{if not .Changes.Present}}What changed since the last run{{else if or .Changes.Weakening .Changes.Other}}Changed since the last run: {{.Changes.Weakening}} weakening, {{.Changes.Other}} other{{else}}Nothing changed since the last run{{end}}</a></p>
+<p class="changes-link"><a href="changes.html">{{if not .Changes.Present}}What changed since the last run{{else if or .Changes.Weakening .Changes.Other}}Changed since the last run: {{.Changes.Weakening}} weakening, {{.Changes.Other}} other{{else}}Nothing changed since the last run{{end}}</a>{{if .Views}} · <a href="people.html">People</a> · <a href="agents.html">Agents</a> · <a href="graph/production.html">Who can reach production data alone?</a> · <a href="graph/changes.html">What changed, drawn</a>{{end}}</p>
 <h2>Needs attention</h2>
 {{if .Attention}}<ol class="attn">
 {{range .Attention}}<li class="{{.Class}}"><p class="attn-top"><span class="att {{.Class}}">{{.Kind}}</span>{{if .Severity}}<span>{{.Severity}}</span>{{end}}</p>

@@ -2,19 +2,19 @@
 
 Firedrill only reads, and every system it reads needs your permission first. These guides walk through each one: what to create, what to click, and how to check it worked.
 
-Start with GitHub; with it alone, 16 of the 32 starter drills run. Add the rest when you need their drills. `firedrill run` lists every drill that is waiting, and what connects it.
+Start with GitHub; with it alone, 18 of the 34 starter drills run. Add the rest when you need their drills. `firedrill run` lists every drill that is waiting, and what connects it.
 
 | System | Guide | Drills it unlocks | Time |
 | --- | --- | --- | --- |
 | GitHub | [github.md](github.md) | Change pack, remote repo files | 1 minute |
 | Repo files | [repo-files.md](repo-files.md) | Agent pack, secrets, workflows, lockfiles, Terraform | None |
-| Google Cloud | [gcp.md](gcp.md) | GCP pack, Cloud SQL backups | 15 minutes |
+| Google Cloud | [gcp.md](gcp.md) | GCP pack, Cloud SQL backups, who can delete production data (Paths pack) | 15 minutes |
 | Google Workspace | [google-workspace.md](google-workspace.md) | MFA, leavers, dormant admins, third-party apps | 10 minutes, needs a super admin |
 | AWS | [aws.md](aws.md) | Dormant admins, destructive tokens, unused keys, database backups | 5 minutes per account |
 | Anthropic | [anthropic.md](anthropic.md) | AI keys capped and owned | 5 minutes, needs an admin key |
 | OpenAI | [openai.md](openai.md) | AI keys capped and owned | 5 minutes, needs an admin key |
 | Domains | [domains.md](domains.md) | Doors pack: DNS, certificate logs, web | 5 minutes, needs DNS access |
-| HR leavers | [hr.md](hr.md) | Leavers locked out | One export |
+| HR leavers | [hr.md](hr.md) | Leavers gone everywhere | One export |
 | Semgrep | [semgrep.md](semgrep.md) | Your own Semgrep rules | One scan |
 | Postgres (optional) | [postgres.md](postgres.md) | None; faster board builds | 2 minutes |
 | Weekly CI | [ci.md](ci.md) | Everything above, every Monday | 10 minutes |

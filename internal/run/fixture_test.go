@@ -77,8 +77,8 @@ func TestStarterFixturesPass(t *testing.T) {
 	for p, msg := range problems {
 		t.Errorf("%s: %s", p, msg)
 	}
-	if len(results) != 32 {
-		t.Errorf("tested %d drills, want 32", len(results))
+	if len(results) != 34 {
+		t.Errorf("tested %d drills, want 34", len(results))
 	}
 	for p, cases := range results {
 		for _, c := range cases {

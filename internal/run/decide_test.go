@@ -156,11 +156,6 @@ func user(g *graph.Graph, email string, admin, suspended, enforced bool, login s
 		Private: map[string]any{"email": email}})
 }
 
-func leaver(g *graph.Graph, email, date string) {
-	g.Node(graph.Node{ID: graph.ID("person:" + email), Kind: graph.KindLeaver, SeenAt: testNow,
-		Attrs: map[string]any{"leave_date": date}, Private: map[string]any{"email": email}})
-}
-
 func domain(g *graph.Graph) {
 	node(g, "domain:acme.com", graph.KindConfigDomain, map[string]any{"domain": "acme.com", "verified": true})
 }
@@ -261,6 +256,10 @@ var allConnectors = map[string]bool{"github": true, "google": true, "aws": true,
 // drillCases are a passing, a failing and a not-applicable setup for every
 // starter drill. They also generate the drills' fixture files.
 func drillCases() []drillCase {
+	return append(baseCases(), tier2Cases()...)
+}
+
+func baseCases() []drillCase {
 	recent := "2026-11-01T00:00:00Z"
 	return []drillCase{
 		{"change/no-solo-ship", tag.Pass, "pass on enterprise", func(g *graph.Graph) {
@@ -421,18 +420,6 @@ func drillCases() []drillCase {
 			ciWorkflow(g, ".github/workflows/ci.yml", []any{}, []any{}, []any{}, false)
 		}},
 
-		{"access/leavers-locked-out", tag.Pass, "suspended", func(g *graph.Graph) {
-			leaver(g, "a@x.com", "2026-10-01")
-			user(g, "a@x.com", false, true, true, recent)
-		}},
-		{"access/leavers-locked-out", tag.Fail, "active", func(g *graph.Graph) {
-			leaver(g, "a@x.com", "2026-10-01")
-			user(g, "a@x.com", false, false, true, recent)
-		}},
-		{"access/leavers-locked-out", tag.NA, "future date ignored", func(g *graph.Graph) {
-			leaver(g, "a@x.com", "2027-01-01")
-			user(g, "a@x.com", false, false, true, recent)
-		}},
 		{"access/admins-use-mfa", tag.Pass, "enforced", func(g *graph.Graph) { user(g, "a@x.com", true, false, true, recent) }},
 		{"access/admins-use-mfa", tag.Fail, "not enforced", func(g *graph.Graph) { user(g, "a@x.com", true, false, false, recent) }},
 		{"access/admins-use-mfa", tag.NA, "no users", func(g *graph.Graph) {}},
@@ -474,16 +461,6 @@ func drillCases() []drillCase {
 			gcpProject(g)
 			gcpBinding(g, "roles/editor", "user", "gmail.com", false)
 		}},
-		{"gcp/no-editor-service-accounts", tag.Pass, "only Google's agent has Editor", func(g *graph.Graph) {
-			gcpProject(g)
-			gcpBinding(g, "roles/editor", "service_account", "cloudservices.gserviceaccount.com", true)
-			gcpBinding(g, "roles/storage.admin", "service_account", "acme-prod.iam.gserviceaccount.com", false)
-		}},
-		{"gcp/no-editor-service-accounts", tag.Fail, "default compute account has Editor", func(g *graph.Graph) {
-			gcpProject(g)
-			gcpBinding(g, "roles/editor", "service_account", "developer.gserviceaccount.com", false)
-		}},
-		{"gcp/no-editor-service-accounts", tag.NA, "no bindings", func(g *graph.Graph) { gcpProject(g) }},
 		{"gcp/sa-keys-short-lived", tag.Pass, "new and used", func(g *graph.Graph) {
 			gcpProject(g)
 			gcpKey(g, "k1", "2026-10-01T00:00:00Z", "2026-11-06T00:00:00Z", true)
@@ -807,8 +784,8 @@ func TestEveryDrillGoesGreenRedAndNA(t *testing.T) {
 		}
 		covered[c.id][c.verdictWant] = true
 	}
-	if len(covered) != 32 {
-		t.Errorf("covered %d drills, want 32", len(covered))
+	if len(covered) != 34 {
+		t.Errorf("covered %d drills, want 34", len(covered))
 	}
 	for id, v := range covered {
 		if !v[tag.Pass] || !v[tag.Fail] || !v[tag.NA] {
@@ -995,7 +972,7 @@ func TestGCPPartialAndUnreadableProjects(t *testing.T) {
 	}
 	g = graph.New()
 	node(g, "gcp:project/acme-prod", graph.KindGCPProject, map[string]any{"name": "acme-prod", "number": "", "member_domains": []any{}, "error": "HTTP 403"})
-	if got := Decide(loadDrill(t, "gcp/no-editor-service-accounts"), g, Options{Now: testNow, Available: all}); len(got) != 1 || got[0].Verdict != tag.Error {
+	if got := Decide(loadDrill(t, "gcp/no-outside-owners"), g, Options{Now: testNow, Available: all}); len(got) != 1 || got[0].Verdict != tag.Error {
 		t.Fatalf("an unreadable project gives ERROR on that project, got %+v", got)
 	}
 }

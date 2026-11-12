@@ -179,7 +179,10 @@ func registerIdentity() {
 	})
 	Register(Def{
 		Name: "hr.leavers", Connector: "hr",
-		Shape: List(Obj(map[string]*Shape{"email": Str, "leave_date": Str})),
+		// id is the person ID, person: and the hash of the address, so a drill
+		// can match a leaver to people.powers without putting the address in
+		// its evidence.
+		Shape: List(Obj(map[string]*Shape{"id": Str, "email": Str, "leave_date": Str})),
 		Fn: func(g graph.Reader, a Args) (Result, error) {
 			r := Result{Source: "file"}
 			rows := []any{}
@@ -192,7 +195,7 @@ func registerIdentity() {
 					continue
 				}
 				email, _ := n.Private["email"].(string)
-				rows = append(rows, map[string]any{"email": strings.ToLower(email), "leave_date": date})
+				rows = append(rows, map[string]any{"id": string(n.ID), "email": strings.ToLower(email), "leave_date": date})
 				r.Read = append(r.Read, n.ID)
 			}
 			r.Data = rows

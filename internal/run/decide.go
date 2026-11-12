@@ -408,6 +408,12 @@ func shortID(id string) string {
 	return id
 }
 
+// shortHash gives the first 8 characters of the hash at the end of an ID.
+func shortHash(id string) string {
+	h := id[strings.LastIndexAny(id, ":/")+1:]
+	return h[:min(8, len(h))]
+}
+
 // maxBlameRows bounds how many rows are tried, so a huge list stays cheap.
 const maxBlameRows = 200
 
@@ -452,6 +458,21 @@ func describeRow(row map[string]any, n int) string {
 	}
 	if id, _ := row["client_id"].(string); id != "" {
 		return fmt.Sprintf("%s, first: app %v (%s), %v users", count, row["name"], id, row["user_count"])
+	}
+	// A person is named only by a short hashed ID, never an address or login.
+	if id, _ := row["id"].(string); strings.HasPrefix(id, "person:") {
+		return fmt.Sprintf("%s, first: person %s", count, shortHash(id))
+	}
+	if _, ok := row["unowned"]; ok {
+		where := ""
+		if p, _ := row["project"].(string); p != "" {
+			where = " in " + p
+		}
+		why := "no person or owner answers for it"
+		if d, _ := row["departed"].(bool); d {
+			why = "the person it belongs to has left or is suspended"
+		}
+		return fmt.Sprintf("%s, first: %s %s %s with %s%s: %s", count, row["system"], row["kind"], shortHash(fmt.Sprint(row["id"])), row["role"], where, why)
 	}
 	if role, _ := row["role"].(string); role != "" {
 		who, _ := row["member"].(string)

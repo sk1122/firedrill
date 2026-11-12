@@ -59,10 +59,10 @@ All four read `people.powers`: it walks `same_person` from each person to every 
 
 | Drill | Safeguard | Proven by | Effort |
 | --- | --- | --- | --- |
-| `paths/no-single-person-code-to-prod-data` | Nobody can bypass review on a repo that deploys to production and also destroy data in a production account | Binance | L |
-| `access/leavers-gone-everywhere` | A leaver holds nothing in Google, AWS, GCP or GitHub | Recurring audit finding | M |
-| `access/every-admin-is-someone` | Every admin principal in every cloud maps to a current person or a named owner | Recurring audit finding | M |
-| `agent/agent-has-own-identity` | Agent commits don't arrive through a human's credentials with bypass rights; no human token in agent reach | Karakun | L |
+| `paths/no-single-person-code-to-prod-data` | Nobody can bypass review on a repo that deploys to production and also destroy data in a production GCP project. Built; AWS production accounts not built (out of scope for now) | Binance | L |
+| `access/leavers-gone-everywhere` | A leaver holds nothing in Google Workspace, GCP or GitHub. Built; AWS not built (out of scope for now) | Recurring audit finding | M |
+| `access/every-admin-is-someone` | Every admin principal in GitHub, GCP and Google Workspace maps to a current person or a named owner. Built; AWS not built (out of scope for now) | Recurring audit finding | M |
+| `agent/agent-has-own-identity` | No personal GitHub token (`ghp_`, `github_pat_`, `gho_`, `ghu_`) in a file an agent reads, and no human can bypass review on a repo with an agent config. Built from repo files and bypass actors, with no new call | Karakun | L |
 
 ### Tier 3: needs new connectors
 
@@ -80,7 +80,7 @@ Notes:
 
 ## Example drills
 
-Four drills in the format the engine runs. The first two run today; the other two fail `firedrill validate` until the fact or field marked new exists.
+Four drills in the format the engine runs. All four ship.
 
 PocketOS, as the drill that already ships (`packs/agent/no-destructive-tokens.drill.yaml`):
 
@@ -122,54 +122,55 @@ maps_to: [SOC2:CC8.1]
 
 It checks one thing. Bot approval, the production gate and bypass stay with `change/no-solo-ship` and `change/prod-deploy-gated`, so one misconfiguration gives one FAIL.
 
-Binance, as a drill. Needs `people.powers` (new), and config that names which AWS accounts are production:
+Binance, as the drill that now ships (`packs/paths/no-single-person-code-to-prod-data.drill.yaml`). It reads `people.powers` and the top-level `production` list, which names GCP projects; AWS production accounts and AWS power are not built (out of scope for now):
 
 ```yaml
 firedrill: v0
 id: paths/no-single-person-code-to-prod-data
-safeguard: "No one person can bypass review, deploy to production and destroy production data."
+safeguard: "No one person can bypass review on a repo that deploys to production and also destroy production data."
 severity: critical
 for_each: github.repos
 fetch:
-  rules:  { fact: github.branch_rules, args: { branch: default } }
-  env:    { fact: github.environment, args: { name: production } }
-  people: { fact: people.powers }
-applies_when: env.exists
+  env:      { fact: github.environment, args: { name: production } }
+  rules:    { fact: github.branch_rules, args: { branch: default } }
+  projects: { fact: gcp.projects }
+  people:   { fact: people.powers }
+applies_when: env.exists && projects.size() > 0
+na_reason: "the repo has no production environment in GitHub, or no GCP project was read to hold production data"
 pass_when:
-  - >-
-    people.filter(p,
-      target.name in p.github_bypass
-      && p.prod_destructive.size() > 0
-    ).size() == 0
+  - people.found.filter(p, target.name in p.github_bypass && p.prod_destructive.size() > 0).size() == 0
 warn_when:
-  - rules.bypass == "unknown"
-fix: "Remove the bypass, or move destructive IAM to a role that needs a second approver."
+  - "!rules.bypass_actors_known"
+  - target.name in people.unlinked.bypass_repos
+  - people.found.exists(p, target.name in p.github_bypass && !p.gcp_power_known)
+fix: "Remove this person's bypass on the default branch, or move their production role that can delete data to one that needs a second person to grant, such as a just-in-time grant with approval. List production projects under production in config.yaml so only they count."
 ```
 
-`prod_destructive` lists destructive actions in production accounts only. Counting any delete permission anywhere would fail nearly everyone at a small company.
+`prod_destructive` lists projects where the person holds a role that can delete data, in production projects only. Counting any delete permission anywhere would fail nearly everyone at a small company. When nothing is named production every project counts, and `production_basis` says so. Fetching `gcp.projects` makes the drill wait (SKIP) until GCP is connected, so a GitHub-only install never reads "no cloud power" as good news. An unlinked GitHub account that can bypass, or a bypassing person whose GCP power is unknown, gives WARN.
 
-Leavers, everywhere. Needs `people.powers` (new):
+Leavers, everywhere, as the drill that now ships (`packs/access/leavers-gone-everywhere.drill.yaml`). AWS keys are not built (out of scope for now):
 
 ```yaml
 firedrill: v0
 id: access/leavers-gone-everywhere
-safeguard: "People who left hold no account, key or role in any system."
+safeguard: "People who left hold no account, role or repo access in Google Workspace, GCP or GitHub."
 severity: critical
 fetch:
   leavers: { fact: hr.leavers }
   people:  { fact: people.powers }
-applies_when: leavers.size() > 0
+applies_when: leavers.size() > 0 && people.systems_read.size() > 0
 na_reason: "no leave dates have passed in the HR file"
 pass_when:
   - >-
-    people.filter(p, leavers.exists(l, l.email == p.email)
-      && (p.aws_active_keys > 0 || p.gcp_roles.size() > 0
-          || p.github_repos.size() > 0 || p.google_active)
-    ).size() == 0
-fix: "Disable each account listed, rotate any key they held, then rerun."
+    people.found.filter(p, leavers.exists(l, l.id == p.id)
+    && (p.google_active || p.gcp_roles.size() > 0 || p.github_repos.size() > 0
+    || p.github_org_role in ["admin", "member"])).size() == 0
+warn_when:
+  - people.unlinked.github > 0
+fix: "Suspend the leaver's Google account, remove their GCP roles and group memberships, and remove them from the GitHub org and every repo, then rerun. Map every GitHub login in people.yaml, so no leaver hides behind an unlinked account."
 ```
 
-`google_active` is false for a person with no Google account, so a missing account never reads as an active one.
+People are matched by `id`, the hashed person ID that `hr.leavers` now carries, never by email, so no address reaches a verdict's evidence. `google_active` is false for a person with no Google account, so a missing account never reads as an active one. The drill judges whichever systems were read and records them; a system read only in part, or a GitHub login that maps to nobody, gives WARN.
 
 Each drill ships with a `.test.yaml` holding at least one PASS case and one FAIL case built from the incident it names.
 
@@ -197,7 +198,7 @@ Every worry in this doc is a path that runs left to right through these four zon
 
 ### New facts this needs
 
-**`people.powers`**: one row per person, summing what every account they hold can do: GitHub repos and bypass, AWS destructive actions in production accounts and active keys, GCP roles, Google admin and whether the account is active. Four Tier 2 drills read it. It can't be built until these exist:
+**`people.powers`**: built. One row per person, summing what every account they hold can do, from the same rows as `people.accounts`: GitHub org role, repos with write or admin, and repos whose review they can bypass; GCP roles, admin and delete-capable projects, the production subset, and whether that power is known; Google presence, whether the account is active, and admin. AWS destructive actions and active keys: not built (out of scope for now). The four Tier 2 drills read it, or `people.admins`. Its prerequisites:
 
 - **GitHub people.** Built. The GitHub connector's people collection reads org members by role, outside collaborators, teams with their members, and each repo's collaborators and teams, and writes `member_of`, `admin_of` and `writes_to`. The login stays out of snapshots; `github.people` gives one row per human.
 - **Bypass actors.** Built. Branch rules keep bypass as allowed, none or unknown, and add `bypass_actors_known` and the resolved list; `github.bypass_actors` lists the people, teams and apps per repo, and each writes a `can_bypass` edge. Classic protection's allowances and `enforce_admins` are read by any token with Administration: read. Ruleset bypass lists come from the API, or from the existing admin export, which already carried each ruleset's actor list as GitHub returns it (type, ID, mode) and needed no change. Unreadable, the list is unknown, never empty.
@@ -222,7 +223,7 @@ Drills catch what someone thought to ask. These shapes catch what nobody did. Ea
 | Dormant power | High privilege and long unused | A key whose owner won't notice it's gone |
 | New edge | Present in this snapshot, absent in the last | Every weakening starts here; see the snapshot diff |
 
-Fan-in, dormant power and new edge work on today's graph. Cut-point person and orphaned power need `people.powers` and its prerequisites.
+Fan-in, dormant power and new edge work on today's graph. Cut-point person and orphaned power are built from `people.powers`, `people.admins` and `people.unlinked`, and shown on the People and Graph screens: a cut point is a person who can bypass review on a repo that deploys to production, or the only person with admin over a GCP project, the GitHub org or Workspace; orphaned power is an admin or delete-capable principal with no person and no owner.
 
 ## Snapshot diff
 
@@ -266,9 +267,9 @@ The dashboard answers three questions in order: what broke, what changed, and wh
 | Drills | Which safeguards hold? | Every drill with its state (OPEN, CLOSED, UNKNOWN, RETIRED), last verdict per target, days open, linked incident. Filter by tier, system, severity. |
 | Drill | Why is this one failing? | The safeguard sentence, each failing target, the evidence rows with their source and evidence tier, the fix, the history of verdicts as a strip, and the waiver if any. |
 | Changes | What changed since last run? | The snapshot diff, grouped by person, newest first, each entry linked to the drill it broke if any. |
-| People | Who can do what, everywhere? | One row per person from `people.powers`: GitHub repos and bypass, AWS and GCP power, Google admin, keys held, leaver status. Sorted by name; filter by system. |
-| Agents | What can each agent reach? | One row per agent config: tool, repo, MCP servers, secrets readable, keys behind those secrets and what they can delete, guarded commands. |
-| Graph | How does it connect? | The graph view, opened on a question, never on the whole graph. See below. |
+| People | Who can do what, everywhere? | One row per person from `people.powers`: GitHub repos and bypass, GCP power, Google admin, leaver status, and a link to what they can do. Sorted by short hashed ID, since names are not stored; filter by system with plain links. Below: cut points, power nobody owns, and accounts no person answers for. AWS power and keys held: not built. |
+| Agents | What can each agent reach? | One row per agent config: tool, repo, file, MCP servers, secrets readable by fingerprint, unguarded destructive commands, and whether people can bypass review on the repo. The keys behind those secrets and what they can delete: not built. |
+| Graph | How does it connect? | The graph view, opened on a question, never on the whole graph. Built as static pages: who can reach production data alone, what one person can do, what one agent config can touch, and what changed. Not built: what is reachable from outside, what one secret opens. |
 | Report | What do I hand an auditor? | The export: drills, verdicts, evidence and a coverage manifest of what was and wasn't read. |
 
 ### How it behaves
@@ -370,9 +371,9 @@ A permission error is never read as a PASS. A 403 from GitHub on bypass settings
 | `doors/no-dangling-dns` | Keep | Subdomain takeover |
 | `gcp/no-public-buckets` | Keep |  |
 | `gcp/no-outside-owners` | Keep |  |
-| `access/leavers-locked-out` | Replace | By `access/leavers-gone-everywhere` once `people.powers` exists |
+| `access/leavers-locked-out` | Replace (done) | By `access/leavers-gone-everywhere`, removed from the packs in step 8 |
 | `gcp/sa-keys-short-lived` | Replace | Folded into `change/ci-uses-oidc-not-keys` plus a key-age check in the pack |
-| `gcp/no-editor-service-accounts` | Replace | Folded into `access/every-admin-is-someone` |
+| `gcp/no-editor-service-accounts` | Replace (done) | Folded into `access/every-admin-is-someone`, removed from the packs in step 8 |
 | `doors/no-public-api-docs` | Retire | Public API docs are a choice, not a weakness |
 | `code/rules-clean` | Retire | A lint, not a safeguard; Semgrep results stay available as a fact |
 
@@ -387,7 +388,7 @@ Trust first, then the cheap incident-proven drills, then the diff, then the rule
 5. **Tier 1, the rest**, starting with `mcp-servers-known`, then the Anthropic and OpenAI admin connectors for `keys/ai-keys-capped`, then OAuth apps, manifests, OIDC and backups. Done per drill as in step 2. Built: `agent/mcp-servers-known`, `supply/installs-from-lockfile` and `change/ci-uses-oidc-not-keys`, each with fixtures from its incident, reading repo files only. Also built: `keys/ai-keys-capped`, `access/third-party-apps-reviewed` and `recovery/backups-separate-and-retained`, with their new read calls on the allowlist and fixtures from their incidents. All Tier 1 drills are built. Each new connector call was checked only against the providers' documentation and fake servers; live verification against real Google Workspace, AWS, Google Cloud, Anthropic and OpenAI accounts is still needed.
 6. **GitHub people:** org members, collaborators, teams and bypass actors, writing `member_of` and `admin_of`. Done when the graph shows who can bypass review on each repo. Built: the people collection, `writes_to` and `can_bypass` edges, `github.people`, `github.bypass_actors` and `bypass_actors_known` on `github.branch_rules`, with diff rows for new admins, new bypass actors and outside collaborators with write. Verified against fake servers only, not a live org.
 7. **Principal linking:** AWS and GCP principals joined to a person, AWS Identity Center read, production accounts named in config. Done when every admin principal either links to a person or shows as unowned. Built for Google, GCP and GitHub: the link step with `same_person`, `via_group` and `bound_to` edges, the Google groups collection, GCP role classification with custom roles read by `roles.get`, `production` on GCP projects and bindings, `owners.yaml`, and `people.accounts`, `people.unlinked` and `people.admins`, with a run-level test of the done condition over a mixed estate; diff rows for new GCP power through a link or a group, group members outside the domain and a principal losing its owner. Verified against Google's documentation and fake servers only. Not built (out of scope for now, by the owner's decision): AWS IAM Identity Center, AWS principal linking, AWS tags to a person.
-8. **`people.powers`**, then the four Tier 2 drills, then the People and Graph screens. Done when one person's power across GitHub, AWS, GCP and Google shows on one row.
+8. **`people.powers`**, then the four Tier 2 drills, then the People and Graph screens. Done when one person's power across GitHub, AWS, GCP and Google shows on one row. Built for GitHub, GCP and Google Workspace: `people.powers`, `id` on `hr.leavers`, `members_known` and `departed` on `people.admins`, GitHub token kinds for fine-grained, OAuth and user-to-server tokens, and the four Tier 2 drills (`paths/no-single-person-code-to-prod-data`, `access/leavers-gone-everywhere`, `access/every-admin-is-someone`, `agent/agent-has-own-identity`), each with fixtures from its incident or audit finding and a run-level test over a mixed estate that no address, login or token reaches a tag, snapshot or diff. They replace `access/leavers-locked-out` and `gcp/no-editor-service-accounts`. Also built: the cut-point person and orphaned power patterns, a subgraph extractor, and the People, Agents and graph pages (production, per person, per agent config, what changed) as server-side SVG. Verified against fakes only. Not built: AWS power in `people.powers` (out of scope for now, by the owner's decision), the graph pages for what is reachable from outside and what one secret opens, and names on the People page.
 9. **Tier 3** as connectors allow.
 
 Open questions:

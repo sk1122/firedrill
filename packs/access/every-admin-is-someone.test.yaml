@@ -1,0 +1,207 @@
+firedrill: v0
+drill: access/every-admin-is-someone
+cases:
+    - name: the default Compute account has Editor and no owner
+      expect: FAIL
+      facts:
+        admins:
+            found:
+                - current: true
+                  current_known: true
+                  departed: false
+                  id: google:user/ana
+                  kind: person
+                  linked: true
+                  members_known: true
+                  owner: ""
+                  people:
+                    - person:ana
+                  person: person:ana
+                  power_known: true
+                  production: false
+                  project: ""
+                  role: super admin
+                  system: google
+                  unowned: false
+                - current: false
+                  current_known: true
+                  departed: false
+                  id: gcp:binding/acme-prod/roles/editor/service_account
+                  kind: service_account
+                  linked: false
+                  members_known: true
+                  owner: ""
+                  people: []
+                  person: ""
+                  power_known: true
+                  production: true
+                  project: acme-prod
+                  role: roles/editor
+                  system: gcp
+                  unowned: true
+            production_basis: ""
+            systems_read:
+                - google
+                - gcp
+    - name: an org owner who has left
+      expect: FAIL
+      facts:
+        admins:
+            found:
+                - current: false
+                  current_known: true
+                  departed: true
+                  id: github:user/dee
+                  kind: person
+                  linked: true
+                  members_known: true
+                  owner: ""
+                  people:
+                    - person:dee
+                  person: person:dee
+                  power_known: true
+                  production: false
+                  project: ""
+                  role: org owner of acme
+                  system: github
+                  unowned: false
+            production_basis: ""
+            systems_read:
+                - google
+                - github
+    - name: each admin is a current person or has an owner
+      expect: PASS
+      facts:
+        admins:
+            found:
+                - current: true
+                  current_known: true
+                  departed: false
+                  id: google:user/ana
+                  kind: person
+                  linked: true
+                  members_known: true
+                  owner: ""
+                  people:
+                    - person:ana
+                  person: person:ana
+                  power_known: true
+                  production: false
+                  project: ""
+                  role: super admin
+                  system: google
+                  unowned: false
+                - current: false
+                  current_known: true
+                  departed: false
+                  id: gcp:binding/acme-prod/roles/editor/service_account
+                  kind: service_account
+                  linked: false
+                  members_known: true
+                  owner: platform-team
+                  people: []
+                  person: ""
+                  power_known: true
+                  production: true
+                  project: acme-prod
+                  role: roles/editor
+                  system: gcp
+                  unowned: false
+                - current: true
+                  current_known: true
+                  departed: false
+                  id: gcp:binding/acme-prod/roles/owner/user-ana
+                  kind: person
+                  linked: true
+                  members_known: true
+                  owner: ""
+                  people:
+                    - person:ana
+                  person: person:ana
+                  power_known: true
+                  production: true
+                  project: acme-prod
+                  role: roles/owner
+                  system: gcp
+                  unowned: false
+            production_basis: ""
+            systems_read:
+                - google
+                - gcp
+    - name: the members of an owner group could not be read
+      expect: WARN
+      facts:
+        admins:
+            found:
+                - current: true
+                  current_known: true
+                  departed: false
+                  id: google:user/ana
+                  kind: person
+                  linked: true
+                  members_known: true
+                  owner: ""
+                  people:
+                    - person:ana
+                  person: person:ana
+                  power_known: true
+                  production: false
+                  project: ""
+                  role: super admin
+                  system: google
+                  unowned: false
+                - current: false
+                  current_known: true
+                  departed: false
+                  id: gcp:binding/acme-prod/roles/owner/group
+                  kind: group
+                  linked: false
+                  members_known: false
+                  owner: ""
+                  people: []
+                  person: ""
+                  power_known: true
+                  production: true
+                  project: acme-prod
+                  role: roles/owner
+                  system: gcp
+                  unowned: true
+            production_basis: ""
+            systems_read:
+                - google
+                - gcp
+      partial:
+        admins: the members of 1 of 1 groups that hold a GCP role could not be read
+    - name: Google not connected, so whether the owner is current is unknown
+      expect: WARN
+      facts:
+        admins:
+            found:
+                - current: false
+                  current_known: false
+                  departed: false
+                  id: github:user/ana
+                  kind: person
+                  linked: true
+                  members_known: true
+                  owner: ""
+                  people:
+                    - person:ana
+                  person: person:ana
+                  power_known: true
+                  production: false
+                  project: ""
+                  role: org owner of acme
+                  system: github
+                  unowned: false
+            production_basis: ""
+            systems_read:
+                - github
+    - name: no admin
+      expect: N/A
+      facts:
+        admins:
+            found: []
+            production_basis: ""
+            systems_read:
+                - google
