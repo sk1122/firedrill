@@ -81,7 +81,7 @@ Eight nouns make up the product. Most users only ever meet four of them: drill, 
 
 - **PASS:** every condition held, and at least one of the drill's scanning facts inspected something (see "Inspected and found").
 - **FAIL:** at least one condition failed. The failing conditions and their data print with the result.
-- **WARN:** a `warn_when` condition matched, or Firedrill could read only part of what it needed.
+- **WARN:** a `warn_when` condition matched, Firedrill could read only part of what it needed, or a FAIL rested only on inferred evidence (see "Evidence tiers").
 - **N/A:** the drill does not apply here (its `applies_when` was false), or it had nothing to check. It prints with its reason.
 - **SKIP:** the drill needs a system that is not connected. Skips print as one footer line with the command that connects the system.
 - **ERROR:** a fetch failed or a condition named a field that does not exist.
@@ -96,6 +96,12 @@ Eight nouns make up the product. Most users only ever meet four of them: drill, 
 | RETIRED | The target was listed under `retired` in config, with a reason and an approver |
 
 An OPEN safeguard whose latest verdict is N/A, SKIP, WARN or ERROR stays OPEN and is flagged "open, unverified this run", so a failure cannot disappear by disconnecting a system or deleting the thing it was about. A FAIL after an ERROR on an OPEN safeguard is not new. A CLOSED safeguard whose latest verdict is not PASS is flagged "closed, unverified since" a date.
+
+**Evidence tiers.** Each fact result has a tier, worked out in one place from its source: `api` is verified (read from a live API); `file`, `config` and `admin_export` are declared (read from a config file or an export). A fact can also list fields as inferred: values worked out from naming or another heuristic rather than read, such as an environment class guessed from path words. When a run would give FAIL, Firedrill looks at the fields each failing condition reads. If every failing condition reads at least one fact field and every field they read is inferred, the verdict is WARN with the reason `only inferred evidence: ` and the usual fail reason, so a guess never opens a safeguard and no waiver is applied. A failing condition that reads any field that was read rather than guessed, or that reads no field at all, keeps the FAIL. No shipped fact marks a field inferred yet; which fields count is still to be decided.
+
+**Shadow mode.** A drill new to an established install runs in shadow for `shadow_days` (default 14): it reports, but it doesn't fail a run. A drill is new when its first tag, on any target, is younger than the window or it has none yet; the install is established when its records hold a tag of any drill at least that old. On a brand-new install nothing is in shadow, so a first run still fails on real findings. A shadowed result is decided, recorded and shown as normal, marked "shadow until" a date, and never changes the exit code, not even an ERROR. Only the records of the stream being run count. On the first run after shadow ends, a safeguard that opened in shadow and is still open and unwaived counts as newly open once, so it fails CI under the normal rule.
+
+**Review flag.** A safeguard that has stayed OPEN with no fix and no waiver for `review_after_days` (default 30) is flagged for review: either the safeguard is wrong or nobody owns it. The clock starts at the first tag of the current open stretch; a CLOSED or RETIRED state ends a stretch, a waived tag restarts the clock at the next unwaived one, and SKIP, ERROR, N/A and WARN runs inside the stretch don't reset it. The flag lists the safeguard under "Needs review" with the days it has been open. It never changes the verdict, the state or the exit code.
 
 ## The drill format
 
@@ -173,21 +179,27 @@ Connectors write everything they see into one graph (see Architecture), and each
 | `github.environment(name)` | `exists`, `reviewers_available`, `required_reviewers`, `prevent_self_review`, `admin_bypass`, `protected_branches_only` | GitHub |
 | `github.actions_permissions` | `can_approve_pull_requests`, `default_token_permission` | GitHub |
 | `identity.users` | `email`, `suspended`, `is_admin`, `is_delegated_admin`, `mfa_enrolled`, `mfa_enforced`, `last_login`, `days_since_login`, `days_since_created` | Google Workspace (Okta in v0.1, same fields) |
-| `aws.principals` | IAM users and roles in every connected account: `account`, `kind`, `name`, `last_used`, `keys`, `is_admin`, `destructive_actions`, `excluded` (AWS-reserved SSO roles and config-listed break-glass roles), `days_since_used`, `days_since_created` | AWS |
+| `aws.principals` | IAM users and roles in every connected account: `account`, `kind`, `name`, `last_used`, `keys`, `is_admin`, `destructive_actions`, `excluded` (AWS-reserved SSO roles and config-listed break-glass roles), `days_since_used`, `days_since_created`, `github_oidc` (the role's trust policy federates GitHub Actions tokens from `token.actions.githubusercontent.com`) and `github_oidc_unscoped` (it does so with no `sub` condition, or a `sub` that allows more than one org, such as `repo:*`). Both are read from the trust policy `GetAccountAuthorizationDetails` already returns, and are false for users | AWS |
 | `aws.agent_keys` | Every AWS access key ID found in agent-readable files or agent configs, joined to its owner: `key_id`, `files`, `agents`, `account` (or `unknown_account` when the key belongs to an account that is not connected), `user`, `is_admin`, `destructive_actions` | AWS |
 | `hr.leavers` | `email`, `leave_date` | HR CSV |
 | `gcp.projects` | Target list for GCP drills: the projects under `gcp.projects` in config, with `name`, `number`, `member_domains` (from `gcp.member_domains`, or `google.domain`) | Google Cloud |
 | `gcp.iam_bindings` | Each project IAM binding per member: `role`, `member_type` (`user`, `group`, `domain`, `service_account`, `allUsers`, `allAuthenticatedUsers`, or `deleted_` and the type), `member_domain`, `member` (blank for people), `google_managed`, `default_account`, `conditional` | Google Cloud |
 | `gcp.buckets` | Each Cloud Storage bucket: `name`, `public_grants`, `public_access_prevention`, `uniform_access` | Google Cloud |
 | `gcp.sa_keys` | Each user-managed service account key: `service_account`, `key_id`, `disabled`, `days_since_created`, `days_since_used`, `last_use_known` | Google Cloud |
+| `identity.oauth_apps` | Each third-party app users granted OAuth access, from the Directory API's `tokens.list` per user: `client_id`, `name`, `scopes` (the union across users), `sensitive_scopes` (Gmail, Drive other than per-file scopes, Docs, Sheets and Slides, Admin SDK and `cloud-platform` scopes), `high_risk` (any sensitive scope), `user_count`, `native`, `anonymous`, and from `.firedrill/apps.yaml`: `owner`, `reviewed`, `days_since_review` (-1 when never) and `review_current` (reviewed within `google.review_days`, 180 unless set). Who granted it is a `granted_to` edge to a hashed person. Missing the `admin.directory.user.security` scope gives ERROR here only; a user whose grants could not be read makes it partial | Google Workspace |
+| `aws.backups`, `gcp.backups` | `found`: each RDS instance or cluster, or Cloud SQL instance, with `system`, `account` or `project`, `region`, `name`, `engine`, `production` and `production_basis`, `automated_backups`, `retention_days` (Cloud SQL: daily backups kept), `retention_ok` (at least `recovery.min_retention_days`, 7 unless set), `deletion_protection`, `separate_copy` (`yes`: a completed AWS Backup copy job into another account's vault in the last 35 days; `no`: copy jobs were readable and none went to another account; `unknown`: copy jobs unreadable, and always for Cloud SQL, which keeps backups in the instance's own project; `declared`: `.firedrill/backups.yaml` names a copy) and `copy_detail`. Also `systems` and `min_retention_days`. A database is production when its account, profile or project is listed under `production`, or it is tagged `env`/`environment` = `prod`/`production`; with nothing listed or tagged, every database is | AWS, Google Cloud |
+| `recovery.databases` | The same rows from whichever of AWS and Google Cloud were read, with `systems` naming them. It needs either one, not both; with neither connected its drills wait for `connect aws or connect gcp` | AWS or Google Cloud |
+| `anthropic.keys`, `openai.keys` | `found`: each provider API key with `provider`, `key_id` (the provider's ID, never the secret), `hint` (the provider's own redacted hint, kept only in that shape), `name`, `status`, `workspace` and `workspace_name` (Anthropic) or `project` and `project_name` (OpenAI), `owner_kind`, `has_owner`, `owner` (a hashed person ID or provider user ID, never an email), `owner_source`, `limit_readable`, `capped`, `limit_scope` (`organization`, `project`, `declared`, `none`, `unknown`), `cap_source` and `days_since_created`. `.firedrill/ai-keys.yaml` adds owners and monthly limits the API cannot show. Anthropic's Admin API shows no spend limit, so its keys are never `limit_readable` unless declared. Also `providers` | Anthropic, OpenAI |
+| `keys.ai` | The same rows from whichever of Anthropic and OpenAI were read. It needs either one | Anthropic or OpenAI |
 
 **Keyless facts.** These need no account or API key, except that remote repos are read through the GitHub connection.
 
 | Fact | Returns | `inspected` counts | Connector |
 | --- | --- | --- | --- |
-| `files.secrets` | `found`: each secret with `kind`, `file`, `line`, `env_class` (`prod`, `staging`, `example`, `unknown`), `hash`, `agent_readable`, and `key_id` for AWS keys (an identifier, never the secret). Also `shared_prod_staging`, the hashes seen in both | Text files scanned | Repo files |
-| `files.agent_configs` | `found`: each config with `tool`, `scope` (repo or user), `allowed_commands`, `denied_commands`, `deny_read_paths`, `mcp_servers` and the secrets or variable names passed to each, `unguarded_destructive`. Also `shared_credentials`, those given to more than one server | Agent config files found | Repo files |
-| `files.workflows` | `found`: each workflow with `file`, `permissions`, `unpinned_actions`, `pull_request_target_checkout` | Workflow files read | Repo files |
+| `files.secrets` | `found`: each secret with `kind`, `file`, `line`, `env_class` (`prod`, `staging`, `example`, `unknown`), `hash`, `agent_readable`, `key_id` for AWS keys (an identifier, never the secret), `in_agent_config` (the file is a coding agent's config file) and `gitignored` (`.gitignore` excludes the file; always false for committed files read through GitHub). Also `shared_prod_staging`, the hashes seen in both | Text files scanned | Repo files |
+| `files.agent_configs` | `found`: each config with `tool`, `scope` (repo or user), `allowed_commands`, `denied_commands`, `deny_read_paths`, `mcp_servers` (each with `name`, `credentials`, the secrets or variable names passed to it, `transport` (`http` for a server defined by a URL, `stdio` for a command; a stdio server that runs `mcp-remote` against a URL counts as `http`), `host` (the URL's hostname alone, never the path or query), `host_known` (under a verified domain, a host in `hosts.yaml` or an entry of `agents.mcp_hosts`, or loopback), `command` (the executable's base name, never its arguments), `package` and `version` (what `npx`, `bunx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `uvx`, `uv tool run`, `pipx run` or `docker run` fetches; empty for local code), `pinned` (no package, or an exact version or digest) and `package_known` (no package, or one named in `agents.mcp_packages`)), `unguarded_destructive`, `gitignored`, and `local_override` (a file meant to stay on one machine, such as `.claude/settings.local.json`). Also `shared_credentials`, those given to more than one server | Agent config files found | Repo files |
+| `files.workflows` | `found`: each workflow with `file`, `permissions`, `unpinned_actions`, `pull_request_target_checkout`, `triggers` (every event under `on:`) and `secrets` (the names of the secrets it references, never their values, without `GITHUB_TOKEN`; `inherit` when a job passes every secret to a reusable workflow), `unfrozen_installs` (JavaScript install commands in `run:` steps that may change the lockfile, by their head: `npm install`, `pnpm install --no-frozen-lockfile`, `yarn install`, `bun install`), `cloud_key_secrets` (secrets that hold a long-lived cloud key, by name or by use) and `uses_oidc` (the workflow grants `id-token: write` and a step trades the token for cloud credentials) | Workflow files read | Repo files |
+| `files.manifests` | `found`: each `package.json` (npm, pnpm, yarn and bun only) with `file`, `manager`, `lockfile` (beside it or at its workspace root; empty when none), `lockfile_committed` (it exists and `.gitignore` does not exclude it), `install_scripts` (the dependencies its lockfile marks as running install scripts; no other dependency is kept), `install_scripts_known` (false for yarn and bun lockfiles, npm v1 and pnpm 9 lockfiles, and lockfiles over 32 MB, which do not say) and `new_install_scripts` (install scripts not in the baseline: the previous run's list less what that run itself reported as new, so a new script stays new until it leaves the lockfile; empty on a first run and for a manifest first seen) | `package.json` files read | Repo files |
 | `files.terraform` | `found`: each S3 bucket with `public_acl`, `public_policy`, `public_access_block` | `.tf` files read | Repo files |
 | `files.json(path)`, `files.yaml(path)` | The parsed content of one JSON or YAML file, for rules no built-in fact covers | 1 if the file exists | Repo files |
 | `semgrep.results` | `found`: each finding with `rule`, `severity`, `file`, `line` | 1 if the results file was read | Semgrep |
@@ -221,6 +233,9 @@ Library drills over a system's object lists, such as `identity.users`, declare a
 | GCP | `gcp/no-outside-owners` | Only accounts in the company's own domains hold Owner or Editor on a project | `gcp.iam_bindings` |
 | GCP | `gcp/no-editor-service-accounts` | No service account holds Owner or Editor, including the default Compute account. Google-managed service agents are left out | `gcp.iam_bindings` |
 | GCP | `gcp/sa-keys-short-lived` | No user-managed service account key is older than 90 days or unused for 90 days | `gcp.sa_keys` |
+| Access | `access/third-party-apps-reviewed` | No third-party OAuth app holds Gmail, Drive or admin access to the Google Workspace without a named owner and a review date that has not lapsed | `identity.oauth_apps` |
+| Recovery | `recovery/backups-separate-and-retained` | Every production database has automated backups kept for a minimum number of days, with a copy in a different account or project from the database. WARN where the copy cannot be seen | `recovery.databases` |
+| Keys | `keys/ai-keys-capped` | Every Anthropic and OpenAI API key sits under a hard spend limit and has a named owner. WARN where the limit cannot be read and is not declared | `keys.ai` |
 
 **Keyless drills.** These run with no API key, so most teams get them on the first run.
 
@@ -228,10 +243,15 @@ Library drills over a system's object lists, such as `identity.users`, declare a
 | --- | --- | --- | --- |
 | Change | `change/actions-pinned` | Third-party GitHub Actions are pinned to a commit | `files.workflows` |
 | Change | `change/workflow-tokens-read-only` | Every workflow declares read-only token permissions unless a job needs more, and no `pull_request_target` job checks out pull request code | `files.workflows` |
+| Change | `change/no-pr-target-with-secrets` | A workflow an outside pull request can trigger never runs with secrets or more than a read-only token | `files.workflows` |
+| Change | `change/ci-uses-oidc-not-keys` | CI reaches the cloud through short-lived OIDC credentials, never a long-lived cloud key stored as a secret | `files.workflows` |
+| Supply | `supply/installs-from-lockfile` | Every JavaScript project (npm, pnpm, yarn or bun) commits its lockfile and CI installs from it without changing it; no dependency gained an install script since the last run. Other ecosystems are not judged | `files.manifests`, `files.workflows` |
 | Access | `access/no-shared-prod-keys` | Staging and production never share a secret | `files.secrets` |
 | Agent | `agent/no-prod-secrets-in-agent-reach` | No production or unclassified credential sits in a file a coding agent can read | `files.secrets`, `files.agent_configs` |
 | Agent | `agent/destructive-commands-gated` | Committed agent settings require approval for destructive commands | `files.agent_configs` |
 | Agent | `agent/no-shared-agent-keys` | Each agent and MCP server has its own credential | `files.agent_configs` |
+| Agent | `agent/no-secrets-in-agent-config` | No secret sits in a coding agent's config files, and local agent settings are gitignored | `files.secrets`, `files.agent_configs` |
+| Agent | `agent/mcp-servers-known` | Every MCP server in an agent config points at an owned or allowlisted host, and any package it runs is pinned to an exact version; WARN when a pinned package is not on the allowlist | `files.agent_configs` |
 | Doors | `doors/no-public-source-maps` | Production JavaScript serves no source maps | `web.source_maps` |
 | Doors | `doors/no-public-api-docs` | Swagger, OpenAPI and runtime config files are not public in production | `web.api_docs` |
 | Doors | `doors/no-dangling-dns` | No CNAME points at a name that no longer resolves, the usual start of a subdomain takeover | `dns.cnames` |
@@ -239,9 +259,9 @@ Library drills over a system's object lists, such as `identity.users`, declare a
 | Doors | `doors/no-public-buckets-in-terraform` | No S3 bucket defined in Terraform is public | `files.terraform` |
 | Code | `code/rules-clean` | The team's own Semgrep rules report no error-level findings | `semgrep.results` |
 
-`destructive-commands-gated` and `no-shared-agent-keys` apply only where agent configs were found; with none committed, they return N/A ("agents run with their defaults; check laptops with `--include-home`").
+`destructive-commands-gated`, `no-shared-agent-keys` and `mcp-servers-known` apply only where agent configs were found; with none committed, they return N/A ("agents run with their defaults; check laptops with `--include-home`").
 
-**What the Agent pack can and cannot see.** CI sees committed files only, and its results say "committed files only". Laptop runs also read `.env*` and `.claude/settings.local.json` even when `.gitignore` excludes them, and user-level agent files with `--include-home`. When an MCP config passes `${TOKEN}` instead of a value, Firedrill records the reference and, on a laptop, hashes the value from the current environment if it is set.
+**What the Agent pack can and cannot see.** CI sees committed files only, and its results say "committed files only". Laptop runs also read `.env*` and every agent config file even when `.gitignore` excludes them, and user-level agent files with `--include-home`. When an MCP config passes `${TOKEN}` instead of a value, Firedrill records the reference and, on a laptop, hashes the value from the current environment if it is set.
 
 **How the PocketOS case is caught.**
 
@@ -252,7 +272,7 @@ Library drills over a system's object lists, such as `identity.users`, declare a
 - A token with no readable scope is treated as full access.
 - A replica of the PocketOS repo, with a prefix-less token in an unrelated script and no agent config, is a required test fixture that must FAIL.
 
-**Keeping false positives down.** Files under `testdata/`, `fixtures/`, `__tests__/`, `test/` and `tests/`, test files such as `*_test.go`, and files ending in `.example`, `.sample` or `.template`, are classed `example` and are out of scope; config can change these paths. A waiver can name a single finding by file and secret hash, so accepting one fake key never hides a real one found later in the same repo.
+**Keeping false positives down.** Only files ending in `.example`, `.sample` or `.template` are classed `example` by default and are out of scope. Test folders and test files (`test/`, `tests/`, `testdata/`, `fixtures/`, `__tests__/`, `*_test.go`) are not examples, because a real credential committed there would be hidden; they are classed by the normal rules. A team that keeps only fakes in a folder can add it under `secrets.example_paths` in `.firedrill/config.yaml`. A waiver can name a single finding by file and secret hash, so accepting one fake key never hides a real one found later in the same repo.
 
 **Rules for web and certificate checks.** `ctlog.hosts`, `dns.cnames` and the web facts only cover domains listed under `domains` in config and verified with `firedrill verify-domain`. Web facts only reach hosts under a domain verified with `firedrill verify-domain`, which issues a value to publish as a DNS TXT record and checks it at the start of every run. Each drill sends at most 20 GET requests per host and 500 in total, identifies itself with a `firedrill/<version>` user agent, and keeps only the headers, the first 4 KB and the last 1 KB of each response. The source-map drill reads each bundle's `SourceMap` header and its closing `sourceMappingURL` comment, then requests the `.map` URL directly. Hosts found in certificate logs outside verified domains are reported, never requested. crt.sh is public and rate-limited, so `ctlog.hosts` caches results for 24 hours and returns WARN when the service is down.
 
@@ -280,6 +300,7 @@ go install github.com/<org>/firedrill/cmd/firedrill@latest
 branch firedrill-tags      the canonical records
   tags/<drill>/<target>/<time>.json
   snapshots/<time>.json.gz
+  diffs/<time>.json        what changed since the previous run, with the SHA-256 of both snapshots
 ```
 
 Laptop runs write their own records to `.firedrill/local/`, which is gitignored.
@@ -296,22 +317,28 @@ semgrep: { results: semgrep.json }
 domains: [acme.com]
 default_owner: "@arjun"
 retired: []
+shadow_days: 14          # a new drill reports without failing a run; 0 turns shadow off
+review_after_days: 30    # flag a safeguard open this long with no fix or waiver; 0 turns it off
+agents:
+  mcp_hosts: [mcp.vendor.example]   # MCP hosts or domains allowed besides verified domains and hosts.yaml
+  mcp_packages: ["@acme/mcp-fs"]    # exact package or image names an MCP server may run
 ```
 
 | Command | What it does |
 | --- | --- |
 | `firedrill init` | Creates `.firedrill/`, reads the git remote, asks which repos and systems to cover and who the default owner is, generates the secret salt, copies the starter packs. `--yes` skips questions |
-| `firedrill connect <system>` | Checks access to GitHub, Google, AWS or a keyless source and prints the exact permissions and setup steps |
+| `firedrill connect <system>` | Checks access to GitHub, Google, AWS, Google Cloud or a keyless source and prints the exact permissions and setup steps. On success it records the system under `connected:` in config.yaml; GitHub, Google, AWS and Google Cloud are never called without that entry, whatever credentials the machine holds. Projects set up before the list existed run `connect` once per system |
 | `firedrill run` | Runs every drill. Flags: `--drill`, `--pack`, `--path` (local checkouts to read), `--dry-run`, `--json <file>`, `--include-home`, `--fail-on open` or `--fail-on any`, `--public-ok`, `--records <dir>` |
 | `firedrill verify <drill>` | Reruns one drill and reports whether its safeguard is now closed |
 | `firedrill verify-domain <domain>` | Issues a DNS TXT value and confirms it, so web checks may reach hosts under that domain |
 | `firedrill export rulesets` | Run by a repo admin: writes the ruleset bypass lists to `.firedrill/evidence/rulesets.json` |
 | `firedrill list` | Every drill with owner, state, last verdict and waiver |
-| `firedrill explain <drill>` | What the drill checks, the data it saw and why it failed, from a template |
-| `firedrill report` | Writes the HTML board. `--summary <file>` prints the step summary from a `--json` result |
+| `firedrill explain <drill>` | What the drill checks, the data it saw with each fact's source and evidence tier, and why it failed, from a template |
+| `firedrill report` | Writes the HTML board, with a Changes page for the latest diff. `--summary <file>` prints the step summary from a `--json` result |
+| `firedrill diff` | Shows what changed between the two most recent runs of the same stream: weakenings first, grouped by type and by person, then other changes, then what was not compared because a system was not read in both runs. `--from` and `--to` take a snapshot file or its timestamp, `--json` prints the stored form, `--records <dir>` as for `report`. Reads local records only; makes no calls and writes nothing |
 | `firedrill validate [file]` | Checks drill files against the format and the list of facts |
 
-**Workflow 1: the first five minutes.** `init`, `connect github`, `run`. If the GitHub CLI is logged in, `connect github` reuses its token, so there is nothing to create. With GitHub alone, 11 of the 24 drills run. The rest appear as one line: *9 drills waiting: connect google (about 10 minutes, needs a super admin), connect aws (about 2 minutes), verify-domain acme.com (one DNS record), an HR leavers CSV, a Semgrep results file.*
+**Workflow 1: the first five minutes.** `init`, `connect github`, `run`. If the GitHub CLI is logged in, `connect github` reuses its token, so there is nothing to create. With GitHub alone, 16 of the 32 drills run. The rest appear as one line: *12 drills waiting: connect google (about 10 minutes, needs a super admin), connect aws (about 2 minutes), connect aws or connect gcp, connect anthropic or connect openai (an admin key), verify-domain acme.com (one DNS record), an HR leavers CSV, a Semgrep results file.*
 
 ```text
 $ firedrill run
@@ -321,8 +348,10 @@ FAIL  change/no-solo-ship                   acme/api  bypass allowed on main
 N/A   change/no-solo-ship                   acme/web  no production environment in GitHub
 PASS  change/no-force-push-main             acme/api
 FAIL  agent/no-prod-secrets-in-agent-reach  acme/api  unknown-env token in scripts/domains.sh, readable by agents
+FAIL  change/no-pr-target-with-secrets      acme/web  1 failing, first in .github/workflows/label.yml  shadow until 2026-11-26
 
-Needs attention: 2 newly open, 0 closed
+Needs attention: 3 newly open, 0 closed, 1 to review
+review: doors/every-host-owned global  open 34 days with no fix or waiver: fix it, waive it with an expiry, or retire the drill
 next: fix, then  firedrill verify change/no-solo-ship
 ```
 
@@ -348,9 +377,11 @@ next: fix, then  firedrill verify change/no-solo-ship
 | Connector | Setup | Access | Time |
 | --- | --- | --- | --- |
 | GitHub | `gh auth token` on a laptop; `FIREDRILL_GITHUB_TOKEN` in CI | Metadata, Administration, Environments and Contents, read | 1 minute |
-| Google Workspace | A service account with domain-wide delegation, approved once by a super admin | `admin.directory.user.readonly` | About 10 minutes |
-| Google Cloud | A reader service account with read roles only, used through gcloud's application default login with impersonation, so no key exists. Tokens ask for `cloud-platform`, the only scope the IAM API accepts, so the reader's roles and the guard keep it to reads. Or a credentials file in `FIREDRILL_GCP_CREDENTIALS`. Projects under `gcp.projects` | Viewer and Security Reviewer on each project; Activity Analysis Viewer for key last use, which is evidence only | About 2 minutes |
-| AWS | The default credential chain, one profile per account | A custom read policy that `connect aws` prints: `GetAccountAuthorizationDetails`, `GetAccessKeyLastUsed`, `ListAccessKeys`, `GenerateCredentialReport`, `GetCredentialReport` | About 2 minutes per account |
+| Google Workspace | A service account with domain-wide delegation, approved once by a super admin | `admin.directory.user.readonly`, and `admin.directory.user.security` for third-party app grants; Google has no read-only scope for `tokens.list`, so the guard keeps it to GET | About 10 minutes |
+| Google Cloud | A reader service account with read roles only, used through gcloud's application default login with impersonation, so no key exists. Tokens ask for `cloud-platform`, the only scope the IAM API accepts, so the reader's roles and the guard keep it to reads. Or a credentials file in `FIREDRILL_GCP_CREDENTIALS`. Projects under `gcp.projects`. Cloud SQL is read with `instances.list`, with `sqladmin.googleapis.com` turned on in the reader's project | Viewer and Security Reviewer on each project; Activity Analysis Viewer for key last use, which is evidence only | About 2 minutes |
+| AWS | The default credential chain, one profile per account. Databases are read in each region under `aws.regions`, or the profile's own region | A custom read policy that `connect aws` prints: `GetAccountAuthorizationDetails`, `GetAccessKeyLastUsed`, `ListAccessKeys`, `GenerateCredentialReport`, `GetCredentialReport`, `rds:DescribeDBInstances`, `rds:DescribeDBClusters`, `backup:ListCopyJobs` | About 2 minutes per account |
+| Anthropic | An Admin API key in `FIREDRILL_ANTHROPIC_ADMIN_KEY` | Claude Console admin keys have no read-only scope; the guard allows only GET of `/v1/organizations/api_keys` and `/v1/organizations/workspaces` | About 5 minutes |
+| OpenAI | An Admin key in `FIREDRILL_OPENAI_ADMIN_KEY` | OpenAI admin keys have no read-only scope; the guard allows only GET of the projects list, each project's API keys and spend limit, and the organization's spend limit | About 5 minutes |
 | Repo files | Remote repos through the GitHub connection, one tarball per repo per run; local checkouts with `--path` | Contents read, for remote repos | None |
 | HR CSV | A file with `email,leave_date`, exported from the HR system | None | One export |
 | Semgrep | A results file from `semgrep --json`, path set in config. Firedrill reads it and runs nothing | None | None |
@@ -364,24 +395,24 @@ A token from `gh` acts as whoever is logged in; run by a repo admin, it can read
 
 | Output | Where it goes | What it shows |
 | --- | --- | --- |
-| Terminal | The console | One line per drill and target, then "Needs attention" |
-| Board | `report/index.html`, an artifact of each CI run | Every safeguard as a lamp by pack with state and the last eight runs; a coverage view of items no drill touched and items with no owner; a page per item with every verdict that involved it |
-| JSON | A file, never the CI log | The full result for scripts |
-| Step summary | The GitHub Actions run page | Counts and "Needs attention", with no evidence |
+| Terminal | The console | One line per drill and target, marked "shadow until" a date while the drill is in shadow, then "Needs attention" with one line per safeguard to review |
+| Board | `report/index.html`, an artifact of each CI run | Every safeguard as a lamp by pack with state, the last eight runs, days open, a shadow label, and each fact's source with its evidence tier as a label (verified solid, declared outlined, inferred dashed); a coverage view of items no drill touched and items with no owner; a page per item with every verdict that involved it |
+| JSON | A file, never the CI log | The full result for scripts, with `shadow`, `shadow_until`, `open_since`, `open_days`, `needs_review`, `fact_sources` and `fact_tiers` per result, and a `needs_review` list |
+| Step summary | The GitHub Actions run page | Counts and "Needs attention" with shadow marked, and "Needs review", with no evidence |
 | Issues | The Firedrill repo | One issue per newly open safeguard, assigned to its owner |
 | Exit code | CI | See below |
 
-**Needs attention** leads every output: newly open safeguards, newly closed ones, open safeguards whose latest verdict was not FAIL, and closed safeguards whose latest verdict was not PASS.
+**Needs attention** leads every output: newly open safeguards, newly closed ones, open safeguards whose latest verdict was not FAIL, and closed safeguards whose latest verdict was not PASS. A shadowed result appears in these lists like any other. **Needs review** follows: safeguards open with no fix and no waiver for `review_after_days`, each with the days open and what to do: fix it, waive it with an expiry, or retire the drill.
 
 **Issues.** The workflow opens one issue when a safeguard turns OPEN or its waiver expires while it is OPEN, and closes it when the safeguard closes or retires. The issue names the drill, target, failing conditions and fix, and links to the CI run; it carries no evidence values. GitHub can assign issues only to people with access to the repo, so owners get read access to the Firedrill repo. An owner without access is named in the issue text and the default owner is assigned.
 
-**Exit codes.** 0 by default. 1 when an unwaived critical or high safeguard turned OPEN in this run, or lost its waiver while OPEN. With `--fail-on open`, 1 while any unwaived critical or high safeguard is OPEN; with `--fail-on any`, 1 while any unwaived safeguard is OPEN. 2 on any ERROR. 2 wins over 1.
+**Exit codes.** 0 by default. 1 when an unwaived critical or high safeguard turned OPEN in this run, lost its waiver while OPEN, or opened in shadow and is still OPEN on the first run after shadow ends. With `--fail-on open`, 1 while any unwaived critical or high safeguard is OPEN; with `--fail-on any`, 1 while any unwaived safeguard is OPEN. 2 on any ERROR. 2 wins over 1. A result in shadow is left out of all of these, including its ERROR. The review flag never changes the exit code.
 
 ## Tags and the fix loop
 
 A tag is the record of one drill run on one target. A safeguard is CLOSED only when a newer tag says PASS.
 
-Each tag is a JSON file with two parts. The header holds the drill ID, the SHA-256 of the drill file, the Firedrill version, the target, the stream, the verdict, the safeguard state after the run, each condition's result, the source of each fact (`api`, `admin_export` with commit and committer, or `file`), the time, who or what ran it (a user, or a CI run URL), the SHA-256 of the evidence part, and the SHA-256 of the previous header for the same drill, target and stream. The evidence part holds the facts trimmed to the fields the conditions used, with the graph ID of every item read and secrets already hashed. Each run also writes one snapshot of its graph.
+Each tag is a JSON file with two parts. The header holds the drill ID, the SHA-256 of the drill file, the Firedrill version, the target, the stream, the verdict, the safeguard state after the run, each condition's result, the source of each fact (`api`, `admin_export` with commit and committer, `file` or `config`) and its evidence tier (`fact_tiers`: verified or declared per fact, plus inferred for each inferred field a condition read; tags written before tiers have none and still verify), the time, who or what ran it (a user, or a CI run URL), the SHA-256 of the evidence part, and the SHA-256 of the previous header for the same drill, target and stream. The evidence part holds the facts trimmed to the fields the conditions used, with the graph ID of every item read and secrets already hashed. Each run also writes one snapshot of its graph.
 
 A ticket or chat message saying "fixed" changes nothing here. Only a passing run after the fix closes the safeguard, and the next weekly run reopens it the moment it breaks again.
 
@@ -396,7 +427,7 @@ A ticket or chat message saying "fixed" changes nothing here. Only a passing run
 Firedrill holds credentials to sensitive systems, so it is designed as if it will be attacked.
 
 - **Credential scope is the real control.** Every connector asks for read access only, and `connect` prints the exact permissions before anything is granted.
-- **A guard backs it up.** GitHub and Google calls go through an HTTP client that allows only GET and HEAD, plus Google's OAuth token exchange and GitHub's tarball redirect to `codeload.github.com`, each allowed by exact host. Google Cloud returns a project's IAM policy only through `POST …/v3/projects/{id}:getIamPolicy`, a read; it is allowed by exact URL for each project listed in config, and no other POST is. AWS calls are checked by action name against a fixed list, whatever HTTP method the SDK uses, so broad reads such as `secretsmanager:GetSecretValue` or `s3:GetObject` are refused even if the credential allows them. A call outside the guard stops the run with ERROR.
+- **A guard backs it up.** GitHub, Google, Anthropic and OpenAI calls go through an HTTP client that allows only GET and HEAD, plus Google's OAuth token exchange and GitHub's tarball redirect to `codeload.github.com`, each allowed by exact host. Google Cloud returns a project's IAM policy only through `POST …/v3/projects/{id}:getIamPolicy`, a read; it is allowed by exact URL for each project listed in config, and no other POST is. On `api.anthropic.com` and `api.openai.com`, which also serve inference and every admin write, GET is further limited to the exact admin read paths Firedrill uses, and the admin key is sent only to its own host and never through a redirect. AWS calls are checked by service and action name against a fixed list, whatever HTTP method the SDK uses, so broad reads such as `secretsmanager:GetSecretValue` or `s3:GetObject` are refused even if the credential allows them. A call outside the guard stops the run with ERROR.
 - **Every outbound call is logged** locally with endpoint, method and time, and `--dry-run` prints every call before making any.
 - **The binary never writes to any system you drill.** Its only writes are local record files and the optional Postgres you configured. In CI, the workflow's own steps push records and manage issues, using the Firedrill repo's `GITHUB_TOKEN`.
 - **Secrets are never stored.** A secret found in a file is replaced by an HMAC keyed with a salt that `init` generates. There is one salt per org. Whoever runs `init` stores it in the team's password manager and as the `FIREDRILL_SALT` secret in CI; teammates set the same value with `FIREDRILL_SALT` or in `~/.config/firedrill/`. A CI run without it stops with ERROR. Every tag records a short fingerprint of the salt, and a laptop whose salt does not match the latest canonical tag gets a warning, since its hashes, and waivers written from them, would not match CI.
@@ -507,7 +538,7 @@ Every dependency is pure Go, so releases build with `CGO_ENABLED=0` as one stati
 | Terraform | `hashicorp/hcl/v2` |
 | GitHub REST | `go-github` |
 | Google Admin SDK | `google.golang.org/api/admin/directory/v1` |
-| AWS | `aws-sdk-go-v2` (IAM only) |
+| AWS | `aws-sdk-go-v2`: IAM, RDS and AWS Backup only |
 | Optional estate store | `jackc/pgx`, plain SQL migrations embedded in the binary |
 | CLI, prompts, terminal styling | Cobra, `huh`, `lipgloss` |
 | Snapshots, DNS, HTTP, hashing | Standard library |
@@ -517,13 +548,14 @@ Every dependency is pure Go, so releases build with `CGO_ENABLED=0` as one stati
 
 ### Reading a repo
 
-Firedrill reads files and runs nothing: no build step, no script, no package install. That is why it works on a repo in any language. For every repo in the config it downloads the committed files as one tarball through GitHub. For repos checked out on the same machine, passed with `--path`, it also reads local files: the walker respects `.gitignore` and `.firedrillignore`, except for `.env*` and `.claude/settings.local.json`, which it reads when present. It skips binaries, vendored code and files over 1 MB.
+Firedrill reads files and runs nothing: no build step, no script, no package install. That is why it works on a repo in any language. For every repo in the config it downloads the committed files as one tarball through GitHub. For repos checked out on the same machine, passed with `--path`, it also reads local files: the walker respects `.gitignore` and `.firedrillignore`, except for `.env*` and `.claude/settings.local.json`, which it reads when present. It also reads agent config files that `.gitignore` excludes, and marks them `gitignored`; `.firedrillignore` still excludes them. Agent config files are every file under `.claude/`, `.cursor/` and `.gemini/` at the repo root, plus `.mcp.json`, `.vscode/mcp.json` and `.cursorignore`. Worktrees, transcripts, caches, logs and installed plugins under those folders (`.claude/worktrees/`, `.claude/projects/`, `.cursor/extensions/`, `.gemini/tmp/` and the like) are never read. It skips binaries, vendored code and files over 1 MB. JavaScript lockfiles are the exception: they are read even when `.gitignore` excludes them, and marked `gitignored`, and one over 1 MB is still seen, parsed for install scripts up to 32 MB, and never scanned for secrets.
 
 | Files | What Firedrill takes from them |
 | --- | --- |
 | Every text file | Secrets, by known prefix and by variable name with a high-entropy value. The path decides the environment class: `prod`, `staging`, `example` (test and sample paths) or `unknown`, and config can override it |
-| `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.cursorignore`, plus user-level copies with `--include-home` | Allowed and denied commands, denied read paths, MCP servers and the secrets or variable names passed to each |
-| `.github/workflows/*.yml` | Token permissions, third-party actions and whether each is pinned, `pull_request_target` jobs that check out pull request code |
+| `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.cursorignore`, `.gemini/settings.json`, plus user-level copies with `--include-home` | Allowed and denied commands, denied read paths, MCP servers and the secrets or variable names passed to each |
+| `.github/workflows/*.yml` | Triggers, token permissions, the names of the secrets referenced, third-party actions and whether each is pinned, `pull_request_target` jobs that check out pull request code, JavaScript installs that may change the lockfile, cloud keys stored as secrets and OIDC logins |
+| `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `yarn.lock`, `bun.lock`, `bun.lockb` | The package manager, the lockfile and whether it is committed, workspace membership, and the names of dependencies the lockfile marks as running install scripts |
 | `*.tf` | S3 buckets and their public access settings |
 | `CODEOWNERS` | The owner of each path |
 | Any JSON or YAML file a drill names | Its parsed content, through `files.json` or `files.yaml` |
@@ -637,7 +669,7 @@ Firedrill looks like the physical world of fire safety: inspection tags, alarm p
 | 1 | Graph model and stable IDs, drill format, `validate`, CEL environment, the fact registry | `validate` accepts all 20 library drills, parses every example in this spec, and rejects 20 broken drills with clear messages |
 | 2 | Runner and graph store: run graph, snapshots, estate merge in memory and in optional Postgres, fact queries with found and inspected, linking, verdicts, safeguard state, waivers by drill and by finding, retired targets, tags with header, evidence part, streams and chain, exit codes | Golden tests on fixture graphs give the expected verdict, state, tag and exit code for every drill; a clean scan gives PASS and an empty one N/A; FAIL then N/A, SKIP or ERROR stays OPEN; a redacted tag verifies as redacted; an estate rebuilt from snapshots matches the merged graph |
 | 3 | HTTP guard with the Google token exchange and tarball redirect, AWS action list, web request limits, call log, `--dry-run`, the record scanner, the public-repo check | Tests prove any write method, unlisted AWS action or unverified host stops the run with ERROR; a fake secret in a record is hashed with a scanner note while IDs and hashes pass untouched; a run in a public repo writes no record files |
-| 4 | Keyless connectors: repo files from local checkouts, secret detection across all text files by prefix and by variable name, environment classes and example paths, environment references, workflows, Terraform, generic JSON and YAML, HR CSV, Semgrep, DNS, crt.sh, web with `verify-domain` | Every keyless drill goes green, red and N/A on fixture repos read with `--path` and a test domain; the PocketOS replica FAILs; a fake key under `fixtures/` does not |
+| 4 | Keyless connectors: repo files from local checkouts, secret detection across all text files by prefix and by variable name, environment classes and example paths, environment references, workflows, Terraform, generic JSON and YAML, HR CSV, Semgrep, DNS, crt.sh, web with `verify-domain` | Every keyless drill goes green, red and N/A on fixture repos read with `--path` and a test domain; the PocketOS replica FAILs; a fake key in a `.example` file does not |
 | 5 | GitHub connector: repo tarballs, rulesets merged into branch protection, the three bypass values, `export rulesets`, plan limits | Change drills match hand-checked results on test repos on Team and Enterprise plans, with an admin token and a read-only token |
 | 6 | Google and AWS connectors, including IAM roles, multiple accounts and break-glass exclusions | Access and Agent drills match hand-checked results on a test Workspace and two test AWS accounts |
 | 7 | CLI and outputs: `init`, `connect`, `run`, `verify`, `list`, `explain`, `report`, terminal view with "Needs attention", board with coverage, JSON, step summary, the CI workflow with records and issues, README | A scripted run on a clean machine goes from downloading the built binary to first FAIL in under five minutes, and the workflow opens and closes an issue on a test repo |

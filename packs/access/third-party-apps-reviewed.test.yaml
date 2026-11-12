@@ -1,0 +1,108 @@
+firedrill: v0
+drill: access/third-party-apps-reviewed
+cases:
+    - name: reviewed, with an owner
+      expect: PASS
+      facts:
+        apps:
+            - anonymous: false
+              client_id: 1234-notes.apps.googleusercontent.com
+              days_since_review: 67
+              high_risk: true
+              name: Acme Notes AI
+              native: false
+              owner: '@it'
+              review_current: true
+              reviewed: "2026-09-01"
+              scopes:
+                - https://mail.google.com/
+                - https://www.googleapis.com/auth/drive
+                - openid
+              sensitive_scopes:
+                - https://mail.google.com/
+                - https://www.googleapis.com/auth/drive
+              user_count: 3
+    - name: only low-risk scopes
+      expect: PASS
+      facts:
+        apps:
+            - anonymous: false
+              client_id: 5678-sched.apps.googleusercontent.com
+              days_since_review: -1
+              high_risk: false
+              name: Acme Scheduler
+              native: false
+              owner: ""
+              review_current: false
+              reviewed: ""
+              scopes:
+                - https://www.googleapis.com/auth/drive.file
+                - openid
+              sensitive_scopes: []
+              user_count: 3
+    - name: full Drive and Gmail access, no owner
+      expect: FAIL
+      facts:
+        apps:
+            - anonymous: false
+              client_id: 1234-notes.apps.googleusercontent.com
+              days_since_review: -1
+              high_risk: true
+              name: Acme Notes AI
+              native: false
+              owner: ""
+              review_current: false
+              reviewed: ""
+              scopes:
+                - https://mail.google.com/
+                - https://www.googleapis.com/auth/drive
+                - openid
+              sensitive_scopes:
+                - https://mail.google.com/
+                - https://www.googleapis.com/auth/drive
+              user_count: 3
+    - name: review lapsed
+      expect: FAIL
+      facts:
+        apps:
+            - anonymous: false
+              client_id: 1234-notes.apps.googleusercontent.com
+              days_since_review: 661
+              high_risk: true
+              name: Acme Notes AI
+              native: false
+              owner: '@it'
+              review_current: false
+              reviewed: "2025-01-15"
+              scopes:
+                - https://mail.google.com/
+                - https://www.googleapis.com/auth/drive
+                - openid
+              sensitive_scopes:
+                - https://mail.google.com/
+                - https://www.googleapis.com/auth/drive
+              user_count: 3
+    - name: some users' grants unreadable
+      expect: WARN
+      facts:
+        apps:
+            - anonymous: false
+              client_id: 5678-sched.apps.googleusercontent.com
+              days_since_review: -1
+              high_risk: false
+              name: Acme Scheduler
+              native: false
+              owner: ""
+              review_current: false
+              reviewed: ""
+              scopes:
+                - https://www.googleapis.com/auth/drive.file
+                - openid
+              sensitive_scopes: []
+              user_count: 3
+      partial:
+        apps: the OAuth grants of 1 of 40 users could not be read
+    - name: no app granted
+      expect: N/A
+      facts:
+        apps: []

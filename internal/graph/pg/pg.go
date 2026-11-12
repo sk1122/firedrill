@@ -25,7 +25,8 @@ var migrations embed.FS
 // Store is an open estate database.
 type Store struct{ conn *pgx.Conn }
 
-// Open connects and applies any migration not yet applied.
+// Open connects and applies any migration not yet applied. It is for the write
+// path, after a run; readers use OpenReadOnly.
 func Open(ctx context.Context, url string) (*Store, error) {
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
@@ -37,6 +38,118 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// OpenReadOnly connects for reading only: it applies no migration and the
+// session refuses writes, so a read command can never change the database.
+func OpenReadOnly(ctx context.Context, url string) (*Store, error) {
+	cfg, err := pgx.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("connect to Postgres: %w", redact(err))
+	}
+	if cfg.RuntimeParams == nil {
+		cfg.RuntimeParams = map[string]string{}
+	}
+	cfg.RuntimeParams["default_transaction_read_only"] = "on"
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("connect to Postgres: %w", redact(err))
+	}
+	return &Store{conn: conn}, nil
+}
+
+// Current says whether the estate in the database is exactly what
+// graph.RebuildEstate(dir, now) gives: every migration applied, every snapshot
+// in dir that a rebuild would merge already merged, and nothing merged that a
+// rebuild would leave out, such as a snapshot since compacted, deleted or aged
+// past a year. It only reads.
+func (s *Store) Current(ctx context.Context, dir string, now time.Time) (bool, error) {
+	var table *string
+	if err := s.conn.QueryRow(ctx, `SELECT to_regclass('estate_migrations')::text`).Scan(&table); err != nil {
+		return false, err
+	}
+	if table == nil {
+		return false, nil
+	}
+	applied, err := s.names(ctx, `SELECT name FROM estate_migrations`)
+	if err != nil {
+		return false, err
+	}
+	entries, err := migrations.ReadDir("migrations")
+	if err != nil {
+		return false, err
+	}
+	for _, e := range entries {
+		if _, ok := applied[e.Name()]; !ok {
+			return false, nil
+		}
+	}
+	merged := map[string]time.Time{}
+	rows, err := s.conn.Query(ctx, `SELECT name, taken_at FROM estate_snapshots`)
+	if err != nil {
+		return false, err
+	}
+	for rows.Next() {
+		var name string
+		var at time.Time
+		if err := rows.Scan(&name, &at); err != nil {
+			rows.Close()
+			return false, err
+		}
+		merged[name] = at
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	files, err := graph.SnapshotFiles(dir)
+	if err != nil {
+		return false, err
+	}
+	onDisk := map[string]bool{}
+	for _, f := range files {
+		name := filepath.Base(f)
+		onDisk[name] = true
+		if _, ok := merged[name]; ok {
+			continue
+		}
+		if name == graph.CompactedName {
+			return false, nil
+		}
+		snap, err := graph.ReadSnapshot(f)
+		if err != nil {
+			return false, err
+		}
+		if now.Sub(snap.Time) <= yearOfSnapshots {
+			return false, nil
+		}
+	}
+	for name, at := range merged {
+		if !onDisk[name] || (name != graph.CompactedName && now.Sub(at) > yearOfSnapshots) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// yearOfSnapshots is the window graph.RebuildEstate and Sync merge.
+const yearOfSnapshots = 366 * 24 * time.Hour
+
+func (s *Store) names(ctx context.Context, query string) (map[string]struct{}, error) {
+	rows, err := s.conn.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out[n] = struct{}{}
+	}
+	return out, rows.Err()
 }
 
 // redact keeps a connection error from echoing a password in the URL.
@@ -121,7 +234,7 @@ func (s *Store) Sync(ctx context.Context, dir string, now time.Time) (int, error
 		if err != nil {
 			return merged, err
 		}
-		if name != graph.CompactedName && now.Sub(snap.Time) > 366*24*time.Hour {
+		if name != graph.CompactedName && now.Sub(snap.Time) > yearOfSnapshots {
 			continue
 		}
 		if newest != nil && snap.Time.Before(*newest) {

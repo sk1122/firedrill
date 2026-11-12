@@ -5,6 +5,7 @@ package facts
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/sk1122/firedrill/internal/graph"
@@ -36,6 +37,9 @@ type Args struct {
 	Values map[string]any
 	Target map[string]any
 	Now    time.Time
+	// Previous is the graph of the previous run of the same stream, read from
+	// its snapshot, or nil when there is none. No fact reads it yet.
+	Previous graph.Reader
 }
 
 // String returns a string argument.
@@ -60,17 +64,60 @@ type Result struct {
 	Source    string
 }
 
+// Evidence tiers. Verified was read from a live API, declared from a config
+// file or an admin export, and inferred was worked out from naming or another
+// heuristic rather than read.
+const (
+	TierVerified = "verified"
+	TierDeclared = "declared"
+	TierInferred = "inferred"
+)
+
+// TierOf gives the tier of a fact result from its source. It is the one place
+// a source becomes a tier: api is verified; file, config and an admin export
+// (admin_export, with or without its detail) are declared. Any other source,
+// such as a test fixture, has no tier.
+func TierOf(source string) string {
+	switch {
+	case source == "api":
+		return TierVerified
+	case source == "file", source == "config", source == "admin_export", strings.HasPrefix(source, "admin_export:"):
+		return TierDeclared
+	}
+	return ""
+}
+
+// IsInferred says whether a field path, spelled as conditions read it, is one
+// of a fact's inferred fields or nested under one.
+func IsInferred(path string, inferred []string) bool {
+	for _, p := range inferred {
+		if p == "" || path == p || strings.HasPrefix(path, p+".") {
+			return true
+		}
+	}
+	return false
+}
+
 // Func is one tested query over the graph.
 type Func func(g graph.Reader, a Args) (Result, error)
 
 // Def describes one fact.
 type Def struct {
 	Name      string
-	Connector string   // the connector that must be available, empty for none
-	Args      []string // accepted argument names
-	Scanning  bool     // returns found and inspected
-	Shape     *Shape
-	Fn        Func
+	Connector string // the connector that must be available, empty for none
+	// AnyConnector, for a fact with no single connector, lists connectors of
+	// which at least one must be available. The fact returns what those that
+	// were read hold, so a drill on it runs for a company using only one.
+	AnyConnector []string
+	Args         []string // accepted argument names
+	Scanning     bool     // returns found and inspected
+	Shape        *Shape
+	Fn           Func
+	// Inferred lists the field paths whose values come from a heuristic rather
+	// than being read, spelled as conditions read them: a list adds no segment,
+	// so found.env_class is the env_class of every found row. A FAIL that rests
+	// only on these fields is a WARN. No shipped fact marks any field yet.
+	Inferred []string
 }
 
 var registry = map[string]Def{}

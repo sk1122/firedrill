@@ -54,9 +54,10 @@ func (c *Connector) Collections() []connector.Collection {
 	}}
 }
 
-// Available is true when a token is present and repos are listed.
+// Available is true when GitHub was connected on purpose, a token is present and
+// repos are listed. A token alone, such as the gh CLI's login, is never enough.
 func (c *Connector) Available(s connector.Scope) (bool, string) {
-	if s.Token == "" {
+	if !s.Project.Config.IsConnected("github") || s.Token == "" {
 		return false, "connect github"
 	}
 	if s.Project.Config.GitHub.Org == "" || len(s.Project.Config.GitHub.Repos) == 0 {
@@ -199,9 +200,12 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 		}
 	case errors.Is(err, gh.ErrBranchNotProtected), notFound(resp):
 		// No classic protection. Rulesets may still apply.
+	case forbidden(resp) && planBlocks(err):
+		// The plan offers no protection on this repo.
+		planBlocked = true
 	case forbidden(resp):
-		// The plan offers no protection here, or the token cannot read it.
-		planBlocked = planBlocks(err)
+		// The token cannot read the protection, so nothing here is known.
+		return nil, false, fmt.Errorf("the token cannot read branch protection of %s/%s: give it Administration: read", owner, repo)
 	default:
 		return nil, false, err
 	}
@@ -211,8 +215,15 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 		return nil, false, err
 	}
 	var rules []branchRuleEntry
-	if resp, err := cl.Do(req, &rules); err != nil && !notFound(resp) && !forbidden(resp) {
-		return nil, false, err
+	if resp, err := cl.Do(req, &rules); err != nil && !notFound(resp) {
+		switch {
+		case forbidden(resp) && planBlocks(err):
+			// The plan offers no rulesets on this repo, so none apply.
+		case forbidden(resp):
+			return nil, false, fmt.Errorf("the token cannot read the rulesets of %s/%s: give it Administration: read", owner, repo)
+		default:
+			return nil, false, err
+		}
 	}
 	ids := map[int64]bool{}
 	for _, r := range rules {
@@ -294,8 +305,11 @@ func environments(ctx context.Context, cl *gh.Client, owner, name, full string, 
 	opts := &gh.EnvironmentListOptions{PerPage: 100}
 	for {
 		list, resp, err := cl.Repositories.ListEnvironments(ctx, owner, name, opts)
-		if notFound(resp) || forbidden(resp) {
+		if notFound(resp) || (forbidden(resp) && planBlocks(err)) {
 			return nil
+		}
+		if forbidden(resp) {
+			return fmt.Errorf("the token cannot read the environments of %s: give it Environments: read", full)
 		}
 		if err != nil {
 			return err

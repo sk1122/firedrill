@@ -38,8 +38,8 @@ func TestLibraryDrillsAreValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 24 {
-		t.Errorf("library has %d drills, want 24", count)
+	if count != 32 {
+		t.Errorf("library has %d drills, want 32", count)
 	}
 }
 

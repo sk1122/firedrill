@@ -69,12 +69,18 @@ func drillOf(t *testing.T, id string) *drill.Drill {
 
 func runFiles(t *testing.T, id, root string, extra ...string) *run.Outcome {
 	t.Helper()
-	p := &config.Project{Dir: filepath.Join(root, ".firedrill")}
+	return runFilesWith(t, id, root, &config.Project{Dir: filepath.Join(root, ".firedrill")}, nil, extra...)
+}
+
+// runFilesWith runs one files drill with a project's config and verified
+// domains.
+func runFilesWith(t *testing.T, id, root string, p *config.Project, verified []string, extra ...string) *run.Outcome {
+	t.Helper()
 	c := run.Config{
 		Project: p, Drills: []*drill.Drill{drillOf(t, id)},
 		Connectors: []connector.Connector{configsrc.New(), files.New()},
 		Scope: connector.Scope{Project: p, Now: now, Log: &connector.CallLog{}, Hasher: graph.NewHasher("salt"),
-			Paths: append([]string{root}, extra...), Getenv: func(string) string { return "" }},
+			Paths: append([]string{root}, extra...), Getenv: func(string) string { return "" }, VerifiedDomains: verified},
 		Stream: "local", Records: t.TempDir(), WriteRecords: true,
 	}
 	res, err := run.Run(context.Background(), c)
@@ -111,7 +117,7 @@ func TestSecretDrillVerdicts(t *testing.T) {
 		name, want string
 		files      map[string]string
 	}{
-		{"fake key under fixtures does not fail", tag.Pass, map[string]string{"fixtures/k.env": "API_KEY=" + railwayToken, "a.txt": "x"}},
+		{"fake key in a .example file does not fail", tag.Pass, map[string]string{"k.env.example": "API_KEY=" + railwayToken, "a.txt": "x"}},
 		{"example file does not fail", tag.Pass, map[string]string{".env.example": "API_KEY=" + railwayToken}},
 		{"prod env file fails", tag.Fail, map[string]string{".env.production": "API_KEY=" + railwayToken}},
 		{"known prefix fails", tag.Fail, map[string]string{"lib/x.py": `k = "sk_live_abcdefghijklmnop"`}},
@@ -213,6 +219,251 @@ func TestWorkflowDrills(t *testing.T) {
 	check("change/workflow-tokens-read-only", jobperm, tag.Pass)
 	if o := runFiles(t, "change/actions-pinned", writeRepo(t, "r", map[string]string{"a": "x"})); o.Verdict != tag.NA {
 		t.Errorf("got %s", o.Verdict)
+	}
+}
+
+func TestPRTargetWithSecretsDrill(t *testing.T) {
+	// The PR-title attack: an agent run on pull_request_target, the title in its
+	// prompt, an API key and the default token.
+	incident := "on:\n  pull_request_target:\n    types: [opened]\njobs:\n  review:\n    runs-on: ubuntu-latest\n    steps:\n" +
+		"      - uses: acme/agent-action@v1\n        with:\n          api_key: ${{ secrets.ANTHROPIC_API_KEY }}\n" +
+		"          prompt: Review ${{ github.event.pull_request.title }}\n"
+	readWithSecret := "permissions: read-all\n" + incident
+	readOnly := "permissions:\n  contents: read\non: pull_request_target\njobs:\n  a:\n    steps:\n      - run: echo ${{ secrets.GITHUB_TOKEN }}\n"
+	inherits := "permissions: read-all\non: [pull_request_target]\njobs:\n  a:\n    uses: ./.github/workflows/r.yml\n    secrets: inherit\n"
+	plainPR := "on: pull_request\njobs:\n  a:\n    steps:\n      - run: npm publish\n        env:\n          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}\n"
+	id := "change/no-pr-target-with-secrets"
+	for _, c := range []struct{ name, wf, want string }{
+		{"incident", incident, tag.Fail},
+		{"read-only with a secret", readWithSecret, tag.Fail},
+		{"inherits every secret", inherits, tag.Fail},
+		{"read-only, no secrets", readOnly, tag.Pass},
+		{"pull_request with a secret", plainPR, tag.Pass},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := runFiles(t, id, writeRepo(t, "r", map[string]string{".github/workflows/review.yml": c.wf}))
+			if o.Verdict != c.want {
+				t.Fatalf("got %s: %s", o.Verdict, o.Reason)
+			}
+			if c.want == tag.Fail && !strings.Contains(o.Reason, ".github/workflows/review.yml") {
+				t.Fatalf("reason: %s", o.Reason)
+			}
+		})
+	}
+	if o := runFiles(t, id, writeRepo(t, "r", map[string]string{"a": "x"})); o.Verdict != tag.NA {
+		t.Errorf("no workflows: got %s", o.Verdict)
+	}
+}
+
+func TestSecretsInAgentConfigDrill(t *testing.T) {
+	id := "agent/no-secrets-in-agent-config"
+	// The Claude Code leak: a "don't ask again" rule holding a token, in a local
+	// settings file that is not gitignored.
+	leak := `{"permissions":{"allow":["Bash(ANTHROPIC_API_KEY=` + railwayToken + ` npm test)"]}}`
+	clean := `{"permissions":{"allow":["Bash(npm test)"]}}`
+	cases := []struct {
+		name, want string
+		files      map[string]string
+	}{
+		{"incident", tag.Fail, map[string]string{".claude/settings.local.json": leak}},
+		{"committed local settings", tag.Fail, map[string]string{".claude/settings.local.json": clean}},
+		{"gitignored local settings with a secret", tag.Fail, map[string]string{
+			".gitignore": ".claude/settings.local.json\n", ".claude/settings.local.json": leak}},
+		{"secret in gemini settings", tag.Fail, map[string]string{
+			".gemini/settings.json": `{"mcpServers":{"db":{"env":{"DB_TOKEN":"` + railwayToken + `"}}}}`}},
+		{"gitignored local settings", tag.Pass, map[string]string{
+			".gitignore": ".claude/settings.local.json\n", ".claude/settings.local.json": clean}},
+		{"no agent config", tag.Pass, map[string]string{"scripts/x.sh": "API_KEY=" + railwayToken}},
+		{"empty repo", tag.NA, map[string]string{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := runFiles(t, id, writeRepo(t, "r", c.files))
+			if o.Verdict != c.want {
+				t.Fatalf("got %s: %s", o.Verdict, o.Reason)
+			}
+			b, _ := json.Marshal(o.Facts)
+			if strings.Contains(string(b), railwayToken) {
+				t.Fatal("the raw token reached the evidence")
+			}
+		})
+	}
+}
+
+func TestMCPServersKnownDrill(t *testing.T) {
+	id := "agent/mcp-servers-known"
+	project := func(root string) *config.Project {
+		p := &config.Project{Dir: filepath.Join(root, ".firedrill"), Hosts: []config.Host{{Host: "mcp.acme.com", Owner: "@platform"}}}
+		p.Config.Agents.MCPHosts = []string{"mcp.vendor.example"}
+		p.Config.Agents.MCPPackages = []string{"@acme/mcp-fs"}
+		return p
+	}
+	cases := []struct {
+		name, mcp, want, reason string
+	}{
+		{"owned host, pinned allowlisted package, local script", `{"mcpServers":{
+			"docs":{"type":"http","url":"https://mcp.acme.com/v1?token=abc"},
+			"vendor":{"type":"http","url":"https://eu.mcp.vendor.example/sse"},
+			"verified":{"type":"http","url":"https://tools.acme.dev/mcp"},
+			"local":{"type":"http","url":"http://localhost:3000/mcp"},
+			"fs":{"command":"npx","args":["-y","@acme/mcp-fs@1.4.2"]},
+			"tools":{"command":"./scripts/mcp.sh"}}}`, tag.Pass, ""},
+		// The MCP incident: an agent pointed at a server on a host nobody owns.
+		{"unknown remote host", `{"mcpServers":{"helper":{"type":"http","url":"https://mcp.unknown-tools.example/sse"}}}`, tag.Fail, ".mcp.json"},
+		{"unknown host through mcp-remote", `{"mcpServers":{"helper":{"command":"npx","args":["-y","mcp-remote@0.1.2","https://mcp.unknown-tools.example/sse"]}}}`, tag.Fail, ".mcp.json"},
+		{"unpinned npx package", `{"mcpServers":{"helper":{"command":"npx","args":["-y","some-mcp"]}}}`, tag.Fail, ".mcp.json"},
+		{"latest", `{"mcpServers":{"fs":{"command":"npx","args":["@acme/mcp-fs@latest"]}}}`, tag.Fail, ".mcp.json"},
+		{"pinned but unknown package", `{"mcpServers":{"search":{"command":"uvx","args":["acme-mcp-search==0.3.1"]}}}`, tag.Warn, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := writeRepo(t, "r", map[string]string{".mcp.json": c.mcp})
+			o := runFilesWith(t, id, root, project(root), []string{"acme.dev"})
+			if o.Verdict != c.want {
+				t.Fatalf("got %s: %s", o.Verdict, o.Reason)
+			}
+			// The reason names the config file; the evidence names the server.
+			if c.reason != "" && !strings.Contains(o.Reason, c.reason) {
+				t.Fatalf("reason: %s", o.Reason)
+			}
+			b, _ := json.Marshal(o.Facts)
+			if strings.Contains(string(b), "token=abc") || strings.Contains(string(b), "/sse") {
+				t.Fatalf("more than the host of a URL reached the evidence: %s", b)
+			}
+		})
+	}
+	if o := runFiles(t, id, writeRepo(t, "r", map[string]string{"a": "x"})); o.Verdict != tag.NA || !strings.Contains(o.Reason, "--include-home") {
+		t.Fatalf("no agent config: %s %s", o.Verdict, o.Reason)
+	}
+	// Settings with no MCP servers pass.
+	if o := runFiles(t, id, writeRepo(t, "r", map[string]string{".claude/settings.json": `{}`})); o.Verdict != tag.Pass {
+		t.Fatalf("no servers: %s %s", o.Verdict, o.Reason)
+	}
+}
+
+func TestInstallsFromLockfileDrill(t *testing.T) {
+	id := "supply/installs-from-lockfile"
+	lock := `{"lockfileVersion":3,"packages":{"node_modules/esbuild":{"hasInstallScript":true}}}`
+	frozen := "on: push\njobs:\n  a:\n    steps:\n      - run: npm ci && npm test\n"
+	cases := []struct {
+		name, want string
+		files      map[string]string
+	}{
+		{"committed lockfile, frozen install", tag.Pass, map[string]string{
+			"package.json": `{}`, "package-lock.json": lock, ".github/workflows/ci.yml": frozen}},
+		{"workspace member locked at the root", tag.Pass, map[string]string{
+			"package.json": `{"workspaces":["packages/*"]}`, "pnpm-lock.yaml": "lockfileVersion: '6.0'\n", "packages/web/package.json": `{}`}},
+		{"package.json and no workflows", tag.Pass, map[string]string{"package.json": `{}`, "yarn.lock": "x"}},
+		{"no lockfile", tag.Fail, map[string]string{"package.json": `{"dependencies":{"left-pad":"^1.3.0"}}`}},
+		{"lockfile gitignored", tag.Fail, map[string]string{"package.json": `{}`, "package-lock.json": lock, ".gitignore": "package-lock.json\n"}},
+		{"npm install in CI", tag.Fail, map[string]string{"package.json": `{}`, "package-lock.json": lock,
+			".github/workflows/ci.yml": "on: push\njobs:\n  a:\n    steps:\n      - run: npm install\n"}},
+		{"workflows but no package.json", tag.NA, map[string]string{".github/workflows/ci.yml": frozen}},
+		{"empty repo", tag.NA, map[string]string{"a": "x"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := runFiles(t, id, writeRepo(t, "r", c.files))
+			if o.Verdict != c.want {
+				t.Fatalf("got %s: %s", o.Verdict, o.Reason)
+			}
+		})
+	}
+}
+
+// TestNewInstallScriptAcrossRuns runs the drill over one checkout four times,
+// keeping the records between runs, as CI does.
+func TestNewInstallScriptAcrossRuns(t *testing.T) {
+	id := "supply/installs-from-lockfile"
+	root := writeRepo(t, "r", map[string]string{"package.json": `{}`})
+	records := t.TempDir()
+	lock := func(scripts ...string) {
+		pkgs := []string{`"node_modules/esbuild":{"hasInstallScript":true}`, `"node_modules/acme-colors":{"version":"1.0.1"}`}
+		for _, s := range scripts {
+			pkgs = append(pkgs, `"node_modules/`+s+`":{"hasInstallScript":true}`)
+		}
+		data := `{"lockfileVersion":3,"packages":{` + strings.Join(pkgs, ",") + `}}`
+		if err := os.WriteFile(filepath.Join(root, "package-lock.json"), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	step := 0
+	runOnce := func() *run.Outcome {
+		t.Helper()
+		step++
+		p := &config.Project{Dir: filepath.Join(root, ".firedrill")}
+		c := run.Config{
+			Project: p, Drills: []*drill.Drill{drillOf(t, id)}, Connectors: []connector.Connector{configsrc.New(), files.New()},
+			Scope: connector.Scope{Project: p, Now: now.AddDate(0, 0, step), Log: &connector.CallLog{}, Hasher: graph.NewHasher("salt"),
+				Paths: []string{root}, Getenv: func(string) string { return "" }},
+			Stream: "local", Records: records, WriteRecords: true,
+		}
+		res, err := run.Run(context.Background(), c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Outcomes[0]
+	}
+	newScripts := func(o *run.Outcome) string {
+		b, _ := json.Marshal(o.Facts["manifests"])
+		return string(b)
+	}
+
+	// The first run sets the baseline: esbuild's script is known, not new.
+	lock()
+	if o := runOnce(); o.Verdict != tag.Pass {
+		t.Fatalf("baseline run: %s %s", o.Verdict, o.Reason)
+	}
+	// A release of acme-colors adds an install script.
+	lock("acme-colors")
+	o := runOnce()
+	if o.Verdict != tag.Fail || !strings.Contains(newScripts(o), "acme-colors") || strings.Contains(newScripts(o), "esbuild") {
+		t.Fatalf("new install script: %s %s %s", o.Verdict, o.Reason, newScripts(o))
+	}
+	// Nothing changes: the script is still new, so the finding stays.
+	if o := runOnce(); o.Verdict != tag.Fail || !strings.Contains(newScripts(o), "acme-colors") {
+		t.Fatalf("an unaccepted new script must stay new: %s %s", o.Verdict, newScripts(o))
+	}
+	// The dependency is rolled back: it passes, and the baseline moves.
+	lock()
+	if o := runOnce(); o.Verdict != tag.Pass {
+		t.Fatalf("rolled back: %s %s", o.Verdict, o.Reason)
+	}
+	lock("acme-colors")
+	if o := runOnce(); o.Verdict != tag.Fail {
+		t.Fatalf("the script coming back is new again: %s", o.Verdict)
+	}
+}
+
+func TestCIUsesOIDCDrill(t *testing.T) {
+	id := "change/ci-uses-oidc-not-keys"
+	// The supply-chain harvest: a long-lived AWS key stored as a secret, in
+	// reach of every step a poisoned dependency runs in.
+	incident := "on: push\njobs:\n  deploy:\n    steps:\n      - run: npm install\n" +
+		"      - uses: aws-actions/configure-aws-credentials@v4\n        with:\n" +
+		"          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}\n          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}\n"
+	oidc := "on: push\npermissions:\n  id-token: write\n  contents: read\njobs:\n  deploy:\n    steps:\n" +
+		"      - uses: aws-actions/configure-aws-credentials@v4\n        with:\n          role-to-assume: arn:aws:iam::123456789012:role/deploy\n"
+	gcp := "on: push\njobs:\n  deploy:\n    steps:\n      - uses: google-github-actions/auth@v2\n        with:\n          credentials_json: ${{ secrets.GCP_DEPLOY }}\n"
+	plain := "on: push\njobs:\n  a:\n    steps:\n      - run: npm publish\n        env:\n          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}\n"
+	for _, c := range []struct{ name, wf, want string }{
+		{"incident", incident, tag.Fail},
+		{"credentials_json", gcp, tag.Fail},
+		{"OIDC", oidc, tag.Pass},
+		{"no cloud access", plain, tag.Pass},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := runFiles(t, id, writeRepo(t, "r", map[string]string{".github/workflows/deploy.yml": c.wf}))
+			if o.Verdict != c.want {
+				t.Fatalf("got %s: %s", o.Verdict, o.Reason)
+			}
+			if c.want == tag.Fail && !strings.Contains(o.Reason, ".github/workflows/deploy.yml") {
+				t.Fatalf("reason: %s", o.Reason)
+			}
+		})
+	}
+	if o := runFiles(t, id, writeRepo(t, "r", map[string]string{"a": "x"})); o.Verdict != tag.NA {
+		t.Errorf("no workflows: got %s", o.Verdict)
 	}
 }
 

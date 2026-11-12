@@ -80,15 +80,17 @@ func TestClass(t *testing.T) {
 		"stage/app.env":           "staging",
 		"product/catalog.env":     "unknown",
 		"scripts/domains.sh":      "unknown",
-		"fixtures/keys.env":       "example",
-		"a/testdata/x":            "example",
-		"src/__tests__/k.js":      "example",
+		"fixtures/keys.env":       "unknown",
+		"a/testdata/x":            "unknown",
+		"testdata/prod.env":       "prod",
+		"src/__tests__/k.js":      "unknown",
 		".env.example":            "example",
 		"config.sample":           "example",
 		"prod/app.template":       "example",
-		"internal/x/x_test.go":    "example",
-		"test/keys.env":           "example",
-		"src/tests/k.py":          "example",
+		"internal/x/x_test.go":    "unknown",
+		"test/keys.env":           "unknown",
+		"src/tests/k.py":          "unknown",
+		"tests/prod/k.env":        "prod",
 		"src/latest/k.env":        "unknown",
 		"contest/k.env":           "unknown",
 	}
@@ -111,5 +113,28 @@ func TestLooksLikeSecret(t *testing.T) {
 		if LooksLikeSecret(v) {
 			t.Errorf("%s should not look like a secret", v)
 		}
+	}
+}
+
+func TestTestPathsAreNotExamplesByDefault(t *testing.T) {
+	c := DefaultClasses()
+	if got := c.Class("testdata/prod.env"); got == "example" {
+		t.Fatalf("testdata/prod.env classed %s", got)
+	}
+	for _, p := range []string{"test/k.env", "tests/k.env", "api_test.go"} {
+		if got := c.Class(p); got != "unknown" {
+			t.Fatalf("%s classed %s, want unknown", p, got)
+		}
+	}
+	if got := c.Class(".env.example"); got != "example" {
+		t.Fatalf(".env.example classed %s", got)
+	}
+	c.ExamplePaths = append(c.ExamplePaths, "testdata/")
+	if got := c.Class("testdata/prod.env"); got != "example" {
+		t.Fatalf("a configured example path must still apply, got %s", got)
+	}
+	c.ExamplePaths = append(c.ExamplePaths, "test/")
+	if got := c.Class("test/k.env"); got != "example" {
+		t.Fatalf("a configured test folder must apply, got %s", got)
 	}
 }

@@ -107,7 +107,7 @@ func doRun(ctx context.Context, out, errOut io.Writer, f runFlags) (int, error) 
 	if inCI() {
 		stream = "ci"
 	}
-	allowed := recordsAllowed(ctx, rc.scope, f.publicOK)
+	allowed := recordsAllowed(ctx, rc.scope, f.publicOK, records)
 	warnSaltMismatch(errOut, records, drills, rc.scope.Hasher)
 	res, err := run.Run(ctx, run.Config{
 		Project: rc.project, Drills: drills, Connectors: connector.All(), Scope: rc.scope,
@@ -138,9 +138,11 @@ func doRun(ctx context.Context, out, errOut io.Writer, f runFlags) (int, error) 
 	}
 	if allowed {
 		printRun(out, res, len(drills))
+		printChangedSinceLast(out, res.Diff, false)
 		syncDatabase(ctx, errOut, records, rc)
 	} else {
 		printCounts(out, res)
+		printChangedSinceLast(out, res.Diff, true)
 		fmt.Fprintln(errOut, "This repo is public, so no records were written and no evidence was printed. Move .firedrill to a private repo, or pass --public-ok.")
 	}
 	return code, nil
@@ -226,6 +228,12 @@ func printRun(out io.Writer, res *run.Result, total int) {
 		if o.Unverified != "" {
 			line += "  " + styleDim.Render(o.Unverified)
 		}
+		if o.Shadow {
+			line += "  " + styleDim.Render("shadow until "+o.ShadowUntil.Format("2006-01-02"))
+		}
+		if o.ShadowEnded {
+			line += "  " + styleDim.Render("shadow ended")
+		}
 		fmt.Fprintln(out, strings.TrimRight(line, " "))
 	}
 	if len(res.Skips) > 0 {
@@ -239,7 +247,13 @@ func printRun(out io.Writer, res *run.Result, total int) {
 	if n := len(a.ClosedUnverified); n > 0 {
 		fmt.Fprintf(out, ", %d closed and unverified", n)
 	}
+	if n := len(a.NeedsReview); n > 0 {
+		fmt.Fprintf(out, ", %d to review", n)
+	}
 	fmt.Fprintln(out)
+	for _, o := range a.NeedsReview {
+		fmt.Fprintf(out, "review: %s %s  %s\n", o.Drill.ID, firstNonEmpty(o.Target, "global"), run.ReviewAdvice(o.OpenDays))
+	}
 	if len(a.NewlyOpen) > 0 {
 		fmt.Fprintf(out, "next: fix, then  firedrill verify %s\n", a.NewlyOpen[0].Drill.ID)
 	}
@@ -253,6 +267,8 @@ func waitingLine(skips []run.Skip) string {
 		"aws": "connect aws (about 2 minutes)", "gcp": "connect gcp (about 2 minutes)", "hr": "an HR leavers CSV", "semgrep": "a Semgrep results file",
 		"web": "verify-domain (one DNS record)", "dns": "verify-domain (one DNS record)", "ctlog": "verify-domain (one DNS record)",
 		"a verified domain": "verify-domain (one DNS record)", "a target from repos": "--path, or connect github",
+		"anthropic": "connect anthropic (an Admin API key)", "openai": "connect openai (an Admin key)",
+		"aws or gcp": "connect aws or connect gcp", "anthropic or openai": "connect anthropic or connect openai (an admin key)",
 	}
 	seen := map[string]bool{}
 	var parts []string

@@ -2,9 +2,12 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -19,12 +22,18 @@ type Config struct {
 	Google struct {
 		Domain     string `yaml:"domain"`
 		AdminEmail string `yaml:"admin_email"`
+		// ReviewDays is how long a third-party app's review in apps.yaml stays
+		// current. Unset means 180.
+		ReviewDays *int `yaml:"review_days"`
 	} `yaml:"google"`
 	AWS struct {
 		Accounts []struct {
 			Profile string `yaml:"profile"`
 		} `yaml:"accounts"`
 		BreakGlass []string `yaml:"break_glass"`
+		// Regions are where databases and their backups are read. Unset means
+		// each profile's own region. IAM is global and ignores this.
+		Regions []string `yaml:"regions"`
 	} `yaml:"aws"`
 	GCP struct {
 		Projects      []string `yaml:"projects"`
@@ -43,17 +52,147 @@ type Config struct {
 	Domains      []string  `yaml:"domains"`
 	DefaultOwner string    `yaml:"default_owner"`
 	Retired      []Retired `yaml:"retired"`
-	Secrets      struct {
+	// ShadowDays is how long a drill new to an established install runs in
+	// shadow: it reports but never fails a run. Unset means 14; 0 turns it off.
+	ShadowDays *int `yaml:"shadow_days"`
+	// ReviewAfterDays is how long a safeguard may stay open with no fix and no
+	// waiver before it is flagged for review. Unset means 30; 0 turns it off.
+	ReviewAfterDays *int `yaml:"review_after_days"`
+	Secrets         struct {
 		ExamplePaths []string `yaml:"example_paths"`
 		ProdWords    []string `yaml:"prod_words"`
 		StagingWords []string `yaml:"staging_words"`
 	} `yaml:"secrets"`
 	Agents struct {
 		DestructiveCommands []string `yaml:"destructive_commands"`
+		// MCPHosts are hosts or domains an MCP server may point at, besides the
+		// verified domains, hosts.yaml and localhost.
+		MCPHosts []string `yaml:"mcp_hosts"`
+		// MCPPackages are exact package or image names an MCP server may run.
+		MCPPackages []string `yaml:"mcp_packages"`
 	} `yaml:"agents"`
 	Web struct {
 		ExcludeHosts []string `yaml:"exclude_hosts"`
 	} `yaml:"web"`
+	Recovery struct {
+		// MinRetentionDays is the fewest days of automated backups a production
+		// database may keep. Unset means 7.
+		MinRetentionDays *int `yaml:"min_retention_days"`
+	} `yaml:"recovery"`
+	// Production names what is production: AWS account IDs, AWS profile names
+	// and Google Cloud project IDs. A database tagged or labelled env or
+	// environment = prod or production is production too. With nothing named
+	// and nothing tagged, every database is judged.
+	Production []string `yaml:"production"`
+	// Connected lists the systems someone connected on purpose with firedrill
+	// connect. Only connect writes it. A system missing here is never called,
+	// whatever credentials the machine holds.
+	Connected []string `yaml:"connected"`
+}
+
+// Defaults of the noise rules.
+const (
+	DefaultShadowDays       = 14
+	DefaultReviewAfterDays  = 30
+	DefaultAppReviewDays    = 180
+	DefaultMinRetentionDays = 7
+)
+
+// AppReviewDays returns google.review_days, or its default when unset.
+func (c Config) AppReviewDays() int {
+	if c.Google.ReviewDays == nil {
+		return DefaultAppReviewDays
+	}
+	return *c.Google.ReviewDays
+}
+
+// MinRetentionDays returns recovery.min_retention_days, or its default when unset.
+func (c Config) MinRetentionDays() int {
+	if c.Recovery.MinRetentionDays == nil {
+		return DefaultMinRetentionDays
+	}
+	return *c.Recovery.MinRetentionDays
+}
+
+// IsProduction says whether any of the given names (an account ID, a profile
+// or a project ID) is listed under production.
+func (c Config) IsProduction(names ...string) bool {
+	for _, n := range names {
+		if n != "" && slices.Contains(c.Production, n) {
+			return true
+		}
+	}
+	return false
+}
+
+// ShadowWindow returns shadow_days, or its default when unset.
+func (c Config) ShadowWindow() int {
+	if c.ShadowDays == nil {
+		return DefaultShadowDays
+	}
+	return *c.ShadowDays
+}
+
+// ReviewAfter returns review_after_days, or its default when unset.
+func (c Config) ReviewAfter() int {
+	if c.ReviewAfterDays == nil {
+		return DefaultReviewAfterDays
+	}
+	return *c.ReviewAfterDays
+}
+
+// IsConnected says whether a system was connected on purpose.
+func (c Config) IsConnected(system string) bool {
+	return slices.Contains(c.Connected, system)
+}
+
+// MarkConnected records in dir/config.yaml that a system was connected on
+// purpose. It edits only the connected list and keeps the rest of the file,
+// comments included.
+func MarkConnected(dir, system string) error {
+	path := filepath.Join(dir, "config.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("config.yaml: %w", err)
+	}
+	if doc.Kind == 0 {
+		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return errors.New("config.yaml: expected a mapping at the top")
+	}
+	root := doc.Content[0]
+	var list *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "connected" {
+			list = root.Content[i+1]
+		}
+	}
+	if list == nil {
+		list = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "connected"}, list)
+	}
+	if list.Kind == yaml.ScalarNode && list.Tag == "!!null" {
+		*list = yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	}
+	if list.Kind != yaml.SequenceNode {
+		return errors.New("config.yaml: connected must be a list")
+	}
+	for _, n := range list.Content {
+		if n.Value == system {
+			return nil
+		}
+	}
+	list.Content = append(list.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: system})
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, out, 0o644)
 }
 
 // Retired names a target that no longer exists.
@@ -91,6 +230,38 @@ type Host struct {
 	Owner string `yaml:"owner"`
 }
 
+// App is one entry of apps.yaml: who owns a third-party OAuth app and when it
+// was last reviewed.
+type App struct {
+	ClientID string `yaml:"client_id"`
+	Name     string `yaml:"name"`
+	Owner    string `yaml:"owner"`
+	Reviewed string `yaml:"reviewed"`
+	Note     string `yaml:"note"`
+}
+
+// Backup is one entry of backups.yaml: a copy of a database the API cannot
+// show, kept somewhere else and checked by someone.
+type Backup struct {
+	Database     string `yaml:"database"`
+	CopyLocation string `yaml:"copy_location"`
+	Owner        string `yaml:"owner"`
+	Verified     string `yaml:"verified"`
+}
+
+// AIKey is one entry of ai-keys.yaml: the owner and spend limit of an AI
+// provider key, workspace or project, where the provider's API does not show
+// them.
+type AIKey struct {
+	Provider        string   `yaml:"provider"`
+	KeyID           string   `yaml:"key_id"`
+	Workspace       string   `yaml:"workspace"`
+	Project         string   `yaml:"project"`
+	Owner           string   `yaml:"owner"`
+	MonthlyLimitUSD *float64 `yaml:"monthly_limit_usd"`
+	Verified        string   `yaml:"verified"`
+}
+
 // Project is everything under one .firedrill directory.
 type Project struct {
 	Dir     string
@@ -98,6 +269,68 @@ type Project struct {
 	Waivers []Waiver
 	Hosts   []Host
 	People  map[string]string
+	Apps    []App
+	Backups []Backup
+	AIKeys  []AIKey
+}
+
+// emailLike matches an email address. Registers name owners by handle or
+// team, never by email, since every register lands in records.
+var emailLike = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
+
+func isDate(s string) bool {
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil
+}
+
+// validateRegisters checks apps.yaml, backups.yaml and ai-keys.yaml.
+func (p *Project) validateRegisters() error {
+	owner := func(file string, i int, o string) error {
+		if emailLike.MatchString(o) {
+			return fmt.Errorf("%s entry %d: owner must be a handle or team name, not an email address", file, i+1)
+		}
+		return nil
+	}
+	for i, a := range p.Apps {
+		if a.ClientID == "" {
+			return fmt.Errorf("apps.yaml entry %d: client_id is required", i+1)
+		}
+		if a.Reviewed != "" && !isDate(a.Reviewed) {
+			return fmt.Errorf("apps.yaml entry %d: reviewed must be YYYY-MM-DD", i+1)
+		}
+		if err := owner("apps.yaml", i, a.Owner); err != nil {
+			return err
+		}
+	}
+	for i, b := range p.Backups {
+		if b.Database == "" || b.CopyLocation == "" || b.Verified == "" {
+			return fmt.Errorf("backups.yaml entry %d: database, copy_location and verified are required", i+1)
+		}
+		if !isDate(b.Verified) {
+			return fmt.Errorf("backups.yaml entry %d: verified must be YYYY-MM-DD", i+1)
+		}
+		if err := owner("backups.yaml", i, b.Owner); err != nil {
+			return err
+		}
+	}
+	for i, k := range p.AIKeys {
+		if k.Provider != "anthropic" && k.Provider != "openai" {
+			return fmt.Errorf("ai-keys.yaml entry %d: provider must be anthropic or openai", i+1)
+		}
+		if k.KeyID == "" && k.Workspace == "" && k.Project == "" {
+			return fmt.Errorf("ai-keys.yaml entry %d: name a key_id, a workspace or a project", i+1)
+		}
+		if k.Verified == "" || !isDate(k.Verified) {
+			return fmt.Errorf("ai-keys.yaml entry %d: verified is required, as YYYY-MM-DD", i+1)
+		}
+		if k.MonthlyLimitUSD != nil && *k.MonthlyLimitUSD < 0 {
+			return fmt.Errorf("ai-keys.yaml entry %d: monthly_limit_usd must be 0 or more", i+1)
+		}
+		if err := owner("ai-keys.yaml", i, k.Owner); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Load reads a project. Only config.yaml must exist.
@@ -110,7 +343,14 @@ func Load(dir string) (*Project, error) {
 	if err := yaml.Unmarshal(data, &p.Config); err != nil {
 		return nil, fmt.Errorf("config.yaml: %w", err)
 	}
-	for name, out := range map[string]any{"waivers.yaml": &p.Waivers, "hosts.yaml": &p.Hosts, "people.yaml": &p.People} {
+	if p.Config.ShadowWindow() < 0 || p.Config.ReviewAfter() < 0 {
+		return nil, errors.New("config.yaml: shadow_days and review_after_days must be 0 or more")
+	}
+	if p.Config.AppReviewDays() < 0 || p.Config.MinRetentionDays() < 0 {
+		return nil, errors.New("config.yaml: google.review_days and recovery.min_retention_days must be 0 or more")
+	}
+	for name, out := range map[string]any{"waivers.yaml": &p.Waivers, "hosts.yaml": &p.Hosts, "people.yaml": &p.People,
+		"apps.yaml": &p.Apps, "backups.yaml": &p.Backups, "ai-keys.yaml": &p.AIKeys} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if os.IsNotExist(err) {
 			continue
@@ -129,6 +369,9 @@ func Load(dir string) (*Project, error) {
 		if _, err := time.Parse("2006-01-02", w.Expires); err != nil {
 			return nil, fmt.Errorf("waivers.yaml entry %d: expires must be YYYY-MM-DD", i+1)
 		}
+	}
+	if err := p.validateRegisters(); err != nil {
+		return nil, err
 	}
 	return p, nil
 }

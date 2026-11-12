@@ -1,0 +1,159 @@
+firedrill: v0
+drill: supply/installs-from-lockfile
+cases:
+    - name: committed lockfile, frozen install
+      expect: PASS
+      target:
+        local: true
+        name: acme/api
+      facts:
+        manifests:
+            found:
+                - file: package.json
+                  install_scripts:
+                    - esbuild
+                  install_scripts_known: true
+                  lockfile: package-lock.json
+                  lockfile_committed: true
+                  manager: npm
+                  new_install_scripts: []
+            inspected: 1
+        workflows:
+            found:
+                - cloud_key_secrets: []
+                  file: .github/workflows/ci.yml
+                  permissions: read
+                  pull_request_target_checkout: false
+                  secrets: []
+                  triggers:
+                    - push
+                  unfrozen_installs: []
+                  unpinned_actions: []
+                  uses_oidc: false
+            inspected: 1
+      inspected:
+        manifests: 1
+        workflows: 1
+    - name: no lockfile
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        manifests:
+            found:
+                - file: package.json
+                  install_scripts: []
+                  install_scripts_known: true
+                  lockfile: ""
+                  lockfile_committed: false
+                  manager: unknown
+                  new_install_scripts: []
+            inspected: 1
+        workflows:
+            found: []
+            inspected: 0
+      inspected:
+        manifests: 1
+    - name: lockfile gitignored
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        manifests:
+            found:
+                - file: package.json
+                  install_scripts: []
+                  install_scripts_known: true
+                  lockfile: package-lock.json
+                  lockfile_committed: false
+                  manager: npm
+                  new_install_scripts: []
+            inspected: 1
+        workflows:
+            found: []
+            inspected: 0
+      inspected:
+        manifests: 1
+    - name: npm install in CI
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        manifests:
+            found:
+                - file: package.json
+                  install_scripts: []
+                  install_scripts_known: true
+                  lockfile: package-lock.json
+                  lockfile_committed: true
+                  manager: npm
+                  new_install_scripts: []
+            inspected: 1
+        workflows:
+            found:
+                - cloud_key_secrets: []
+                  file: .github/workflows/ci.yml
+                  permissions: read
+                  pull_request_target_checkout: false
+                  secrets: []
+                  triggers:
+                    - push
+                  unfrozen_installs:
+                    - npm install
+                  unpinned_actions: []
+                  uses_oidc: false
+            inspected: 1
+      inspected:
+        manifests: 1
+        workflows: 1
+    - name: dependency gained an install script
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        manifests:
+            found:
+                - file: package.json
+                  install_scripts:
+                    - acme-colors
+                    - esbuild
+                  install_scripts_known: true
+                  lockfile: package-lock.json
+                  lockfile_committed: true
+                  manager: npm
+                  new_install_scripts:
+                    - acme-colors
+            inspected: 1
+        workflows:
+            found: []
+            inspected: 0
+      inspected:
+        manifests: 1
+    - name: no package.json
+      expect: N/A
+      target:
+        local: true
+        name: acme/api
+      facts:
+        manifests:
+            found: []
+            inspected: 0
+        workflows:
+            found:
+                - cloud_key_secrets: []
+                  file: .github/workflows/ci.yml
+                  permissions: read
+                  pull_request_target_checkout: false
+                  secrets: []
+                  triggers:
+                    - push
+                  unfrozen_installs: []
+                  unpinned_actions: []
+                  uses_oidc: false
+            inspected: 1
+      inspected:
+        workflows: 1

@@ -1,5 +1,5 @@
-// Package google reads the Workspace directory through a service account with
-// domain-wide delegation.
+// Package google reads the Workspace directory, and the OAuth grants users gave
+// third-party apps, through a service account with domain-wide delegation.
 package google
 
 import (
@@ -32,15 +32,39 @@ func New() *Connector {
 
 func init() { connector.Register(New()) }
 
+// Collection names.
+const (
+	CollectionUsers  = "directory users"
+	CollectionTokens = "oauth tokens"
+)
+
+// TokensScope is the scope tokens.list needs. Google offers no read-only
+// scope for it; the guard allows only GET on the Admin SDK, so the delete
+// method it also covers is never called.
+// https://developers.google.com/workspace/admin/directory/reference/rest/v1/tokens/list
+const TokensScope = admin.AdminDirectoryUserSecurityScope
+
+// TokenScanner names the scan record of the OAuth grants read.
+const TokenScanner = "oauth_tokens"
+
 // Collections lists what it reads.
 func (c *Connector) Collections() []connector.Collection {
 	return []connector.Collection{{
-		Name:       "directory users",
+		Name:       CollectionUsers,
 		Nodes:      []string{graph.KindIdentityUser},
 		Permission: admin.AdminDirectoryUserReadonlyScope,
 		Calls: []string{
 			"POST https://oauth2.googleapis.com/token",
 			"GET https://admin.googleapis.com/admin/directory/v1/users?domain={domain}",
+		},
+	}, {
+		Name:       CollectionTokens,
+		Nodes:      []string{graph.KindOAuthApp},
+		Permission: admin.AdminDirectoryUserReadonlyScope + " and " + TokensScope,
+		Calls: []string{
+			"POST https://oauth2.googleapis.com/token",
+			"GET https://admin.googleapis.com/admin/directory/v1/users?domain={domain}",
+			"GET https://admin.googleapis.com/admin/directory/v1/users/{user ID}/tokens, once per user",
 		},
 	}}
 }
@@ -52,36 +76,51 @@ func keyPath(s connector.Scope) string {
 	return ""
 }
 
-// Available is true when the domain, the admin and the key are all set.
+// Available is true when Google was connected on purpose and the domain, the
+// admin and the key are all set. A key alone is never enough.
 func (c *Connector) Available(s connector.Scope) (bool, string) {
 	g := s.Project.Config.Google
-	if g.Domain == "" || g.AdminEmail == "" || keyPath(s) == "" {
+	if !s.Project.Config.IsConnected("google") || g.Domain == "" || g.AdminEmail == "" || keyPath(s) == "" {
 		return false, "connect google"
 	}
 	return true, ""
 }
 
-// Collect reads every user in the domain.
-func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s connector.Scope, out graph.Writer) error {
+// service returns an Admin SDK client acting as the configured admin with one
+// scope. Each scope gets its own token, so a scope the delegation lacks fails
+// only the collection that needs it.
+func (c *Connector) service(ctx context.Context, s connector.Scope, scope string) (*admin.Service, error) {
 	key, err := os.ReadFile(keyPath(s))
 	if err != nil {
-		return fmt.Errorf("read the service account key: %w", errors.Unwrap(err))
+		return nil, fmt.Errorf("read the service account key: %w", errors.Unwrap(err))
 	}
-	conf, err := googleoauth.JWTConfigFromJSON(key, admin.AdminDirectoryUserReadonlyScope)
+	conf, err := googleoauth.JWTConfigFromJSON(key, scope)
 	if err != nil {
-		return fmt.Errorf("the service account key could not be parsed")
+		return nil, fmt.Errorf("the service account key could not be parsed")
 	}
 	conf.Subject = s.Project.Config.Google.AdminEmail
 	guarded := c.HTTP(s.Log)
 	authed := conf.Client(context.WithValue(ctx, oauth2.HTTPClient, guarded))
-	svc, err := admin.NewService(ctx, option.WithHTTPClient(authed))
+	return admin.NewService(ctx, option.WithHTTPClient(authed))
+}
+
+// Collect reads every user in the domain, or every user's OAuth grants.
+func (c *Connector) Collect(ctx context.Context, col connector.Collection, s connector.Scope, out graph.Writer) error {
+	if col.Name == CollectionTokens {
+		return c.collectTokens(ctx, s, out)
+	}
+	svc, err := c.service(ctx, s, admin.AdminDirectoryUserReadonlyScope)
 	if err != nil {
 		return err
 	}
+	return listUsers(ctx, svc, s, func(u *admin.User) { write(u, s, out) })
+}
+
+func listUsers(ctx context.Context, svc *admin.Service, s connector.Scope, each func(*admin.User)) error {
 	return svc.Users.List().Domain(s.Project.Config.Google.Domain).MaxResults(500).OrderBy("email").
 		Pages(ctx, func(page *admin.Users) error {
 			for _, u := range page.Users {
-				write(u, s, out)
+				each(u)
 			}
 			return nil
 		})

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -84,6 +85,10 @@ type Policy struct {
 	HostAllowed func(host string) bool
 	// PostURLs are the exact scheme, host and path allowed to receive POST.
 	PostURLs map[string]bool
+	// Paths, when a host has an entry, limits GET and HEAD on that host to
+	// paths matching one of its patterns. A host that also serves write or
+	// inference APIs is listed here, so a read of anything else is refused.
+	Paths map[string][]*regexp.Regexp
 }
 
 // GitHubPolicy allows reads of the GitHub API and its tarball redirect host.
@@ -91,11 +96,54 @@ func GitHubPolicy() Policy {
 	return Policy{Hosts: map[string]bool{"api.github.com": true, "codeload.github.com": true}}
 }
 
-// GooglePolicy allows reads of the Admin SDK and the OAuth token exchange.
+// GooglePolicy allows reads of the Admin SDK and the OAuth token exchange. The
+// Admin SDK host takes the directory users list and each user's OAuth tokens
+// list, both GET.
 func GooglePolicy() Policy {
 	return Policy{
 		Hosts:    map[string]bool{"admin.googleapis.com": true},
 		PostURLs: map[string]bool{"https://oauth2.googleapis.com/token": true},
+	}
+}
+
+// AnthropicPolicy allows only GET of the two Admin API reads Firedrill uses.
+// api.anthropic.com also serves inference and every Admin API write, so the
+// path is limited too: a POST that would create, update or archive anything,
+// and a GET of any other path, is refused.
+func AnthropicPolicy() Policy {
+	return Policy{
+		Hosts: map[string]bool{"api.anthropic.com": true},
+		Paths: map[string][]*regexp.Regexp{"api.anthropic.com": {
+			// Every API key: ID, name, status, partial hint, creator and workspace.
+			// https://platform.claude.com/docs/en/api/admin/api_keys/list
+			regexp.MustCompile(`^/v1/organizations/api_keys$`),
+			// Workspace IDs and names, to name each key's workspace.
+			// https://platform.claude.com/docs/en/api/admin/workspaces/list
+			regexp.MustCompile(`^/v1/organizations/workspaces$`),
+		}},
+	}
+}
+
+// OpenAIPolicy allows only GET of the four Administration API reads Firedrill
+// uses. api.openai.com also serves inference and every write, so the path is
+// limited too.
+func OpenAIPolicy() Policy {
+	return Policy{
+		Hosts: map[string]bool{"api.openai.com": true},
+		Paths: map[string][]*regexp.Regexp{"api.openai.com": {
+			// Every project: ID, name and status.
+			// https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/projects/methods/list
+			regexp.MustCompile(`^/v1/organization/projects$`),
+			// Each project's API keys: ID, name, redacted value, owner, created.
+			// https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/projects/subresources/api_keys/methods/list
+			regexp.MustCompile(`^/v1/organization/projects/[A-Za-z0-9_-]+/api_keys$`),
+			// Each project's hard spend limit.
+			// https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/projects/subresources/spend_limit/index.md
+			regexp.MustCompile(`^/v1/organization/projects/[A-Za-z0-9_-]+/spend_limit$`),
+			// The organization's hard spend limit.
+			// https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/spend_limit/index.md
+			regexp.MustCompile(`^/v1/organization/spend_limit$`),
+		}},
 	}
 }
 
@@ -127,13 +175,30 @@ func (t *Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 func (t *Transport) check(method, hostname, hostport, endpoint string) error {
 	switch method {
 	case http.MethodGet, http.MethodHead:
-		if t.Policy.Hosts[hostname] || t.Policy.Hosts[hostport] {
+		hostOK := t.Policy.Hosts[hostname] || t.Policy.Hosts[hostport] ||
+			(t.Policy.HostAllowed != nil && (t.Policy.HostAllowed(hostname) || t.Policy.HostAllowed(hostport)))
+		if !hostOK {
+			return fmt.Errorf("%w: %s may not call host %s", ErrBlocked, t.Connector, hostport)
+		}
+		patterns, limited := t.Policy.Paths[hostname]
+		if !limited {
+			patterns, limited = t.Policy.Paths[hostport]
+		}
+		if !limited {
 			return nil
 		}
-		if t.Policy.HostAllowed != nil && (t.Policy.HostAllowed(hostname) || t.Policy.HostAllowed(hostport)) {
-			return nil
+		path := endpoint[strings.Index(endpoint, "://")+3:]
+		if i := strings.Index(path, "/"); i >= 0 {
+			path = path[i:]
+		} else {
+			path = "/"
 		}
-		return fmt.Errorf("%w: %s may not call host %s", ErrBlocked, t.Connector, hostport)
+		for _, p := range patterns {
+			if p.MatchString(path) {
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: %s may not %s %s", ErrBlocked, t.Connector, method, endpoint)
 	case http.MethodPost:
 		if t.Policy.PostURLs[endpoint] {
 			return nil
@@ -148,8 +213,9 @@ func Client(name string, p Policy, log *CallLog, next http.RoundTripper) *http.C
 	return &http.Client{Timeout: 60 * time.Second, Transport: &Transport{Next: next, Policy: p, Log: log, Connector: name}}
 }
 
-// AWSActions is the fixed list of AWS actions Firedrill may call. Broad reads
-// such as secretsmanager:GetSecretValue or s3:GetObject are refused even if the
+// AWSActions is the fixed list of AWS actions Firedrill may call, each named as
+// IAM names it: service prefix and operation. Broad reads such as
+// secretsmanager:GetSecretValue or s3:GetObject are refused even if the
 // credential allows them.
 var AWSActions = map[string]bool{
 	"iam:GetAccountAuthorizationDetails": true,
@@ -157,7 +223,23 @@ var AWSActions = map[string]bool{
 	"iam:ListAccessKeys":                 true,
 	"iam:GenerateCredentialReport":       true,
 	"iam:GetCredentialReport":            true,
+	// Each RDS DB instance's backup retention, deletion protection, engine and
+	// tags, and its cross-Region automated backup replications.
+	// https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DescribeDBInstances.html
+	"rds:DescribeDBInstances": true,
+	// The same settings for Aurora and other DB clusters, where retention and
+	// deletion protection live on the cluster.
+	// https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DescribeDBClusters.html
+	"rds:DescribeDBClusters": true,
+	// Completed AWS Backup copy jobs, whose destination vault ARN names the
+	// account a copy went to.
+	// https://docs.aws.amazon.com/aws-backup/latest/devguide/API_ListCopyJobs.html
+	"backup:ListCopyJobs": true,
 }
+
+// AWSServicePrefix maps an SDK service ID to the prefix IAM uses for its
+// actions. A service missing here is refused whatever operation it calls.
+var AWSServicePrefix = map[string]string{"IAM": "iam", "RDS": "rds", "Backup": "backup"}
 
 // CheckAWS refuses an AWS action outside the list, and records it.
 func CheckAWS(log *CallLog, action string) error {

@@ -1,0 +1,157 @@
+firedrill: v0
+drill: recovery/backups-separate-and-retained
+cases:
+    - name: retained and copied to another account
+      expect: PASS
+      facts:
+        dbs:
+            found:
+                - account: "111122223333"
+                  automated_backups: true
+                  copy_detail: cross-account vault 444455556666
+                  deletion_protection: true
+                  engine: postgres
+                  name: orders
+                  production: true
+                  production_basis: named under production in config
+                  project: ""
+                  region: us-east-1
+                  retention_days: 14
+                  retention_ok: true
+                  separate_copy: "yes"
+                  system: aws
+            min_retention_days: 7
+            systems:
+                - aws
+    - name: no automated backups
+      expect: FAIL
+      facts:
+        dbs:
+            found:
+                - account: "111122223333"
+                  automated_backups: false
+                  copy_detail: cross-account vault 444455556666
+                  deletion_protection: true
+                  engine: postgres
+                  name: orders
+                  production: true
+                  production_basis: named under production in config
+                  project: ""
+                  region: us-east-1
+                  retention_days: 0
+                  retention_ok: false
+                  separate_copy: "yes"
+                  system: aws
+            min_retention_days: 7
+            systems:
+                - aws
+    - name: retention too short
+      expect: FAIL
+      facts:
+        dbs:
+            found:
+                - account: "111122223333"
+                  automated_backups: true
+                  copy_detail: cross-account vault 444455556666
+                  deletion_protection: true
+                  engine: postgres
+                  name: orders
+                  production: true
+                  production_basis: named under production in config
+                  project: ""
+                  region: us-east-1
+                  retention_days: 3
+                  retention_ok: false
+                  separate_copy: "yes"
+                  system: aws
+            min_retention_days: 7
+            systems:
+                - aws
+    - name: backups only in the same account
+      expect: FAIL
+      facts:
+        dbs:
+            found:
+                - account: "111122223333"
+                  automated_backups: true
+                  copy_detail: ""
+                  deletion_protection: true
+                  engine: postgres
+                  name: orders
+                  production: true
+                  production_basis: named under production in config
+                  project: ""
+                  region: us-east-1
+                  retention_days: 14
+                  retention_ok: true
+                  separate_copy: "no"
+                  system: aws
+            min_retention_days: 7
+            systems:
+                - aws
+    - name: separate copy unknown
+      expect: WARN
+      facts:
+        dbs:
+            found:
+                - account: ""
+                  automated_backups: true
+                  copy_detail: backups kept after the instance is deleted, in the same project
+                  deletion_protection: true
+                  engine: postgres
+                  name: ledger
+                  production: true
+                  production_basis: named under production in config
+                  project: acme-prod
+                  region: europe-west1
+                  retention_days: 14
+                  retention_ok: true
+                  separate_copy: unknown
+                  system: gcp
+            min_retention_days: 7
+            systems:
+                - gcp
+    - name: declared copy
+      expect: PASS
+      facts:
+        dbs:
+            found:
+                - account: ""
+                  automated_backups: true
+                  copy_detail: 'declared copy: nightly export to gs://acme-backup-vault in acme-backup, verified 2026-11-01'
+                  deletion_protection: true
+                  engine: postgres
+                  name: ledger
+                  production: true
+                  production_basis: named under production in config
+                  project: acme-prod
+                  region: europe-west1
+                  retention_days: 14
+                  retention_ok: true
+                  separate_copy: declared
+                  system: gcp
+            min_retention_days: 7
+            systems:
+                - gcp
+    - name: no production database
+      expect: N/A
+      facts:
+        dbs:
+            found:
+                - account: "111122223333"
+                  automated_backups: false
+                  copy_detail: ""
+                  deletion_protection: true
+                  engine: postgres
+                  name: scratch
+                  production: false
+                  production_basis: ""
+                  project: ""
+                  region: us-east-1
+                  retention_days: 0
+                  retention_ok: false
+                  separate_copy: "no"
+                  system: aws
+            min_retention_days: 7
+            systems:
+                - aws

@@ -1,5 +1,6 @@
-// Package gcp reads IAM bindings, Cloud Storage bucket access and service
-// account keys in every listed Google Cloud project. Every call is a GET, except
+// Package gcp reads IAM bindings, Cloud Storage bucket access, service account
+// keys and Cloud SQL backup settings in every listed Google Cloud project.
+// Every call is a GET, except
 // the token exchange and getIamPolicy on each listed project, each allowed by
 // exact URL.
 package gcp
@@ -42,7 +43,11 @@ const (
 	iamHost      = "iam.googleapis.com"
 	storageHost  = "storage.googleapis.com"
 	analyzerHost = "policyanalyzer.googleapis.com"
-	tokenURL     = "https://oauth2.googleapis.com/token"
+	// Cloud SQL Admin API: instances.list, for each instance's backup
+	// configuration, deletion protection, region and replicas.
+	// https://docs.cloud.google.com/sql/docs/mysql/admin-api/rest/v1/instances/list
+	sqlHost  = "sqladmin.googleapis.com"
+	tokenURL = "https://oauth2.googleapis.com/token"
 )
 
 // Connector reads Google Cloud.
@@ -74,7 +79,7 @@ func Policy(projects []string, impersonationURL string) connector.Policy {
 		post[getIamPolicyURL(p)] = true
 	}
 	return connector.Policy{
-		Hosts:    map[string]bool{crmHost: true, iamHost: true, storageHost: true, analyzerHost: true},
+		Hosts:    map[string]bool{crmHost: true, iamHost: true, storageHost: true, analyzerHost: true, sqlHost: true},
 		PostURLs: post,
 	}
 }
@@ -83,10 +88,16 @@ func getIamPolicyURL(project string) string {
 	return "https://" + crmHost + "/v3/projects/" + project + ":getIamPolicy"
 }
 
+// Collection names.
+const (
+	CollectionIAM     = "gcp"
+	CollectionBackups = "cloudsql"
+)
+
 // Collections lists what it reads.
 func (c *Connector) Collections() []connector.Collection {
 	return []connector.Collection{{
-		Name:  "gcp",
+		Name:  CollectionIAM,
 		Nodes: []string{graph.KindGCPProject, graph.KindGCPBinding, graph.KindGCPBucket, graph.KindGCPKey},
 		Permission: "Viewer and Security Reviewer on each project, and Policy Analyzer's " +
 			"Activity Analysis Viewer for key last use. Scope " + Scope,
@@ -100,6 +111,11 @@ func (c *Connector) Collections() []connector.Collection {
 			"GET https://" + storageHost + "/storage/v1/b?project={project}",
 			"GET https://" + storageHost + "/storage/v1/b/{bucket}/iam",
 		},
+	}, {
+		Name:       CollectionBackups,
+		Nodes:      []string{graph.KindDatabase},
+		Permission: "Cloud SQL Viewer (roles/cloudsql.viewer), which Viewer includes, and the Cloud SQL Admin API turned on in each project",
+		Calls:      []string{"GET https://" + sqlHost + "/v1/projects/{project}/instances"},
 	}}
 }
 
@@ -129,9 +145,10 @@ func credentialsPath(s connector.Scope) string {
 	return filepath.Join(dir, "application_default_credentials.json")
 }
 
-// Available is true when projects are listed and a credentials file exists.
+// Available is true when Google Cloud was connected on purpose, projects are
+// listed and a credentials file exists. Credentials alone are never enough.
 func (c *Connector) Available(s connector.Scope) (bool, string) {
-	if len(s.Project.Config.GCP.Projects) == 0 {
+	if !s.Project.Config.IsConnected("gcp") || len(s.Project.Config.GCP.Projects) == 0 {
 		return false, "connect gcp"
 	}
 	p := credentialsPath(s)
@@ -252,12 +269,15 @@ func (a *api) do(ctx context.Context, method, u string, body any, out any) error
 }
 
 // Collect reads every listed project.
-func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s connector.Scope, out graph.Writer) error {
+func (c *Connector) Collect(ctx context.Context, col connector.Collection, s connector.Scope, out graph.Writer) error {
 	cl, quota, err := c.client(ctx, s)
 	if err != nil {
 		return err
 	}
 	a := &api{cl: cl, quota: quota}
+	if col.Name == CollectionBackups {
+		return c.collectCloudSQL(ctx, a, s, out)
+	}
 	// One project that cannot be read gives ERROR on that project's drills;
 	// the others still run. Only when none can be read does the connector fail.
 	var errs []error

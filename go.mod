@@ -7,7 +7,9 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.47.8
 	github.com/aws/aws-sdk-go-v2/config v1.33.16
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.16
+	github.com/aws/aws-sdk-go-v2/service/backup v1.69.8
 	github.com/aws/aws-sdk-go-v2/service/iam v1.64.9
+	github.com/aws/aws-sdk-go-v2/service/rds v1.132.2
 	github.com/aws/smithy-go v1.28.8
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0

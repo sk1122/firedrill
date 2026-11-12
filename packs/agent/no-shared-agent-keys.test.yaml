@@ -14,12 +14,28 @@ cases:
                   deny_read_paths: []
                   file: .mcp.json
                   mcp_servers:
-                    - credentials:
+                    - command: acme-mcp
+                      credentials:
                         - secret:a
+                      host: ""
+                      host_known: false
                       name: a
-                    - credentials:
+                      package: ""
+                      package_known: true
+                      pinned: true
+                      transport: stdio
+                      version: ""
+                    - command: acme-mcp
+                      credentials:
                         - secret:b
+                      host: ""
+                      host_known: false
                       name: b
+                      package: ""
+                      package_known: true
+                      pinned: true
+                      transport: stdio
+                      version: ""
                   scope: repo
                   tool: claude-code
                   unguarded_destructive: []
@@ -40,12 +56,28 @@ cases:
                   deny_read_paths: []
                   file: .mcp.json
                   mcp_servers:
-                    - credentials:
+                    - command: acme-mcp
+                      credentials:
                         - secret:a
+                      host: ""
+                      host_known: false
                       name: a
-                    - credentials:
+                      package: ""
+                      package_known: true
+                      pinned: true
+                      transport: stdio
+                      version: ""
+                    - command: acme-mcp
+                      credentials:
                         - secret:a
+                      host: ""
+                      host_known: false
                       name: b
+                      package: ""
+                      package_known: true
+                      pinned: true
+                      transport: stdio
+                      version: ""
                   scope: repo
                   tool: claude-code
                   unguarded_destructive: []

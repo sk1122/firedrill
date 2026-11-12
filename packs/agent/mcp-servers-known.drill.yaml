@@ -1,0 +1,15 @@
+firedrill: v0
+id: agent/mcp-servers-known
+safeguard: "Every MCP server in an agent config points at an owned or allowlisted host, and any package it runs is pinned to an exact version."
+severity: high
+for_each: repos
+fetch:
+  agents: { fact: files.agent_configs }
+na_reason: "agents run with their defaults; check laptops with --include-home"
+pass_when:
+  - agents.found.all(a, a.mcp_servers.all(s, s.transport != "http" || s.host_known))
+  - agents.found.all(a, a.mcp_servers.all(s, s.pinned))
+warn_when:
+  - agents.found.exists(a, a.mcp_servers.exists(s, s.package != "" && !s.package_known))
+fix: "Pin each package to an exact version (name@1.2.3, name==1.2.3, or an image digest), point each remote server at a host you own, or add the host to agents.mcp_hosts or the package to agents.mcp_packages in config.yaml after reviewing it."
+maps_to: [SOC2:CC6.8]

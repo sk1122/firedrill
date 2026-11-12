@@ -74,7 +74,7 @@ const authXML = `<GetAccountAuthorizationDetailsResponse xmlns="https://iam.amaz
 <RoleDetailList>
 <member><RoleName>BreakGlass</RoleName><Path>/</Path><Arn>arn:aws:iam::111111111111:role/BreakGlass</Arn><CreateDate>2020-01-01T00:00:00Z</CreateDate><AttachedManagedPolicies><member><PolicyName>AdministratorAccess</PolicyName><PolicyArn>arn:aws:iam::aws:policy/AdministratorAccess</PolicyArn></member></AttachedManagedPolicies></member>
 <member><RoleName>AWSReservedSSO_Admin_abc</RoleName><Path>/aws-reserved/sso.amazonaws.com/</Path><Arn>arn:aws:iam::111111111111:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_abc</Arn><CreateDate>2020-01-01T00:00:00Z</CreateDate></member>
-<member><RoleName>Deploy</RoleName><Path>/</Path><Arn>arn:aws:iam::111111111111:role/Deploy</Arn><CreateDate>2020-01-01T00:00:00Z</CreateDate><RoleLastUsed><LastUsedDate>2026-10-01T00:00:00Z</LastUsedDate></RoleLastUsed></member>
+<member><RoleName>Deploy</RoleName><Path>/</Path><Arn>arn:aws:iam::111111111111:role/Deploy</Arn><CreateDate>2020-01-01T00:00:00Z</CreateDate><AssumeRolePolicyDocument>%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Effect%22%3A%22Allow%22%2C%22Principal%22%3A%7B%22Federated%22%3A%22arn%3Aaws%3Aiam%3A%3A111111111111%3Aoidc-provider%2Ftoken.actions.githubusercontent.com%22%7D%2C%22Action%22%3A%22sts%3AAssumeRoleWithWebIdentity%22%2C%22Condition%22%3A%7B%22StringLike%22%3A%7B%22token.actions.githubusercontent.com%3Asub%22%3A%22repo%3A%2A%22%7D%7D%7D%5D%7D</AssumeRolePolicyDocument><RoleLastUsed><LastUsedDate>2026-10-01T00:00:00Z</LastUsedDate></RoleLastUsed></member>
 </RoleDetailList><GroupDetailList/><Policies/></GetAccountAuthorizationDetailsResult></GetAccountAuthorizationDetailsResponse>`
 
 func fakeIAM(t *testing.T) (*Connector, connector.Scope, *[]string) {
@@ -167,6 +167,12 @@ func TestCollectAccount(t *testing.T) {
 	if dep.Attrs["excluded"] != false || dep.Attrs["last_used"] != "2026-10-01T00:00:00Z" {
 		t.Fatalf("%+v", dep.Attrs)
 	}
+	if dep.Attrs["github_oidc"] != true || dep.Attrs["github_oidc_unscoped"] != true {
+		t.Fatalf("the trust policy lets any GitHub repo in: %+v", dep.Attrs)
+	}
+	if bg.Attrs["github_oidc"] != false || u.Attrs["github_oidc"] != false || u.Attrs["github_oidc_unscoped"] != false {
+		t.Fatalf("no GitHub trust: %+v %+v", bg.Attrs, u.Attrs)
+	}
 }
 
 func TestUnlistedActionIsRefusedBeforeAnyCall(t *testing.T) {
@@ -196,6 +202,40 @@ func TestIsDestructive(t *testing.T) {
 	for _, a := range no {
 		if isDestructive(a) {
 			t.Errorf("%s should not be destructive", a)
+		}
+	}
+}
+
+func TestGitHubTrust(t *testing.T) {
+	stmt := func(principal, cond string) string {
+		return `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":` + principal +
+			`,"Action":"sts:AssumeRoleWithWebIdentity"` + cond + `}]}`
+	}
+	gh := `{"Federated":"arn:aws:iam::111111111111:oidc-provider/token.actions.githubusercontent.com"}`
+	sub := func(op, v string) string {
+		return `,"Condition":{"StringEquals":{"token.actions.githubusercontent.com:aud":"sts.amazonaws.com"},"` + op +
+			`":{"token.actions.githubusercontent.com:sub":` + v + `}}`
+	}
+	cases := []struct {
+		name, doc           string
+		federated, unscoped bool
+	}{
+		{"one repo", stmt(gh, sub("StringEquals", `"repo:acme/api:ref:refs/heads/main"`)), true, false},
+		{"one org, any repo", stmt(gh, sub("StringLike", `"repo:acme/*"`)), true, false},
+		{"customised sub", stmt(gh, sub("StringLike", `["repository_owner:acme:*"]`)), true, false},
+		{"no sub condition", stmt(gh, `,"Condition":{"StringEquals":{"token.actions.githubusercontent.com:aud":"sts.amazonaws.com"}}`), true, true},
+		{"any repo", stmt(gh, sub("StringLike", `"repo:*"`)), true, true},
+		{"wildcard org", stmt(gh, sub("StringLike", `["repo:acme/api:*","repo:acme*/x:*"]`)), true, true},
+		{"bare wildcard", stmt(gh, sub("StringLike", `"*"`)), true, true},
+		{"only a negative", stmt(gh, sub("StringNotLike", `"repo:evil/*"`)), true, true},
+		{"service role", stmt(`{"Service":"lambda.amazonaws.com"}`, ""), false, false},
+		{"another provider", stmt(`{"Federated":"accounts.google.com"}`, ""), false, false},
+		{"not a policy", "nope", false, false},
+	}
+	for _, c := range cases {
+		got := githubTrust(url.QueryEscape(c.doc))
+		if got.federated != c.federated || got.unscoped != c.unscoped {
+			t.Errorf("%s: got %+v", c.name, got)
 		}
 	}
 }

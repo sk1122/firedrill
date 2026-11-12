@@ -1,0 +1,15 @@
+firedrill: v0
+id: keys/ai-keys-capped
+safeguard: "Every Anthropic and OpenAI API key sits under a hard spend limit and has a named owner."
+severity: high
+fetch:
+  keys: { fact: keys.ai }
+applies_when: keys.found.exists(k, k.status == "active")
+na_reason: "no active Anthropic or OpenAI API key was found"
+pass_when:
+  - keys.found.filter(k, k.status == "active" && !k.has_owner).size() == 0
+  - keys.found.filter(k, k.status == "active" && k.limit_readable && !k.capped).size() == 0
+warn_when:
+  - keys.found.exists(k, k.status == "active" && !k.limit_readable)
+fix: "Set a hard monthly spend limit on the OpenAI project or organization, and on the Anthropic workspace in the Console. Give each key an owner, or archive keys nobody owns. Where the API cannot show a limit or an owner, record them in .firedrill/ai-keys.yaml (provider, key_id or workspace or project, owner, monthly_limit_usd, verified)."
+maps_to: [SOC2:CC6.1, ISO27001:A.5.9]

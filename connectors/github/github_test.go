@@ -281,16 +281,58 @@ func TestPlanBlockedReplyMeansNoProtectionEvenWithHiddenPlan(t *testing.T) {
 	if repo.Attrs["plan"] != "unknown" || repo.Attrs["protection_available"] != false {
 		t.Fatalf("GitHub's own reply decides: %+v", repo.Attrs)
 	}
-	other := base(routes{protPath: status{403, "Resource not accessible by personal access token"}})
-	other["/orgs/acme"] = obj{"login": "acme"}
-	repo, _ = collect(t, fakeGitHub(t, other), scope(t)).Get("github:repo/acme/api")
-	if repo.Attrs["protection_available"] != true {
-		t.Fatalf("any other 403 keeps the unknown-plan rule: %+v", repo.Attrs)
+}
+
+// collectErr runs Collect and returns its error, failing if there is none.
+func collectErr(t *testing.T, r routes) error {
+	t.Helper()
+	c := fakeGitHub(t, r)
+	err := c.Collect(context.Background(), c.Collections()[0], scope(t), graph.New())
+	if err == nil {
+		t.Fatal("a setting the token cannot read must be an error, not an empty value")
+	}
+	return err
+}
+
+func TestForbiddenProtectionIsAnError(t *testing.T) {
+	err := collectErr(t, base(routes{protPath: status{403, "Resource not accessible by personal access token"}}))
+	if !strings.Contains(err.Error(), "acme/api") || !strings.Contains(err.Error(), "Administration: read") {
+		t.Fatalf("the error names the repo and the permission: %v", err)
 	}
 }
 
-func TestForbiddenProtectionIsNotFatal(t *testing.T) {
-	collect(t, fakeGitHub(t, base(routes{protPath: 403, rulesPath: 403})), scope(t))
+func TestForbiddenRulesIsAnError(t *testing.T) {
+	err := collectErr(t, base(routes{rulesPath: 403}))
+	if !strings.Contains(err.Error(), "acme/api") || !strings.Contains(err.Error(), "rulesets") {
+		t.Fatalf("the error names the repo and the rulesets: %v", err)
+	}
+}
+
+func TestPlanBlockedRulesAreNotAnError(t *testing.T) {
+	up := status{403, "Upgrade to GitHub Pro or make this repository public to enable this feature."}
+	repo, _ := collect(t, fakeGitHub(t, base(routes{protPath: up, rulesPath: up})), scope(t)).Get("github:repo/acme/api")
+	if repo.Attrs["protection_available"] != false {
+		t.Fatalf("%+v", repo.Attrs)
+	}
+}
+
+func TestForbiddenRulesetBypassIsUnknown(t *testing.T) {
+	r := rulesetRoutes(nil)
+	r["/repos/acme/api/rulesets/7"] = 403
+	if got := rule(t, collect(t, fakeGitHub(t, r), scope(t))); got["bypass"] != "unknown" {
+		t.Fatalf("an unreadable bypass list is unknown, never none: %+v", got)
+	}
+}
+
+func TestForbiddenEnvironmentsIsAnError(t *testing.T) {
+	err := collectErr(t, base(routes{"/repos/acme/api/environments": status{403, "Resource not accessible by personal access token"}}))
+	if !strings.Contains(err.Error(), "acme/api") || !strings.Contains(err.Error(), "Environments: read") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestForbiddenActionsSettingsIsAnError(t *testing.T) {
+	collectErr(t, base(routes{"/repos/acme/api/actions/permissions/workflow": 403}))
 }
 
 func TestRepoErrorIsReported(t *testing.T) {
@@ -370,8 +412,12 @@ func TestTarballThroughGuardedRedirect(t *testing.T) {
 
 func TestAvailable(t *testing.T) {
 	s := scope(t)
+	if ok, why := New().Available(s); ok || !strings.Contains(why, "connect github") {
+		t.Fatal("a token and repos are not enough before connect github")
+	}
+	s.Project.Config.Connected = []string{"github"}
 	if ok, _ := New().Available(s); !ok {
-		t.Fatal("token and repos present")
+		t.Fatal("connected, token and repos present")
 	}
 	s.Token = ""
 	if ok, why := New().Available(s); ok || !strings.Contains(why, "connect github") {

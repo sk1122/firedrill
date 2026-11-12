@@ -5,6 +5,7 @@ import (
 	"maps"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sk1122/firedrill/internal/graph"
 )
@@ -17,6 +18,9 @@ func init() {
 	registerGCP()
 	registerFiles()
 	registerDoors()
+	registerOAuthApps()
+	registerBackups()
+	registerAIKeys()
 }
 
 func registerTargets() {
@@ -200,13 +204,14 @@ func registerAWS() {
 		Shape: List(Obj(map[string]*Shape{
 			"account": Str, "kind": Str, "name": Str, "last_used": Str, "keys": List(Str),
 			"is_admin": Bool, "destructive_actions": List(Str), "excluded": Bool,
-			"days_since_used": Int, "days_since_created": Int,
+			"days_since_used": Int, "days_since_created": Int, "github_oidc": Bool, "github_oidc_unscoped": Bool,
 		})),
 		Fn: func(g graph.Reader, a Args) (Result, error) {
 			r := Result{Source: "api"}
 			rows := []any{}
 			for _, n := range g.Nodes(graph.KindAWSPrincipal) {
-				row := attrsOf(n, "account", "name", "last_used", "keys", "is_admin", "destructive_actions", "excluded")
+				row := attrsOf(n, "account", "name", "last_used", "keys", "is_admin", "destructive_actions", "excluded",
+					"github_oidc", "github_oidc_unscoped")
 				row["kind"] = strAttr(n, "principal_kind")
 				row["days_since_used"] = daysSince(strAttr(n, "last_used"), a.Now)
 				row["days_since_created"] = daysSince(strAttr(n, "created"), a.Now)
@@ -424,10 +429,11 @@ func registerFiles() {
 		Name: "files.secrets", Scanning: true,
 		Shape: foundShape(map[string]*Shape{
 			"kind": Str, "file": Str, "line": Int, "env_class": Str, "hash": Str, "agent_readable": Bool, "key_id": Str,
+			"in_agent_config": Bool, "gitignored": Bool,
 		}, map[string]*Shape{"shared_prod_staging": List(Str)}),
 		Fn: func(g graph.Reader, a Args) (Result, error) {
 			r, data := repoScan(g, a, "secrets", graph.KindSecretSeen,
-				"kind", "file", "line", "env_class", "hash", "agent_readable", "key_id")
+				"kind", "file", "line", "env_class", "hash", "agent_readable", "key_id", "in_agent_config", "gitignored")
 			data["shared_prod_staging"] = sharedProdStaging(g)
 			return r, nil
 		},
@@ -436,13 +442,16 @@ func registerFiles() {
 		Name: "files.agent_configs", Scanning: true,
 		Shape: foundShape(map[string]*Shape{
 			"tool": Str, "scope": Str, "file": Str, "allowed_commands": List(Str), "denied_commands": List(Str),
-			"deny_read_paths": List(Str), "unguarded_destructive": List(Str),
-			"mcp_servers": List(Obj(map[string]*Shape{"name": Str, "credentials": List(Str)})),
+			"deny_read_paths": List(Str), "unguarded_destructive": List(Str), "gitignored": Bool, "local_override": Bool,
+			"mcp_servers": List(Obj(map[string]*Shape{
+				"name": Str, "credentials": List(Str), "transport": Str, "host": Str, "host_known": Bool,
+				"command": Str, "package": Str, "version": Str, "pinned": Bool, "package_known": Bool,
+			})),
 		}, map[string]*Shape{"shared_credentials": List(Str)}),
 		Fn: func(g graph.Reader, a Args) (Result, error) {
 			r, data := repoScan(g, a, "agent_configs", graph.KindAgentConfig,
 				"tool", "scope", "file", "allowed_commands", "denied_commands", "deny_read_paths",
-				"unguarded_destructive", "mcp_servers")
+				"unguarded_destructive", "mcp_servers", "gitignored", "local_override")
 			data["shared_credentials"] = sharedCredentials(data["found"].([]any))
 			return r, nil
 		},
@@ -451,9 +460,25 @@ func registerFiles() {
 		Name: "files.workflows", Scanning: true,
 		Shape: foundShape(map[string]*Shape{
 			"file": Str, "permissions": Str, "unpinned_actions": List(Str), "pull_request_target_checkout": Bool,
+			"triggers": List(Str), "secrets": List(Str), "unfrozen_installs": List(Str), "cloud_key_secrets": List(Str),
+			"uses_oidc": Bool,
 		}, nil),
 		Fn: func(g graph.Reader, a Args) (Result, error) {
-			r, _ := repoScan(g, a, "workflows", graph.KindWorkflow, "file", "permissions", "unpinned_actions", "pull_request_target_checkout")
+			r, _ := repoScan(g, a, "workflows", graph.KindWorkflow,
+				"file", "permissions", "unpinned_actions", "pull_request_target_checkout", "triggers", "secrets",
+				"unfrozen_installs", "cloud_key_secrets", "uses_oidc")
+			return r, nil
+		},
+	})
+	Register(Def{
+		Name: "files.manifests", Scanning: true,
+		Shape: foundShape(map[string]*Shape{
+			"file": Str, "manager": Str, "lockfile": Str, "lockfile_committed": Bool,
+			"install_scripts": List(Str), "install_scripts_known": Bool, "new_install_scripts": List(Str),
+		}, nil),
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			r, _ := repoScan(g, a, "manifests", graph.KindManifest,
+				"file", "manager", "lockfile", "lockfile_committed", "install_scripts", "install_scripts_known", "new_install_scripts")
 			return r, nil
 		},
 	})
@@ -600,4 +625,313 @@ func registerDoors() {
 			}
 			return Result{Read: []graph.ID{n.ID}, Source: "api", Data: attrsOf(n, "status", "headers", "head", "tail")}, nil
 		}})
+}
+
+// settingsInt reads one threshold from the config settings node, or its
+// default when the node is missing, as in a graph built by hand.
+func settingsInt(g graph.Reader, name string, def int64) int64 {
+	if n, ok := g.Get(graph.ID("config:settings")); ok {
+		if v, ok := n.Attrs[name].(int64); ok {
+			return v
+		}
+	}
+	return def
+}
+
+// daysSinceDate returns whole days since a YYYY-MM-DD date, 0 for a date not
+// yet reached, or -1 when it is empty or unreadable.
+func daysSinceDate(date string, now time.Time) int64 {
+	t, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return -1
+	}
+	return max(0, int64(now.UTC().Sub(t).Hours()/24))
+}
+
+// scanOrError reads a scan record that also carries a connector's error for
+// one collection. Missing, it was never read; with an error, the error is
+// returned, so the drill gives ERROR rather than a clean result.
+func scanOrError(g graph.Reader, fact, scanner, scope string) (graph.Node, error) {
+	id := graph.ScanID(scanner, scope)
+	n, ok := g.Get(id)
+	if !ok {
+		return n, notCollected(fact, string(id))
+	}
+	if msg := strAttr(n, "error"); msg != "" {
+		return n, fmt.Errorf("%s", msg)
+	}
+	return n, nil
+}
+
+func registerOAuthApps() {
+	Register(Def{
+		Name: "identity.oauth_apps", Connector: "google",
+		Shape: List(Obj(map[string]*Shape{
+			"client_id": Str, "name": Str, "scopes": List(Str), "sensitive_scopes": List(Str), "high_risk": Bool,
+			"user_count": Int, "native": Bool, "anonymous": Bool,
+			"owner": Str, "reviewed": Str, "days_since_review": Int, "review_current": Bool,
+		})),
+		Fn: oauthApps,
+	})
+}
+
+// oauthApps joins each third-party app users granted access with its entry in
+// apps.yaml. The scan record is written by the google connector's OAuth tokens
+// collection, scanner oauth_tokens.
+func oauthApps(g graph.Reader, a Args) (Result, error) {
+	scan, err := scanOrError(g, "identity.oauth_apps", "oauth_tokens", "")
+	if err != nil {
+		return Result{}, err
+	}
+	r := Result{Source: "api", Read: []graph.ID{scan.ID}, Partial: strAttr(scan, "partial")}
+	reviewDays := settingsInt(g, "review_days", 180)
+	register := map[string]graph.Node{}
+	for _, n := range g.Nodes(graph.KindConfigApp) {
+		register[strAttr(n, "client_id")] = n
+	}
+	rows := []any{}
+	for _, n := range g.Nodes(graph.KindOAuthApp) {
+		row := attrsOf(n, "client_id", "name", "scopes", "sensitive_scopes", "high_risk", "user_count", "native", "anonymous")
+		row["owner"], row["reviewed"] = "", ""
+		if reg, ok := register[strAttr(n, "client_id")]; ok {
+			row["owner"], row["reviewed"] = strAttr(reg, "owner"), strAttr(reg, "reviewed")
+			r.Read = append(r.Read, reg.ID)
+		}
+		days := daysSinceDate(row["reviewed"].(string), a.Now)
+		row["days_since_review"] = days
+		row["review_current"] = days >= 0 && days <= reviewDays
+		rows = append(rows, row)
+		r.Read = append(r.Read, n.ID)
+	}
+	r.Data = rows
+	return r, nil
+}
+
+// backupShape is the shape of aws.backups, gcp.backups and recovery.databases.
+var backupShape = Obj(map[string]*Shape{
+	"found": List(Obj(map[string]*Shape{
+		"system": Str, "account": Str, "project": Str, "region": Str, "name": Str, "engine": Str,
+		"production": Bool, "production_basis": Str, "automated_backups": Bool, "retention_days": Int, "retention_ok": Bool,
+		"deletion_protection": Bool, "separate_copy": Str, "copy_detail": Str,
+	})),
+	"systems": List(Str), "min_retention_days": Int,
+})
+
+// backupScanners are the scan records the aws and gcp connectors write for
+// each profile or project whose databases they read.
+var backupScanners = map[string]string{"aws": "aws_backups", "gcp": "gcp_backups"}
+
+func registerBackups() {
+	Register(Def{Name: "aws.backups", Connector: "aws", Shape: backupShape,
+		Fn: func(g graph.Reader, a Args) (Result, error) { return backupRows(g, a, "aws.backups", "aws") }})
+	Register(Def{Name: "gcp.backups", Connector: "gcp", Shape: backupShape,
+		Fn: func(g graph.Reader, a Args) (Result, error) { return backupRows(g, a, "gcp.backups", "gcp") }})
+	Register(Def{Name: "recovery.databases", AnyConnector: []string{"aws", "gcp"}, Shape: backupShape,
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			return backupRows(g, a, "recovery.databases", "aws", "gcp")
+		}})
+}
+
+// backupRows lists the databases of the given systems that were read. A
+// database is production when its account or project is named under
+// production, or it is tagged so; when nothing anywhere is named or tagged,
+// every database is judged and production_basis says so. A copy declared in
+// backups.yaml counts where the API shows none.
+func backupRows(g graph.Reader, a Args, fact string, systems ...string) (Result, error) {
+	r := Result{Source: "api"}
+	read := []any{}
+	var partial []string
+	for _, sys := range systems {
+		got := false
+		for _, n := range g.Nodes(graph.KindScan) {
+			if strAttr(n, "scanner") != backupScanners[sys] {
+				continue
+			}
+			if msg := strAttr(n, "error"); msg != "" {
+				return Result{}, fmt.Errorf("%s: %s", fact, msg)
+			}
+			if p := strAttr(n, "partial"); p != "" {
+				partial = append(partial, p)
+			}
+			r.Read = append(r.Read, n.ID)
+			got = true
+		}
+		if got {
+			read = append(read, sys)
+		}
+	}
+	if len(read) == 0 {
+		return Result{}, fmt.Errorf("%s: no databases were read from %s", fact, strings.Join(systems, " or "))
+	}
+	r.Partial = strings.Join(partial, "; ")
+	minDays := settingsInt(g, "min_retention_days", 7)
+	declared := map[string]graph.Node{}
+	for _, n := range g.Nodes(graph.KindConfigBackup) {
+		declared[strAttr(n, "database")] = n
+	}
+	var dbs []graph.Node
+	anyProduction := settingsInt(g, "production_markers", 0) > 0
+	for _, n := range g.Nodes(graph.KindDatabase) {
+		for _, sys := range read {
+			if strAttr(n, "system") == sys {
+				dbs = append(dbs, n)
+				if isTrue(n.Attrs["production"]) {
+					anyProduction = true
+				}
+			}
+		}
+	}
+	rows := []any{}
+	for _, n := range dbs {
+		row := attrsOf(n, "system", "account", "project", "region", "name", "engine", "production", "automated_backups",
+			"retention_days", "deletion_protection", "separate_copy", "copy_detail")
+		basis := ""
+		switch {
+		case isTrue(n.Attrs["production_marked"]):
+			basis = "named under production in config"
+		case isTrue(n.Attrs["production"]):
+			basis = "tagged env=prod"
+		case !anyProduction:
+			row["production"] = true
+			basis = "nothing is named or tagged production, so every database is judged"
+		}
+		row["production_basis"] = basis
+		days, _ := n.Attrs["retention_days"].(int64)
+		row["retention_ok"] = days >= minDays
+		reg, ok := declared[strAttr(n, "name")]
+		if !ok {
+			reg, ok = declared[string(n.ID)]
+		}
+		if ok && strAttr(n, "separate_copy") != "yes" {
+			row["separate_copy"] = "declared"
+			row["copy_detail"] = strings.TrimPrefix(strAttr(n, "copy_detail")+"; declared copy: "+strAttr(reg, "copy_location")+
+				", verified "+strAttr(reg, "verified"), "; ")
+			r.Read = append(r.Read, reg.ID)
+		}
+		rows = append(rows, row)
+		r.Read = append(r.Read, n.ID)
+	}
+	r.Data = map[string]any{"found": rows, "systems": read, "min_retention_days": minDays}
+	return r, nil
+}
+
+func isTrue(v any) bool {
+	b, _ := v.(bool)
+	return b
+}
+
+// aiKeyShape is the shape of anthropic.keys, openai.keys and keys.ai.
+var aiKeyShape = Obj(map[string]*Shape{
+	"found": List(Obj(map[string]*Shape{
+		"provider": Str, "key_id": Str, "hint": Str, "name": Str, "status": Str,
+		"workspace": Str, "workspace_name": Str, "project": Str, "project_name": Str,
+		"owner_kind": Str, "has_owner": Bool, "owner": Str, "owner_source": Str,
+		"limit_readable": Bool, "capped": Bool, "limit_scope": Str, "cap_source": Str, "days_since_created": Int,
+	})),
+	"providers": List(Str),
+})
+
+func registerAIKeys() {
+	Register(Def{Name: "anthropic.keys", Connector: "anthropic", Shape: aiKeyShape,
+		Fn: func(g graph.Reader, a Args) (Result, error) { return aiKeyRows(g, a, "anthropic.keys", "anthropic") }})
+	Register(Def{Name: "openai.keys", Connector: "openai", Shape: aiKeyShape,
+		Fn: func(g graph.Reader, a Args) (Result, error) { return aiKeyRows(g, a, "openai.keys", "openai") }})
+	Register(Def{Name: "keys.ai", AnyConnector: []string{"anthropic", "openai"}, Shape: aiKeyShape,
+		Fn: func(g graph.Reader, a Args) (Result, error) {
+			return aiKeyRows(g, a, "keys.ai", "anthropic", "openai")
+		}})
+}
+
+// aiKeyRows lists the AI provider keys of the given providers that were read,
+// joined with ai-keys.yaml. A register entry names a key, a workspace or a
+// project; it gives an owner where the provider records none, and a declared
+// cap where the API shows none.
+func aiKeyRows(g graph.Reader, a Args, fact string, providers ...string) (Result, error) {
+	r := Result{Source: "api"}
+	read := []any{}
+	var partial []string
+	for _, p := range providers {
+		n, ok := g.Get(graph.ScanID("ai_keys", p))
+		if !ok {
+			continue
+		}
+		if msg := strAttr(n, "error"); msg != "" {
+			return Result{}, fmt.Errorf("%s: %s", fact, msg)
+		}
+		if msg := strAttr(n, "partial"); msg != "" {
+			partial = append(partial, p+": "+msg)
+		}
+		r.Read = append(r.Read, n.ID)
+		read = append(read, p)
+	}
+	if len(read) == 0 {
+		return Result{}, fmt.Errorf("%s: no keys were read from %s", fact, strings.Join(providers, " or "))
+	}
+	r.Partial = strings.Join(partial, "; ")
+	register := g.Nodes(graph.KindConfigAIKey)
+	rows := []any{}
+	for _, n := range g.Nodes(graph.KindAIKey) {
+		prov := strAttr(n, "provider")
+		wanted := false
+		for _, p := range read {
+			wanted = wanted || p == prov
+		}
+		if !wanted {
+			continue
+		}
+		row := attrsOf(n, "provider", "key_id", "hint", "name", "status", "workspace", "workspace_name", "project", "project_name",
+			"owner_kind", "has_owner", "owner", "limit_readable", "capped", "limit_scope")
+		row["owner_source"] = ""
+		if isTrue(n.Attrs["has_owner"]) {
+			row["owner_source"] = "provider"
+		}
+		capSource := "unknown"
+		switch {
+		case isTrue(n.Attrs["capped"]):
+			capSource = "api"
+		case isTrue(n.Attrs["limit_readable"]):
+			capSource = "none"
+		}
+		for _, reg := range register {
+			if !aiKeyMatches(reg, n) {
+				continue
+			}
+			r.Read = append(r.Read, reg.ID)
+			if !isTrue(row["has_owner"]) && strAttr(reg, "owner") != "" {
+				row["has_owner"], row["owner"], row["owner_source"] = true, strAttr(reg, "owner"), "declared"
+			}
+			if limit, _ := reg.Attrs["monthly_limit_usd"].(float64); limit > 0 && !isTrue(row["capped"]) {
+				row["capped"], row["limit_readable"], row["limit_scope"] = true, true, "declared"
+				capSource = "declared"
+			}
+		}
+		row["cap_source"] = capSource
+		row["days_since_created"] = daysSince(strAttr(n, "created"), a.Now)
+		rows = append(rows, row)
+		r.Read = append(r.Read, n.ID)
+	}
+	r.Data = map[string]any{"found": rows, "providers": read}
+	return r, nil
+}
+
+// aiKeyMatches says whether a register entry names a key: by its ID, or by the
+// ID or name of its workspace or project.
+func aiKeyMatches(reg, key graph.Node) bool {
+	if strAttr(reg, "provider") != strAttr(key, "provider") {
+		return false
+	}
+	match := func(want string, have ...string) bool {
+		if want == "" {
+			return false
+		}
+		for _, h := range have {
+			if h != "" && h == want {
+				return true
+			}
+		}
+		return false
+	}
+	return match(strAttr(reg, "key_id"), strAttr(key, "key_id")) ||
+		match(strAttr(reg, "workspace"), strAttr(key, "workspace"), strAttr(key, "workspace_name")) ||
+		match(strAttr(reg, "project"), strAttr(key, "project"), strAttr(key, "project_name"))
 }

@@ -47,6 +47,10 @@ type Result struct {
 	Stream    string
 	Available map[string]bool
 	Failures  map[string]string
+	// Diff is what changed since the previous run of the same stream, nil when
+	// there is none. DiffPath is where it was stored, empty when not written.
+	Diff     *DiffRecord
+	DiffPath string
 }
 
 // Skip is one drill waiting for a system.
@@ -95,6 +99,10 @@ func Run(ctx context.Context, c Config) (*Result, error) {
 		sort.Strings(res.Calls)
 		return res, nil
 	}
+	var ran []string
+	for _, conn := range append(append([]connector.Connector{}, phase1...), phase2...) {
+		ran = append(ran, conn.Name())
+	}
 
 	// Config goes first, since it names targets every other connector reads.
 	rest := phase1[:0:0]
@@ -116,7 +124,20 @@ func Run(ctx context.Context, c Config) (*Result, error) {
 	link(res.Graph, scope.Hasher)
 
 	store := tag.Store{Root: c.Records}
+	// The previous run is read before this one writes, so facts and the diff
+	// both see the run before.
+	prevPath, prev := previousOf(c)
 	opts := Options{Now: scope.Now, Available: res.Available, Failures: res.Failures, Waivers: c.Project.Waivers}
+	if prev != nil {
+		opts.Previous = graph.FromSnapshot(*prev)
+	}
+	markNewInstallScripts(res.Graph, opts.Previous)
+	rules := RulesOf(c.Project.Config)
+	// First-recorded times are read once, before this run writes any tag.
+	shadow, err := LoadShadow(store, rules.ShadowDays)
+	if err != nil {
+		return nil, err
+	}
 	for _, d := range c.Drills {
 		outcomes := Decide(d, res.Graph, opts)
 		outcomes, skip := carryForward(d, outcomes, store)
@@ -124,11 +145,18 @@ func Run(ctx context.Context, c Config) (*Result, error) {
 			res.Skips = append(res.Skips, *skip)
 		}
 		for _, o := range outcomes {
-			prev, err := store.Latest(d.ID, o.Target)
+			hist, err := store.History(d.ID, o.Target)
 			if err != nil {
 				return nil, err
 			}
+			var prev *tag.Tag
+			if len(hist) > 0 {
+				prev = hist[len(hist)-1]
+			}
+			CarryWaiver(o, prev, opts.Waivers, opts.Now)
 			ApplyState(o, prev, c.Project.Config.RetiredTarget(o.Target))
+			ApplyShadow(o, prev, shadow, opts.Now)
+			ApplyReview(o, hist, opts.Now, rules.ReviewAfterDays)
 			o.Owner = owner(d, o, res.Graph, c.Project)
 		}
 		res.Outcomes = append(res.Outcomes, outcomes...)
@@ -136,7 +164,18 @@ func Run(ctx context.Context, c Config) (*Result, error) {
 	SortOutcomes(res.Outcomes)
 	res.Attention = BuildAttention(res.Outcomes)
 
+	snap := graph.TakeSnapshot(res.Graph, scope.Now)
+	snap.Stream, snap.Coverage = c.Stream, coverageOf(ran, res.Failures)
+	tag.ScanSnapshot(&snap, scope.Hasher)
+	dir := filepath.Join(c.Records, "snapshots")
+
 	if !c.WriteRecords {
+		// Nothing is written, but the counts of what changed may still be printed.
+		if prev != nil {
+			if err := diffAgainst(prevPath, prev, snap, "", c, res, scope.Hasher); err != nil {
+				return nil, fmt.Errorf("diff: %w", err)
+			}
+		}
 		return res, nil
 	}
 	for _, o := range res.Outcomes {
@@ -146,11 +185,15 @@ func Run(ctx context.Context, c Config) (*Result, error) {
 			return nil, fmt.Errorf("write tag: %w", err)
 		}
 	}
-	snap := graph.TakeSnapshot(res.Graph, scope.Now)
-	tag.ScanSnapshot(&snap, scope.Hasher)
-	dir := filepath.Join(c.Records, "snapshots")
-	if _, err := graph.WriteSnapshot(dir, snap); err != nil {
+	snap.Time = graph.FreeSnapshotTime(dir, snap.Time)
+	snapPath, err := graph.WriteSnapshot(dir, snap)
+	if err != nil {
 		return nil, fmt.Errorf("write snapshot: %w", err)
+	}
+	if prev != nil {
+		if err := diffAgainst(prevPath, prev, snap, snapPath, c, res, scope.Hasher); err != nil {
+			return nil, fmt.Errorf("diff: %w", err)
+		}
 	}
 	if _, err := graph.Compact(dir, scope.Now); err != nil {
 		return nil, fmt.Errorf("compact snapshots: %w", err)
@@ -182,6 +225,11 @@ func plan(drills []*drill.Drill, s *connector.Scope) map[string]bool {
 			}
 			if def, ok := facts.Lookup(n); ok && def.Connector != "" {
 				needed[def.Connector] = true
+			}
+			if def, ok := facts.Lookup(n); ok {
+				for _, c := range def.AnyConnector {
+					needed[c] = true
+				}
 			}
 			if n == "github.repos" {
 				needed["github"] = true
@@ -364,7 +412,8 @@ func toTag(o *Outcome, c Config, s connector.Scope) *tag.Tag {
 			DrillID: o.Drill.ID, DrillHash: o.Drill.Hash, Version: Version, Target: o.Target, Stream: c.Stream,
 			Verdict: o.Verdict, Reason: o.Reason, State: o.State, Waived: o.Waived, WaivedParts: o.WaivedParts,
 			Severity: o.Drill.Severity, Owner: o.Owner, Conditions: o.Conditions, FactSources: o.Sources,
-			Time: s.Now.UTC().Truncate(time.Second), RanBy: c.RanBy, SaltPrint: s.Hasher.Fingerprint(),
+			FactTiers: o.Tiers,
+			Time:      s.Now.UTC().Truncate(time.Second), RanBy: c.RanBy, SaltPrint: s.Hasher.Fingerprint(),
 		},
 		Evidence: tag.Evidence{Facts: o.Facts, Read: read},
 	}

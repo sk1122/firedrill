@@ -10,7 +10,7 @@
   <a href="https://github.com/sk1122/firedrill/actions/workflows/ci.yml"><img src="https://github.com/sk1122/firedrill/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-16161A" alt="License: Apache-2.0"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-16161A" alt="Go 1.27"></a>
-  <a href="https://github.com/sk1122/firedrill-drills"><img src="https://img.shields.io/badge/drill%20hub-29%20drills-D3261A" alt="Drill hub"></a>
+  <a href="https://github.com/sk1122/firedrill-drills"><img src="https://img.shields.io/badge/drill%20hub-32%20drills-D3261A" alt="Drill hub"></a>
 </p>
 
 <p align="center"><img src="docs/assets/hazard.svg" alt="" width="100%" height="12"></p>
@@ -57,7 +57,7 @@ firedrill connect github
 firedrill run
 ```
 
-If the GitHub CLI is logged in, `connect github` reuses its login. With GitHub alone, 11 of the 24 starter drills run. The rest are listed with what connects them.
+If the GitHub CLI is logged in, `connect github` reuses its login. With GitHub alone, 16 of the 32 starter drills run. The rest are listed with what connects them.
 
 No GitHub connection yet? Point it at a checkout:
 
@@ -73,15 +73,18 @@ firedrill verify change/no-solo-ship
 
 ## What it drills
 
-24 starter drills in six packs, plus more in the [drill hub](https://github.com/sk1122/firedrill-drills):
+32 starter drills in nine packs, plus more in the [drill hub](https://github.com/sk1122/firedrill-drills):
 
 | Pack | Examples |
 | --- | --- |
-| **Change** | Nobody merges and deploys to production alone. History on main can't be rewritten. Actions are pinned to a commit. |
-| **Access** | Every admin has MFA enforced. People who left have no active account. No admin sits unused for 90 days. |
-| **Agent** | No production credential sits in a file a coding agent can read. Destructive agent commands need approval. |
+| **Change** | Nobody merges and deploys to production alone. History on main can't be rewritten. Actions are pinned to a commit. CI reaches the cloud through OIDC, never a stored key. |
+| **Access** | Every admin has MFA enforced. People who left have no active account. No admin sits unused for 90 days. No third-party app holds Gmail, Drive or admin access without an owner and a current review. |
+| **Agent** | No production credential sits in a file a coding agent can read. Destructive agent commands need approval. Every MCP server points at a known host and runs a pinned package. |
+| **Supply** | Every JavaScript project commits its lockfile and CI installs from it unchanged. No dependency quietly gains an install script. |
 | **Doors** | No DNS record points at a deleted host. No API docs or source maps are public. Every host has an owner. |
 | **GCP** | No public buckets. Only your own domains hold Owner. No service account key is older than 90 days. |
+| **Recovery** | Every production database keeps automated backups long enough, with a copy in a different account or project. |
+| **Keys** | Every Anthropic and OpenAI API key has an owner and sits under a hard spend limit. |
 | **Code** | Your own Semgrep rules report nothing at error level. |
 
 A drill is a short YAML file: the facts it reads, and the conditions that must hold, written in [CEL](https://cel.dev).
@@ -111,14 +114,17 @@ maps_to: [SOC2:CC8.1]
 | System | How it connects | Access |
 | --- | --- | --- |
 | GitHub | Your `gh` login, or a fine-grained token in CI | Read: Metadata, Administration, Environments, Contents |
-| Google Workspace | A service account with domain-wide delegation | `admin.directory.user.readonly` |
+| Google Workspace | A service account with domain-wide delegation | `admin.directory.user.readonly`, `admin.directory.user.security` (GET only) |
 | Google Cloud | A keyless reader service account, through gcloud | Viewer, Security Reviewer |
 | AWS | Your credential profiles | A read policy `connect aws` prints |
+| Anthropic, OpenAI | An admin key in `FIREDRILL_ANTHROPIC_ADMIN_KEY` or `FIREDRILL_OPENAI_ADMIN_KEY` | Admin keys have no read-only scope; the guard sends them only with GET, to the admin read paths it names |
 | Repo files | Local checkouts, or tarballs through GitHub | None beyond GitHub's |
 | DNS, certificate logs, web | Public DNS, crt.sh, and domains you verify | None |
 | HR leavers, Semgrep | A CSV export, a results file | None |
 
 `firedrill connect <system>` prints the exact permissions and setup steps before anything is granted. Step-by-step guides for each system are in [docs/connect](docs/connect/README.md).
+
+Nothing calls GitHub, Google, AWS, Google Cloud, Anthropic or OpenAI until `firedrill connect <system>` has passed its access check and recorded the system under `connected:` in `.firedrill/config.yaml`; credentials already on the machine are never enough on their own. Projects set up before this list existed run `firedrill connect <system>` once per system and commit the change, so CI picks it up.
 
 ## How a result works
 
@@ -136,6 +142,8 @@ maps_to: [SOC2:CC8.1]
 Exit codes: `0` by default. `1` when an unwaived critical or high safeguard turned open in this run. `2` on any ERROR, which wins over 1. `--fail-on open` also exits 1 while a critical or high safeguard stays open, and `--fail-on any` while any does.
 
 `firedrill report` writes a static HTML board: every open safeguard first, then each pack with its run history.
+
+Each run also compares itself with the previous run and stores the result in `diffs/` next to its snapshot. `firedrill run` ends with a count of what changed; `firedrill diff` shows each change, weakenings first, and the board has a Changes page. Only settings are compared, never timestamps, and a system not read in both runs is left out and named, so an outage never reads as everything removed.
 
 ## The drill hub
 
@@ -175,6 +183,7 @@ CI sees committed files only, and its results say so. Run on a laptop with `--pa
 | `firedrill list` | Every drill with owner, state, last verdict and waiver |
 | `firedrill explain <drill>` | What it checks, what it saw and why it failed |
 | `firedrill report` | Writes the HTML board |
+| `firedrill diff` | Shows what changed since the previous run |
 | `firedrill validate [file or folder]` | Checks drill files |
 | `firedrill test [folder]` | Runs each drill's test cases |
 | `firedrill hub search`, `add`, `update` | Finds and installs drills from the drill hub |

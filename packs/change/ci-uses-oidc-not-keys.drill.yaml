@@ -1,0 +1,11 @@
+firedrill: v0
+id: change/ci-uses-oidc-not-keys
+safeguard: "CI reaches the cloud through short-lived OIDC credentials, never a long-lived cloud key stored as a secret."
+severity: high
+for_each: repos
+fetch:
+  workflows: { fact: files.workflows }
+pass_when:
+  - workflows.found.all(w, w.cloud_key_secrets.size() == 0)
+fix: "Replace each stored key with OIDC federation: grant id-token: write and use role-to-assume (AWS), workload_identity_provider (Google Cloud) or client-id and tenant-id (Azure). Then delete the secret and deactivate the key."
+maps_to: [SOC2:CC6.1, ISO27001:A.8.5]

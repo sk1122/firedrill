@@ -125,7 +125,12 @@ func TestCollectUsersThroughGuardWithPaging(t *testing.T) {
 }
 
 func TestAvailable(t *testing.T) {
-	if ok, _ := New().Available(scope(t, "k")); !ok {
+	if ok, why := New().Available(scope(t, "k")); ok || why != "connect google" {
+		t.Fatal("a key and config are not enough before connect google")
+	}
+	s := scope(t, "k")
+	s.Project.Config.Connected = []string{"google"}
+	if ok, _ := New().Available(s); !ok {
 		t.Fatal("all set")
 	}
 	if ok, why := New().Available(scope(t, "")); ok || why != "connect google" {

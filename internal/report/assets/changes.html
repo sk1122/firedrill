@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' role='img' aria-label='Firedrill'%3E %3Cpath d='M64 20h128l32 32v184H32V52z' fill='%23F4F2EA' stroke='%2316161A' stroke-width='8' stroke-linejoin='round'/%3E %3Ccircle cx='128' cy='56' r='13' fill='%2324272C'/%3E%3Ccircle cx='128' cy='56' r='6' fill='%23F4F2EA'/%3E %3Cpath d='M32 92h192v14H32z' fill='%2316161A'/%3E %3Cg fill='%2316161A'%3E %3Crect x='82' y='124' width='22' height='88'/%3E %3Crect x='110' y='124' width='64' height='20'/%3E %3Crect x='110' y='160' width='46' height='18'/%3E %3C/g%3E %3Ccircle cx='190' cy='200' r='15' fill='%23D3261A'/%3E %3C/svg%3E">
+<title>Firedrill Changes</title>
+<style>
+{{.Fonts}}
+:root{--stock:#F4F2EA;--red:#D3261A;--green:#0B8A4E;--amber:#E8A317;--grey:#8A877C;--enamel:#24272C;--dim:#3A3E45;--muted:#B9B6AB}
+*{box-sizing:border-box}
+body{margin:0;background:var(--enamel);color:var(--stock);font:400 15px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+main{max-width:900px;margin:0 auto;padding:32px 16px 64px}
+h1,h2{font-family:"Big Shoulders Stencil",Impact,sans-serif;font-weight:700;letter-spacing:.03em;text-transform:uppercase;overflow-wrap:anywhere}
+h1{font-size:clamp(30px,6vw,44px);line-height:1.05;margin:8px 0}
+h2{font-size:26px;margin:32px 0 10px}
+h2.weak{color:#ff6a5e}
+h3{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:18px 0 6px}
+.meta{color:var(--muted);font:400 13px/1.5 "IBM Plex Mono",monospace;overflow-wrap:anywhere}
+a{color:var(--stock)}
+.empty{color:var(--muted)}
+ul.changes{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+ul.changes li{border-left:4px solid var(--grey);background:#2d3036;padding:8px 12px;min-width:0}
+ul.changes li.weak{border-color:var(--red)}
+.what{margin:0;font:400 13px/1.45 "IBM Plex Mono",monospace;overflow-wrap:anywhere}
+.why{margin:4px 0 0;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.kind{text-transform:uppercase;letter-spacing:.06em}
+ul.skipped{margin:0;padding-left:18px;color:var(--muted);font:400 13px/1.5 "IBM Plex Mono",monospace;overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<main>
+<a href="index.html">Back to the board</a>
+<h1>Changes</h1>
+{{with .Changes}}
+{{if not .Present}}<p class="empty">No two runs to compare yet. Run firedrill run again next week.</p>
+{{else}}
+{{if not .Sections}}<p>Nothing changed since the last run.</p>
+{{else}}<p class="meta">{{.From}} to {{.To}} · {{.Weakening}} weakening, {{.Other}} other</p>{{end}}
+{{range .Sections}}
+<h2{{if .Weakening}} class="weak"{{end}}>{{.Title}} ({{.Count}})</h2>
+{{range .Groups}}
+<h3>{{.Title}} ({{len .Rows}})</h3>
+<ul class="changes">
+{{range .Rows}}<li{{if .Weakening}} class="weak"{{end}}>
+<p class="what">{{if .ItemHref}}<a href="{{.ItemHref}}">{{.Summary}}</a>{{else}}{{.Summary}}{{end}}</p>
+<p class="why"><span class="kind">{{.Type}}</span> · {{.System}}{{if .Drills}} · also caught by {{range $i, $d := .Drills}}{{if $i}}, {{end}}<a href="{{$d.Href}}">{{$d.Drill}}</a>{{end}}{{end}}</p>
+</li>{{end}}
+</ul>
+{{end}}
+{{end}}
+{{if .Skipped}}<h2>Not compared</h2>
+<ul class="skipped">{{range .Skipped}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{end}}
+{{end}}
+</main>
+</body>
+</html>

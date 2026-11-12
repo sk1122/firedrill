@@ -1,0 +1,16 @@
+firedrill: v0
+id: supply/installs-from-lockfile
+safeguard: "Every JavaScript project (npm, pnpm, yarn or bun) commits its lockfile and CI installs from it without changing it; no dependency gained an install script since the last run."
+severity: high
+for_each: repos
+fetch:
+  manifests: { fact: files.manifests }
+  workflows: { fact: files.workflows }
+applies_when: manifests.inspected > 0
+na_reason: "no package.json in this repo; only JavaScript projects are judged"
+pass_when:
+  - manifests.found.all(m, m.lockfile_committed)
+  - workflows.found.all(w, w.unfrozen_installs.size() == 0)
+  - manifests.found.all(m, m.new_install_scripts.size() == 0)
+fix: "Commit the lockfile and take it out of .gitignore; in CI use npm ci, pnpm install --frozen-lockfile, yarn install --immutable (or --frozen-lockfile) or bun install --frozen-lockfile. For a new install script, check the dependency's release before trusting it: pin or remove it, or waive it once reviewed."
+maps_to: [SOC2:CC8.1, ISO27001:A.8.32]

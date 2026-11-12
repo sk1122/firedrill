@@ -43,6 +43,12 @@ h2{font-size:30px;margin:40px 0 14px}
 .run{width:14px;height:14px;border:1px solid #16161a55;background:#d9d6cb}
 .run.pass{background:var(--green)}.run.fail{background:var(--red)}.run.warn{background:var(--amber)}.run.na{background:var(--grey)}.run.skip{background:#55565b}.run.err{background:var(--stock);box-shadow:inset 0 0 0 2px var(--amber)}
 .flag{font-size:12px;font-weight:600}
+.src{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center}
+.pill{display:inline-block;padding:0 6px;font:600 11px/1.6 "IBM Plex Mono",monospace;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap;border:1px solid var(--ink)}
+.pill.verified{background:var(--green);border-color:var(--green);color:#fff}
+.pill.declared{background:transparent;color:var(--ink)}
+.pill.inferred{background:transparent;color:#6b5200;border:1px dashed #6b5200}
+.pill.shadow{background:var(--ink);border-color:var(--ink);color:var(--stock)}
 table{width:100%;border-collapse:collapse}
 td,th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--dim);font-size:14px;overflow-wrap:anywhere}
 th{color:var(--muted);font-weight:400;font-size:12px;text-transform:uppercase;letter-spacing:.06em;overflow-wrap:normal}
@@ -62,6 +68,7 @@ td.mono{font-family:"IBM Plex Mono",monospace;font-size:13px}
 .na-fold summary{cursor:pointer;color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.06em;padding:8px 0}
 .na-fold summary:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 .na-fold[open] summary{margin-bottom:10px}
+.changes-link{margin:0 0 8px;font-size:15px}
 .att{font-weight:600;white-space:nowrap}.att.fail{color:#ff6a5e}.att.pass{color:#3cc986}.att.warn{color:var(--amber)}
 </style>
 </head>
@@ -79,6 +86,7 @@ td.mono{font-family:"IBM Plex Mono",monospace;font-size:13px}
 <div class="count"><b>{{.Counts.Skip}}</b><span>Skip</span></div>
 <div class="count"><b>{{.Counts.Error}}</b><span>Error</span></div>
 </section>
+<p class="changes-link"><a href="changes.html">{{if not .Changes.Present}}What changed since the last run{{else if or .Changes.Weakening .Changes.Other}}Changed since the last run: {{.Changes.Weakening}} weakening, {{.Changes.Other}} other{{else}}Nothing changed since the last run{{end}}</a></p>
 <h2>Needs attention</h2>
 {{if .Attention}}<ol class="attn">
 {{range .Attention}}<li class="{{.Class}}"><p class="attn-top"><span class="att {{.Class}}">{{.Kind}}</span>{{if .Severity}}<span>{{.Severity}}</span>{{end}}</p>
@@ -112,13 +120,16 @@ td.mono{font-family:"IBM Plex Mono",monospace;font-size:13px}
 </main>
 </body>
 </html>
-{{define "card"}}<article class="tag">
+{{define "card"}}<article class="tag" id="{{.Slug}}">
 <div class="head"><span class="lamp {{.Lamp}}" role="img" aria-label="{{.Label}}"></span><span class="id">{{.DrillID}}</span><span class="stamp {{.Lamp}}">{{.Label}}</span></div>
 {{if .Rule}}<p class="rule">{{.Rule}}</p>{{end}}
 <p class="info">{{if .Target}}{{.Target}} · {{end}}{{.Severity}}{{if .Owner}} · {{.Owner}}{{else}} · no owner{{end}}</p>
 {{if .Reason}}<p class="info reason">{{.Reason}}</p>{{end}}
 {{if .Unverified}}<p class="info flag">Latest verdict: {{.Verdict}}. Unverified this run.</p>{{end}}
 {{if .Waived}}<p class="info flag">Waived.</p>{{end}}
+{{if .ShadowUntil}}<p class="info"><span class="pill shadow">shadow until {{.ShadowUntil}}</span></p>{{end}}
+{{if ge .OpenDays 0}}<p class="info flag">Open {{.OpenDays}} days{{if .NeedsReview}} with no fix or waiver: needs review{{end}}.</p>{{end}}
+{{range .Evidence}}<p class="info src"><span>{{.Alias}}{{if .Source}} · {{.Source}}{{end}}</span>{{if .Tier}}<span class="pill {{.Tier}}">{{.Tier}}</span>{{end}}</p>{{end}}
 {{if .Chain}}<p class="info flag">{{.Chain}}</p>{{end}}
 <div class="runs" aria-label="Last runs">{{range .Runs}}<span class="run {{.Class}}" title="{{.Date}} {{.Verdict}}"></span>{{end}}</div>
 </article>{{end}}

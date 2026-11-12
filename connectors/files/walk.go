@@ -15,10 +15,39 @@ import (
 // MaxFileSize is the largest file scanned.
 const MaxFileSize = 1 << 20
 
+// MaxLockfileSize is the largest lockfile read for its install scripts.
+const MaxLockfileSize = 32 << 20
+
 // File is one file read from a repo.
 type File struct {
-	Path string // slash-separated, relative to the repo root
-	Data []byte
+	Path    string // slash-separated, relative to the repo root
+	Data    []byte
+	Ignored bool // .gitignore rules ignore it; a committed file never is
+	// Unscanned marks a lockfile over MaxFileSize, or binary, kept because its
+	// existence counts. It is never scanned for secrets. Data holds it only
+	// when it is text and at most MaxLockfileSize.
+	Unscanned bool
+}
+
+// lockfileNames are the JavaScript lockfiles.
+var lockfileNames = map[string]bool{
+	"package-lock.json": true, "npm-shrinkwrap.json": true, "pnpm-lock.yaml": true,
+	"yarn.lock": true, "bun.lock": true, "bun.lockb": true,
+}
+
+// IsLockfile reports a JavaScript lockfile.
+func IsLockfile(rel string) bool {
+	return lockfileNames[path.Base(rel)]
+}
+
+// bigLockfile keeps a lockfile too large or too binary to scan: its content
+// when it is text and small enough to parse, else its path alone.
+func bigLockfile(rel string, data []byte, size int64, ignored bool) File {
+	f := File{Path: rel, Ignored: ignored, Unscanned: true}
+	if size <= MaxLockfileSize && !isBinary(data) {
+		f.Data = data
+	}
+	return f
 }
 
 var skipDirs = map[string]bool{".git": true, "vendor": true, "node_modules": true, "third_party": true, "dist": true}
@@ -28,10 +57,72 @@ func isBinary(b []byte) bool {
 	return bytes.IndexByte(b[:n], 0) >= 0
 }
 
-// alwaysRead names files read even when .gitignore excludes them, since they are
-// where local secrets and agent overrides live.
+// alwaysRead names files read even when .gitignore or .firedrillignore excludes
+// them, since they are where local secrets and agent overrides live.
 func alwaysRead(rel string) bool {
 	return strings.HasPrefix(path.Base(rel), ".env") || rel == ".claude/settings.local.json"
+}
+
+// agentDirs hold a coding agent's settings at the repo root. Every file under
+// one is agent config, apart from the folders in agentSkip.
+var agentDirs = []string{".claude", ".cursor", ".gemini"}
+
+// agentRootFiles are agent config files outside those folders.
+var agentRootFiles = map[string]bool{".mcp.json": true, ".vscode/mcp.json": true, ".cursorignore": true}
+
+// agentSkip are folders under an agent folder that hold worktrees, caches,
+// logs, transcripts or installed plugins rather than settings. They are never
+// read, since they can hold a copy of the whole repo or months of history.
+var agentSkip = map[string]bool{
+	".claude/worktrees": true, ".claude/projects": true, ".claude/plugins": true, ".claude/cache": true,
+	".claude/file-history": true, ".claude/paste-cache": true, ".claude/shell-snapshots": true,
+	".claude/session-env": true, ".claude/sessions": true, ".claude/todos": true, ".claude/statsig": true,
+	".claude/telemetry": true, ".claude/logs": true, ".claude/debug": true, ".claude/downloads": true,
+	".claude/uploads": true, ".claude/backups": true, ".claude/ide": true,
+	".cursor/extensions": true, ".cursor/projects": true, ".cursor/plugins": true, ".cursor/ai-tracking": true,
+	".gemini/tmp": true, ".gemini/history": true,
+}
+
+// IsAgentConfig reports whether a repo path is a coding agent's config file.
+func IsAgentConfig(rel string) bool {
+	if agentRootFiles[rel] {
+		return true
+	}
+	if agentSkipped(rel) {
+		return false
+	}
+	for _, d := range agentDirs {
+		if strings.HasPrefix(rel, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// agentSkipped reports a path in one of the agentSkip folders, or in a folder
+// the walker always skips.
+func agentSkipped(rel string) bool {
+	parts := strings.Split(rel, "/")
+	for i := range parts {
+		if agentSkip[strings.Join(parts[:i+1], "/")] || (i < len(parts)-1 && skipDirs[parts[i]]) {
+			return true
+		}
+	}
+	return false
+}
+
+// agentDir reports a folder the walker enters even when .gitignore excludes it,
+// since agent config files may sit in it.
+func agentDir(rel string) bool {
+	if rel == ".vscode" {
+		return true
+	}
+	for _, d := range agentDirs {
+		if rel == d || strings.HasPrefix(rel, d+"/") {
+			return !agentSkipped(rel)
+		}
+	}
+	return false
 }
 
 type ignoreRule struct {
@@ -120,33 +211,60 @@ func keep(rel string, data []byte) bool {
 	return len(data) <= MaxFileSize && !isBinary(data)
 }
 
+// ignoreState holds the ignore rules in force in one folder, and whether a
+// parent folder is already ignored. all holds the rules of both files in the
+// order they were read; git and fd hold .gitignore and .firedrillignore alone.
+type ignoreState struct {
+	all, git, fd          []ignoreRule
+	allDir, gitDir, fdDir bool
+}
+
+func (s ignoreState) match(rel string, isDir bool) (all, git, fd bool) {
+	return s.allDir || ignored(s.all, rel, isDir), s.gitDir || ignored(s.git, rel, isDir), s.fdDir || ignored(s.fd, rel, isDir)
+}
+
+func (s *ignoreState) add(dir, relDir, name string, only *[]ignoreRule) {
+	b, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return
+	}
+	r := parseIgnoreFile(relDir, b)
+	s.all = append(append([]ignoreRule(nil), s.all...), r...)
+	*only = append(append([]ignoreRule(nil), *only...), r...)
+}
+
 // WalkLocal reads a checkout, respecting .gitignore and .firedrillignore apart
-// from the files in alwaysRead.
+// from the files in alwaysRead. Agent config files are read even when
+// .gitignore excludes them, and marked Ignored; .firedrillignore still
+// excludes them.
 func WalkLocal(root string) ([]File, error) {
 	var out []File
-	var walk func(dir string, rules []ignoreRule) error
-	walk = func(dir string, rules []ignoreRule) error {
+	var walk func(dir string, st ignoreState) error
+	walk = func(dir string, st ignoreState) error {
 		relDir, _ := filepath.Rel(root, dir)
 		relDir = filepath.ToSlash(relDir)
 		if relDir == "." {
 			relDir = ""
 		}
-		for _, name := range []string{".gitignore", ".firedrillignore"} {
-			if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
-				rules = append(append([]ignoreRule(nil), rules...), parseIgnoreFile(relDir, b)...)
-			}
-		}
+		st.add(dir, relDir, ".gitignore", &st.git)
+		st.add(dir, relDir, ".firedrillignore", &st.fd)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return err
 		}
 		for _, e := range entries {
 			rel := path.Join(relDir, e.Name())
+			all, git, fd := st.match(rel, e.IsDir())
 			if e.IsDir() {
-				if (skipDirs[e.Name()] || ignored(rules, rel, true)) && rel != ".claude" {
+				if skipDirs[e.Name()] || agentSkip[rel] {
 					continue
 				}
-				if err := walk(filepath.Join(dir, e.Name()), rules); err != nil {
+				if all && rel != ".claude" && (!agentDir(rel) || fd) {
+					continue
+				}
+				sub := st
+				sub.allDir, sub.gitDir, sub.fdDir = all, git, fd
+				if err := walk(filepath.Join(dir, e.Name()), sub); err != nil {
 					return err
 				}
 				continue
@@ -154,11 +272,25 @@ func WalkLocal(root string) ([]File, error) {
 			if !e.Type().IsRegular() {
 				continue
 			}
-			if ignored(rules, rel, false) && !alwaysRead(rel) {
+			// Agent config and lockfiles are read even when gitignored, since
+			// whether they are committed is what a drill asks.
+			if all && !alwaysRead(rel) && (!(IsAgentConfig(rel) || IsLockfile(rel)) || fd) {
 				continue
 			}
 			info, err := e.Info()
-			if err != nil || info.Size() > MaxFileSize {
+			if err != nil {
+				continue
+			}
+			if info.Size() > MaxFileSize {
+				if IsLockfile(rel) {
+					var data []byte
+					if info.Size() <= MaxLockfileSize {
+						if data, err = os.ReadFile(filepath.Join(dir, e.Name())); err != nil {
+							return err
+						}
+					}
+					out = append(out, bigLockfile(rel, data, info.Size(), git))
+				}
 				continue
 			}
 			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
@@ -166,12 +298,14 @@ func WalkLocal(root string) ([]File, error) {
 				return err
 			}
 			if keep(rel, data) {
-				out = append(out, File{Path: rel, Data: data})
+				out = append(out, File{Path: rel, Data: data, Ignored: git})
+			} else if IsLockfile(rel) {
+				out = append(out, bigLockfile(rel, data, info.Size(), git))
 			}
 		}
 		return nil
 	}
-	return out, walk(root, nil)
+	return out, walk(root, ignoreState{})
 }
 
 // ReadTarball reads a GitHub repo tarball, which holds committed files under one
@@ -200,13 +334,25 @@ func ReadTarball(r io.Reader) ([]File, error) {
 		if !ok || rel == "" || strings.Contains(rel, "..") {
 			continue
 		}
-		skip := h.Size > MaxFileSize
+		skip := agentSkipped(rel)
 		for part := range strings.SplitSeq(path.Dir(rel), "/") {
 			if skipDirs[part] {
 				skip = true
 			}
 		}
 		if skip {
+			continue
+		}
+		if h.Size > MaxFileSize {
+			if IsLockfile(rel) {
+				var data []byte
+				if h.Size <= MaxLockfileSize {
+					if data, err = io.ReadAll(io.LimitReader(tr, MaxLockfileSize+1)); err != nil {
+						return nil, err
+					}
+				}
+				out = append(out, bigLockfile(rel, data, h.Size, false))
+			}
 			continue
 		}
 		data, err := io.ReadAll(io.LimitReader(tr, MaxFileSize+1))
@@ -216,8 +362,11 @@ func ReadTarball(r io.Reader) ([]File, error) {
 		if rel == ".firedrillignore" {
 			rules = parseIgnoreFile("", data)
 		}
+		// A file in a tarball is committed, so it is never Ignored.
 		if keep(rel, data) {
 			out = append(out, File{Path: rel, Data: data})
+		} else if IsLockfile(rel) {
+			out = append(out, bigLockfile(rel, data, h.Size, false))
 		}
 	}
 	if len(rules) == 0 {

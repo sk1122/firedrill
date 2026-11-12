@@ -141,12 +141,21 @@ func Scan(text string) []Finding {
 	return out
 }
 
-// LooksLikeSecret is the record scanner's test for one value.
-func LooksLikeSecret(v string) bool {
+// HasKnownPrefix reports a value holding a credential with a known prefix,
+// such as sk_live_ or ghp_.
+func HasKnownPrefix(v string) bool {
 	for _, p := range prefixes {
 		if p.re.MatchString(v) {
 			return true
 		}
+	}
+	return false
+}
+
+// LooksLikeSecret is the record scanner's test for one value.
+func LooksLikeSecret(v string) bool {
+	if HasKnownPrefix(v) {
+		return true
 	}
 	if strings.ContainsAny(v, " \t\n/.@:") {
 		return false
@@ -166,7 +175,7 @@ func DefaultClasses() Classes {
 	return Classes{
 		ProdWords:    []string{"prod", "production"},
 		StagingWords: []string{"staging", "stage"},
-		ExamplePaths: []string{"testdata/", "fixtures/", "__tests__/", "test/", "tests/", "*_test.*", "*.example", "*.sample", "*.template"},
+		ExamplePaths: []string{"*.example", "*.sample", "*.template"},
 	}
 }
 

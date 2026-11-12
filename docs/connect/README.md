@@ -2,15 +2,17 @@
 
 Firedrill only reads, and every system it reads needs your permission first. These guides walk through each one: what to create, what to click, and how to check it worked.
 
-Start with GitHub; with it alone, 11 of the 24 starter drills run. Add the rest when you need their drills. `firedrill run` lists every drill that is waiting, and what connects it.
+Start with GitHub; with it alone, 16 of the 32 starter drills run. Add the rest when you need their drills. `firedrill run` lists every drill that is waiting, and what connects it.
 
 | System | Guide | Drills it unlocks | Time |
 | --- | --- | --- | --- |
 | GitHub | [github.md](github.md) | Change pack, remote repo files | 1 minute |
-| Repo files | [repo-files.md](repo-files.md) | Agent pack, secrets, workflows, Terraform | None |
-| Google Cloud | [gcp.md](gcp.md) | GCP pack | 15 minutes |
-| Google Workspace | [google-workspace.md](google-workspace.md) | MFA, leavers, dormant admins | 10 minutes, needs a super admin |
-| AWS | [aws.md](aws.md) | Dormant admins, destructive tokens, unused keys | 5 minutes per account |
+| Repo files | [repo-files.md](repo-files.md) | Agent pack, secrets, workflows, lockfiles, Terraform | None |
+| Google Cloud | [gcp.md](gcp.md) | GCP pack, Cloud SQL backups | 15 minutes |
+| Google Workspace | [google-workspace.md](google-workspace.md) | MFA, leavers, dormant admins, third-party apps | 10 minutes, needs a super admin |
+| AWS | [aws.md](aws.md) | Dormant admins, destructive tokens, unused keys, database backups | 5 minutes per account |
+| Anthropic | [anthropic.md](anthropic.md) | AI keys capped and owned | 5 minutes, needs an admin key |
+| OpenAI | [openai.md](openai.md) | AI keys capped and owned | 5 minutes, needs an admin key |
 | Domains | [domains.md](domains.md) | Doors pack: DNS, certificate logs, web | 5 minutes, needs DNS access |
 | HR leavers | [hr.md](hr.md) | Leavers locked out | One export |
 | Semgrep | [semgrep.md](semgrep.md) | Your own Semgrep rules | One scan |
@@ -33,4 +35,16 @@ It lists every call a run would make, without making any.
 
 ## Where credentials live
 
-Never in `config.yaml`, and never in the repo. Firedrill reads them from your environment, your `gh` and `gcloud` logins, or your AWS profiles, and keeps them in memory only.
+Never in `config.yaml`, and never in the repo. Firedrill reads them from your environment, your `gh` and `gcloud` logins, or your AWS profiles, and keeps them in memory only. Anthropic and OpenAI admin keys come from `FIREDRILL_ANTHROPIC_ADMIN_KEY` and `FIREDRILL_OPENAI_ADMIN_KEY` and are only ever sent with GET.
+
+## Registers you keep
+
+Some evidence no API shows. Three files under `.firedrill/` hold it, each entry naming an owner (a handle or team, never an email) and a date someone checked it:
+
+| File | What it declares | Read by |
+| --- | --- | --- |
+| `apps.yaml` | Owner and last review of each third-party OAuth app | `access/third-party-apps-reviewed` |
+| `backups.yaml` | A copy of a database in another account or project | `recovery/backups-separate-and-retained` |
+| `ai-keys.yaml` | Owner and monthly spend limit of an AI key, workspace or project | `keys/ai-keys-capped` |
+
+Declared evidence is shown as declared in each result.

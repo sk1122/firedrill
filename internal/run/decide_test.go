@@ -75,11 +75,78 @@ func awsKey(g *graph.Graph, admin bool) {
 func agentConfig(g *graph.Graph, unguarded []any, creds ...string) {
 	servers := []any{}
 	for i, c := range creds {
-		servers = append(servers, map[string]any{"name": string(rune('a' + i)), "credentials": []any{c}})
+		srv := stdioServer(string(rune('a'+i)), "acme-mcp", "", "", true, true)
+		srv["credentials"] = []any{c}
+		servers = append(servers, srv)
 	}
 	node(g, "agent:claude/acme/api", graph.KindAgentConfig, map[string]any{"repo": "acme/api", "tool": "claude-code", "scope": "repo",
 		"file": ".mcp.json", "allowed_commands": []any{}, "denied_commands": []any{}, "deny_read_paths": []any{},
 		"unguarded_destructive": unguarded, "mcp_servers": servers})
+}
+
+// stdioServer is an MCP server row for a local command, with every field.
+func stdioServer(name, command, pkg, version string, pinned, known bool) map[string]any {
+	return map[string]any{"name": name, "credentials": []any{}, "transport": "stdio", "host": "", "host_known": false,
+		"command": command, "package": pkg, "version": version, "pinned": pinned, "package_known": known}
+}
+
+// httpServer is an MCP server row for a remote URL, with every field.
+func httpServer(name, host string, known bool) map[string]any {
+	return map[string]any{"name": name, "credentials": []any{}, "transport": "http", "host": host, "host_known": known,
+		"command": "", "package": "", "version": "", "pinned": true, "package_known": true}
+}
+
+// mcpConfig is a .mcp.json holding the given servers.
+func mcpConfig(g *graph.Graph, servers ...map[string]any) {
+	list := []any{}
+	for _, s := range servers {
+		list = append(list, s)
+	}
+	node(g, "agent:acme/api/.mcp.json", graph.KindAgentConfig, map[string]any{"repo": "acme/api", "tool": "claude-code", "scope": "repo",
+		"file": ".mcp.json", "allowed_commands": []any{}, "denied_commands": []any{}, "deny_read_paths": []any{},
+		"unguarded_destructive": []any{}, "mcp_servers": list, "gitignored": false, "local_override": false})
+}
+
+func workflow(g *graph.Graph, perms string, triggers, secrets []any) {
+	node(g, "github:workflow/acme/api/.github/workflows/a.yml", graph.KindWorkflow, map[string]any{"repo": "acme/api",
+		"file": ".github/workflows/a.yml", "permissions": perms, "unpinned_actions": []any{}, "pull_request_target_checkout": false,
+		"triggers": triggers, "secrets": secrets, "unfrozen_installs": []any{}, "cloud_key_secrets": []any{}, "uses_oidc": false})
+}
+
+// ciWorkflow is a push workflow with the install and cloud fields set.
+func ciWorkflow(g *graph.Graph, file string, secrets, unfrozen, cloudKeys []any, oidc bool) {
+	node(g, "github:workflow/acme/api/"+file, graph.KindWorkflow, map[string]any{"repo": "acme/api",
+		"file": file, "permissions": "read", "unpinned_actions": []any{}, "pull_request_target_checkout": false,
+		"triggers": []any{"push"}, "secrets": secrets, "unfrozen_installs": unfrozen, "cloud_key_secrets": cloudKeys, "uses_oidc": oidc})
+}
+
+// manifest is one package.json and its lockfile.
+func manifest(g *graph.Graph, file, lockfile string, committed bool, scripts, newScripts []any) {
+	manager := "unknown"
+	if lockfile != "" {
+		manager = "npm"
+	}
+	node(g, "manifest:acme/api/"+file, graph.KindManifest, map[string]any{"repo": "acme/api", "file": file, "manager": manager,
+		"lockfile": lockfile, "lockfile_committed": committed, "install_scripts": scripts, "install_scripts_known": true,
+		"new_install_scripts": newScripts})
+}
+
+// agentSecret is a secret seen in a file, with the agent config fields.
+func agentSecret(g *graph.Graph, file string, inAgentConfig, gitignored bool) {
+	node(g, "secret:h@"+file, graph.KindSecretSeen, map[string]any{
+		"repo": "acme/api", "kind": "generic", "file": file, "line": int64(1), "env_class": "unknown",
+		"hash": "h", "agent_readable": true, "key_id": "", "in_agent_config": inAgentConfig, "gitignored": gitignored})
+}
+
+// agentFile is one parsed agent config file.
+func agentFile(g *graph.Graph, file string, local, gitignored bool) {
+	tool := "claude-code"
+	if strings.HasPrefix(file, ".gemini/") {
+		tool = "gemini"
+	}
+	node(g, "agent:acme/api/"+file, graph.KindAgentConfig, map[string]any{"repo": "acme/api", "tool": tool, "scope": "repo",
+		"file": file, "allowed_commands": []any{}, "denied_commands": []any{}, "deny_read_paths": []any{},
+		"unguarded_destructive": []any{}, "mcp_servers": []any{}, "gitignored": gitignored, "local_override": local})
 }
 
 func user(g *graph.Graph, email string, admin, suspended, enforced bool, login string) {
@@ -123,13 +190,73 @@ func gcpKey(g *graph.Graph, id, created, lastUsed string, known bool) {
 		"created": created, "last_used": lastUsed, "last_use_known": known, "disabled": false})
 }
 
+// settings is the config node holding thresholds, with how many names are
+// listed under production.
+func settings(g *graph.Graph, production int64) {
+	node(g, "config:settings", graph.KindConfigSettings, map[string]any{
+		"review_days": int64(180), "min_retention_days": int64(7), "production_markers": production})
+}
+
+// oauthApp is a third-party app users granted access, high risk when it holds
+// full Drive and Gmail scopes.
+func oauthApp(g *graph.Graph, id, name string, highRisk bool) {
+	scopes, sensitive := []any{"https://www.googleapis.com/auth/drive.file", "openid"}, []any{}
+	if highRisk {
+		scopes = []any{"https://mail.google.com/", "https://www.googleapis.com/auth/drive", "openid"}
+		sensitive = []any{"https://mail.google.com/", "https://www.googleapis.com/auth/drive"}
+	}
+	node(g, "google:oauth-app/"+id, graph.KindOAuthApp, map[string]any{"client_id": id, "name": name, "scopes": scopes,
+		"sensitive_scopes": sensitive, "high_risk": highRisk, "user_count": int64(3), "native": false, "anonymous": false})
+}
+
+func appRegister(g *graph.Graph, id, owner, reviewed string) {
+	node(g, "config-app:"+id, graph.KindConfigApp, map[string]any{"client_id": id, "name": "", "owner": owner, "reviewed": reviewed, "note": ""})
+}
+
+// database is one database as the aws or gcp connector writes it.
+func database(g *graph.Graph, system, name string, production bool, retention int64, copy, detail string) {
+	account, project, region := "111122223333", "", "us-east-1"
+	if system == "gcp" {
+		account, project, region = "", "acme-prod", "europe-west1"
+	}
+	node(g, system+":db/"+account+project+"/"+name, graph.KindDatabase, map[string]any{"system": system, "account": account,
+		"project": project, "profile": "acme-prod", "region": region, "name": name, "engine": "postgres", "db_kind": "instance",
+		"production": production, "production_marked": production, "automated_backups": retention > 0, "retention_days": retention,
+		"deletion_protection": true, "separate_copy": copy, "copy_detail": detail})
+}
+
+// aiKey is one provider API key as the anthropic or openai connector writes it.
+func aiKey(g *graph.Graph, provider, id, status string, owned, readable, capped bool) {
+	owner, kind, scope := "", "unknown", "unknown"
+	if owned {
+		owner, kind = "person:"+strings.Repeat("a", 32), "user"
+	}
+	switch {
+	case capped:
+		scope = "project"
+	case readable:
+		scope = "none"
+	}
+	ws, wsName, proj, projName := "", "", "", ""
+	if provider == "anthropic" {
+		ws, wsName = "wrkspc_01AcmeProd", "acme-prod"
+	} else {
+		proj, projName = "proj_acmeprod", "acme-prod"
+	}
+	node(g, provider+":key/"+id, graph.KindAIKey, map[string]any{"provider": provider, "key_id": id, "hint": "sk-...abcd",
+		"name": "agent", "status": status, "workspace": ws, "workspace_name": wsName, "project": proj, "project_name": projName,
+		"owner_kind": kind, "has_owner": owned, "owner": owner, "limit_readable": readable, "capped": capped, "limit_scope": scope,
+		"created": "2026-10-01T00:00:00Z"})
+}
+
 type drillCase struct {
 	id, verdictWant string
 	name            string
 	setup           func(g *graph.Graph)
 }
 
-var allConnectors = map[string]bool{"github": true, "google": true, "aws": true, "hr": true, "semgrep": true, "dns": true, "ctlog": true, "web": true, "gcp": true}
+var allConnectors = map[string]bool{"github": true, "google": true, "aws": true, "hr": true, "semgrep": true, "dns": true, "ctlog": true,
+	"web": true, "gcp": true, "anthropic": true, "openai": true}
 
 // drillCases are a passing, a failing and a not-applicable setup for every
 // starter drill. They also generate the drills' fixture files.
@@ -198,6 +325,101 @@ func drillCases() []drillCase {
 			node(g, "w", graph.KindWorkflow, map[string]any{"repo": "acme/api", "file": "a", "permissions": "read", "unpinned_actions": []any{}, "pull_request_target_checkout": true})
 		}},
 		{"change/workflow-tokens-read-only", tag.NA, "none", func(g *graph.Graph) { targetRepo(g) }},
+		{"change/no-pr-target-with-secrets", tag.Pass, "pull_request with secrets", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "workflows", "acme/api", 1)
+			workflow(g, "write", []any{"pull_request", "push"}, []any{"NPM_TOKEN"})
+		}},
+		{"change/no-pr-target-with-secrets", tag.Pass, "read-only pull_request_target", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "workflows", "acme/api", 1)
+			workflow(g, "read", []any{"pull_request_target"}, []any{})
+		}},
+		{"change/no-pr-target-with-secrets", tag.Fail, "agent on pull_request_target", func(g *graph.Graph) {
+			// The PR-title attack: an agent run on pull_request_target with an API
+			// key and the default token.
+			targetRepo(g)
+			scan(g, "workflows", "acme/api", 1)
+			workflow(g, "undeclared", []any{"issue_comment", "pull_request_target"}, []any{"ANTHROPIC_API_KEY"})
+		}},
+		{"change/no-pr-target-with-secrets", tag.Fail, "write token", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "workflows", "acme/api", 1)
+			workflow(g, "write", []any{"pull_request_target"}, []any{})
+		}},
+		{"change/no-pr-target-with-secrets", tag.Fail, "read-only with a secret", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "workflows", "acme/api", 1)
+			workflow(g, "read", []any{"pull_request_target"}, []any{"ANTHROPIC_API_KEY"})
+		}},
+		{"change/no-pr-target-with-secrets", tag.Fail, "inherits secrets", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "workflows", "acme/api", 1)
+			workflow(g, "read", []any{"pull_request_target"}, []any{"inherit"})
+		}},
+		{"change/no-pr-target-with-secrets", tag.NA, "no workflows", func(g *graph.Graph) { targetRepo(g); scan(g, "workflows", "acme/api", 0) }},
+
+		{"change/ci-uses-oidc-not-keys", tag.Pass, "OIDC role", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "workflows", "acme/api", 1)
+			ciWorkflow(g, ".github/workflows/deploy.yml", []any{}, []any{}, []any{}, true)
+		}},
+		{"change/ci-uses-oidc-not-keys", tag.Pass, "no cloud access", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "workflows", "acme/api", 1)
+			ciWorkflow(g, ".github/workflows/ci.yml", []any{"NPM_TOKEN"}, []any{}, []any{}, false)
+		}},
+		{"change/ci-uses-oidc-not-keys", tag.Fail, "static AWS keys", func(g *graph.Graph) {
+			// The supply-chain harvest: a long-lived AWS key stored as a secret,
+			// read by any workflow step a poisoned dependency runs in.
+			targetRepo(g)
+			scan(g, "workflows", "acme/api", 1)
+			keys := []any{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}
+			ciWorkflow(g, ".github/workflows/deploy.yml", keys, []any{}, keys, false)
+		}},
+		{"change/ci-uses-oidc-not-keys", tag.Fail, "GCP credentials_json", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "workflows", "acme/api", 1)
+			ciWorkflow(g, ".github/workflows/deploy.yml", []any{"GCP_DEPLOY"}, []any{}, []any{"GCP_DEPLOY"}, false)
+		}},
+		{"change/ci-uses-oidc-not-keys", tag.NA, "no workflows", func(g *graph.Graph) { targetRepo(g); scan(g, "workflows", "acme/api", 0) }},
+		{"supply/installs-from-lockfile", tag.Pass, "committed lockfile, frozen install", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "manifests", "acme/api", 1)
+			scan(g, "workflows", "acme/api", 1)
+			manifest(g, "package.json", "package-lock.json", true, []any{"esbuild"}, []any{})
+			ciWorkflow(g, ".github/workflows/ci.yml", []any{}, []any{}, []any{}, false)
+		}},
+		{"supply/installs-from-lockfile", tag.Fail, "no lockfile", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "manifests", "acme/api", 1)
+			manifest(g, "package.json", "", false, []any{}, []any{})
+		}},
+		{"supply/installs-from-lockfile", tag.Fail, "lockfile gitignored", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "manifests", "acme/api", 1)
+			manifest(g, "package.json", "package-lock.json", false, []any{}, []any{})
+		}},
+		{"supply/installs-from-lockfile", tag.Fail, "npm install in CI", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "manifests", "acme/api", 1)
+			scan(g, "workflows", "acme/api", 1)
+			manifest(g, "package.json", "package-lock.json", true, []any{}, []any{})
+			ciWorkflow(g, ".github/workflows/ci.yml", []any{}, []any{"npm install"}, []any{}, false)
+		}},
+		{"supply/installs-from-lockfile", tag.Fail, "dependency gained an install script", func(g *graph.Graph) {
+			// Shai-Hulud: a trusted dependency's new release adds a postinstall
+			// script that runs on every install.
+			targetRepo(g)
+			scan(g, "manifests", "acme/api", 1)
+			manifest(g, "package.json", "package-lock.json", true, []any{"acme-colors", "esbuild"}, []any{"acme-colors"})
+		}},
+		{"supply/installs-from-lockfile", tag.NA, "no package.json", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "manifests", "acme/api", 0)
+			scan(g, "workflows", "acme/api", 1)
+			ciWorkflow(g, ".github/workflows/ci.yml", []any{}, []any{}, []any{}, false)
+		}},
 
 		{"access/leavers-locked-out", tag.Pass, "suspended", func(g *graph.Graph) {
 			leaver(g, "a@x.com", "2026-10-01")
@@ -327,6 +549,189 @@ func drillCases() []drillCase {
 			agentConfig(g, []any{}, "secret:a", "secret:a")
 		}},
 		{"agent/no-shared-agent-keys", tag.NA, "no configs", func(g *graph.Graph) { targetRepo(g) }},
+		{"agent/no-secrets-in-agent-config", tag.Pass, "no agent secrets", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "secrets", "acme/api", 5)
+			scan(g, "agent_configs", "acme/api", 1)
+			agentSecret(g, "scripts/x.sh", false, false)
+			agentFile(g, ".claude/settings.json", false, false)
+		}},
+		{"agent/no-secrets-in-agent-config", tag.Pass, "gitignored local settings", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "secrets", "acme/api", 5)
+			scan(g, "agent_configs", "acme/api", 1)
+			agentFile(g, ".claude/settings.local.json", true, true)
+		}},
+		{"agent/no-secrets-in-agent-config", tag.Pass, "no agent config", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "secrets", "acme/api", 5)
+			scan(g, "agent_configs", "acme/api", 0)
+		}},
+		{"agent/no-secrets-in-agent-config", tag.Fail, "committed local settings with a secret", func(g *graph.Graph) {
+			// The Claude Code leak: an allow-list holding a token, committed.
+			targetRepo(g)
+			scan(g, "secrets", "acme/api", 5)
+			scan(g, "agent_configs", "acme/api", 1)
+			agentSecret(g, ".claude/settings.local.json", true, false)
+			agentFile(g, ".claude/settings.local.json", true, false)
+		}},
+		{"agent/no-secrets-in-agent-config", tag.Fail, "committed local settings", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "secrets", "acme/api", 5)
+			scan(g, "agent_configs", "acme/api", 1)
+			agentFile(g, ".claude/settings.local.json", true, false)
+		}},
+		{"agent/no-secrets-in-agent-config", tag.Fail, "secret in gemini settings", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "secrets", "acme/api", 5)
+			scan(g, "agent_configs", "acme/api", 1)
+			agentSecret(g, ".gemini/settings.json", true, false)
+			agentFile(g, ".gemini/settings.json", false, false)
+		}},
+		{"agent/no-secrets-in-agent-config", tag.Fail, "secret in gitignored local settings", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "secrets", "acme/api", 5)
+			scan(g, "agent_configs", "acme/api", 1)
+			agentSecret(g, ".claude/settings.local.json", true, true)
+			agentFile(g, ".claude/settings.local.json", true, true)
+		}},
+		{"agent/no-secrets-in-agent-config", tag.NA, "nothing inspected", func(g *graph.Graph) { targetRepo(g) }},
+		{"agent/mcp-servers-known", tag.Pass, "owned host, pinned allowlisted package, local script", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "agent_configs", "acme/api", 1)
+			mcpConfig(g, httpServer("docs", "mcp.acme.com", true),
+				stdioServer("fs", "npx", "@acme/mcp-fs", "1.4.2", true, true),
+				stdioServer("tools", "scripts/mcp.sh", "", "", true, true))
+		}},
+		{"agent/mcp-servers-known", tag.Fail, "unknown remote host", func(g *graph.Graph) {
+			// The MCP incident: a config pointing an agent at a server on a host
+			// nobody owns or reviewed.
+			targetRepo(g)
+			scan(g, "agent_configs", "acme/api", 1)
+			mcpConfig(g, httpServer("helper", "mcp.unknown-tools.example", false))
+		}},
+		{"agent/mcp-servers-known", tag.Fail, "unpinned npx package", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "agent_configs", "acme/api", 1)
+			mcpConfig(g, stdioServer("helper", "npx", "some-mcp", "", false, false))
+		}},
+		{"agent/mcp-servers-known", tag.Fail, "latest tag", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "agent_configs", "acme/api", 1)
+			mcpConfig(g, stdioServer("helper", "npx", "@acme/mcp-fs", "", false, true))
+		}},
+		{"agent/mcp-servers-known", tag.Warn, "pinned but unknown package", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "agent_configs", "acme/api", 1)
+			mcpConfig(g, stdioServer("helper", "uvx", "acme-mcp-search", "0.3.1", true, false))
+		}},
+		{"agent/mcp-servers-known", tag.NA, "no agent config", func(g *graph.Graph) {
+			targetRepo(g)
+			scan(g, "agent_configs", "acme/api", 0)
+		}},
+
+		{"access/third-party-apps-reviewed", tag.Pass, "reviewed, with an owner", func(g *graph.Graph) {
+			settings(g, 0)
+			scan(g, "oauth_tokens", "", 40)
+			oauthApp(g, "1234-notes.apps.googleusercontent.com", "Acme Notes AI", true)
+			appRegister(g, "1234-notes.apps.googleusercontent.com", "@it", "2026-09-01")
+		}},
+		{"access/third-party-apps-reviewed", tag.Pass, "only low-risk scopes", func(g *graph.Graph) {
+			settings(g, 0)
+			scan(g, "oauth_tokens", "", 40)
+			oauthApp(g, "5678-sched.apps.googleusercontent.com", "Acme Scheduler", false)
+		}},
+		{"access/third-party-apps-reviewed", tag.Fail, "full Drive and Gmail access, no owner", func(g *graph.Graph) {
+			// The incident: an employee granted an outside app full access to
+			// their mail and Drive, and nobody ever reviewed the grant.
+			settings(g, 0)
+			scan(g, "oauth_tokens", "", 40)
+			oauthApp(g, "1234-notes.apps.googleusercontent.com", "Acme Notes AI", true)
+		}},
+		{"access/third-party-apps-reviewed", tag.Fail, "review lapsed", func(g *graph.Graph) {
+			settings(g, 0)
+			scan(g, "oauth_tokens", "", 40)
+			oauthApp(g, "1234-notes.apps.googleusercontent.com", "Acme Notes AI", true)
+			appRegister(g, "1234-notes.apps.googleusercontent.com", "@it", "2025-01-15")
+		}},
+		{"access/third-party-apps-reviewed", tag.Warn, "some users' grants unreadable", func(g *graph.Graph) {
+			settings(g, 0)
+			graph.WriteScan(g, "fixture", "oauth_tokens", "", 39, "the OAuth grants of 1 of 40 users could not be read", testNow)
+			oauthApp(g, "5678-sched.apps.googleusercontent.com", "Acme Scheduler", false)
+		}},
+		{"access/third-party-apps-reviewed", tag.NA, "no app granted", func(g *graph.Graph) {
+			settings(g, 0)
+			scan(g, "oauth_tokens", "", 40)
+		}},
+
+		{"recovery/backups-separate-and-retained", tag.Pass, "retained and copied to another account", func(g *graph.Graph) {
+			settings(g, 1)
+			scan(g, "aws_backups", "acme-prod", 1)
+			database(g, "aws", "orders", true, 14, "yes", "cross-account vault 444455556666")
+		}},
+		{"recovery/backups-separate-and-retained", tag.Fail, "no automated backups", func(g *graph.Graph) {
+			settings(g, 1)
+			scan(g, "aws_backups", "acme-prod", 1)
+			database(g, "aws", "orders", true, 0, "yes", "cross-account vault 444455556666")
+		}},
+		{"recovery/backups-separate-and-retained", tag.Fail, "retention too short", func(g *graph.Graph) {
+			settings(g, 1)
+			scan(g, "aws_backups", "acme-prod", 1)
+			database(g, "aws", "orders", true, 3, "yes", "cross-account vault 444455556666")
+		}},
+		{"recovery/backups-separate-and-retained", tag.Fail, "backups only in the same account", func(g *graph.Graph) {
+			// The incident: a destructive token deleted the production database
+			// and its backups together, since both lived in the same place.
+			settings(g, 1)
+			scan(g, "aws_backups", "acme-prod", 1)
+			database(g, "aws", "orders", true, 14, "no", "")
+		}},
+		{"recovery/backups-separate-and-retained", tag.Warn, "separate copy unknown", func(g *graph.Graph) {
+			settings(g, 1)
+			scan(g, "gcp_backups", "acme-prod", 1)
+			database(g, "gcp", "ledger", true, 14, "unknown", "backups kept after the instance is deleted, in the same project")
+		}},
+		{"recovery/backups-separate-and-retained", tag.Pass, "declared copy", func(g *graph.Graph) {
+			settings(g, 1)
+			scan(g, "gcp_backups", "acme-prod", 1)
+			database(g, "gcp", "ledger", true, 14, "unknown", "")
+			node(g, "config-backup:ledger", graph.KindConfigBackup, map[string]any{"database": "ledger",
+				"copy_location": "nightly export to gs://acme-backup-vault in acme-backup", "owner": "@platform", "verified": "2026-11-01"})
+		}},
+		{"recovery/backups-separate-and-retained", tag.NA, "no production database", func(g *graph.Graph) {
+			settings(g, 1)
+			scan(g, "aws_backups", "acme-prod", 1)
+			database(g, "aws", "scratch", false, 0, "no", "")
+		}},
+
+		{"keys/ai-keys-capped", tag.Pass, "owned and capped", func(g *graph.Graph) {
+			scan(g, "ai_keys", "openai", 1)
+			aiKey(g, "openai", "key_acmeci", "active", true, true, true)
+		}},
+		{"keys/ai-keys-capped", tag.Fail, "active key with no owner and no cap", func(g *graph.Graph) {
+			// The incident: an unattended agent loop ran overnight on a key with
+			// no spend cap and nobody answering for it.
+			scan(g, "ai_keys", "openai", 1)
+			aiKey(g, "openai", "key_acmeloop", "active", false, true, false)
+		}},
+		{"keys/ai-keys-capped", tag.Fail, "owner but no cap", func(g *graph.Graph) {
+			scan(g, "ai_keys", "openai", 1)
+			aiKey(g, "openai", "key_acmeci", "active", true, true, false)
+		}},
+		{"keys/ai-keys-capped", tag.Warn, "limit not readable and not declared", func(g *graph.Graph) {
+			scan(g, "ai_keys", "anthropic", 1)
+			aiKey(g, "anthropic", "apikey_01AcmeCI", "active", true, false, false)
+		}},
+		{"keys/ai-keys-capped", tag.Pass, "cap declared for the workspace", func(g *graph.Graph) {
+			scan(g, "ai_keys", "anthropic", 1)
+			aiKey(g, "anthropic", "apikey_01AcmeCI", "active", true, false, false)
+			node(g, "config-ai-key:anthropic/workspace/acme-prod", graph.KindConfigAIKey, map[string]any{"provider": "anthropic",
+				"key_id": "", "workspace": "acme-prod", "project": "", "owner": "@ml", "monthly_limit_usd": 500.0, "verified": "2026-11-01"})
+		}},
+		{"keys/ai-keys-capped", tag.NA, "no active key", func(g *graph.Graph) {
+			scan(g, "ai_keys", "anthropic", 1)
+			aiKey(g, "anthropic", "apikey_01AcmeOld", "archived", false, false, false)
+		}},
 
 		{"doors/no-public-source-maps", tag.Pass, "clean", func(g *graph.Graph) { domain(g); scan(g, "web_source_maps", "acme.com", 3) }},
 		{"doors/no-public-source-maps", tag.Fail, "public", func(g *graph.Graph) {
@@ -402,8 +807,8 @@ func TestEveryDrillGoesGreenRedAndNA(t *testing.T) {
 		}
 		covered[c.id][c.verdictWant] = true
 	}
-	if len(covered) != 24 {
-		t.Errorf("covered %d drills, want 24", len(covered))
+	if len(covered) != 32 {
+		t.Errorf("covered %d drills, want 32", len(covered))
 	}
 	for id, v := range covered {
 		if !v[tag.Pass] || !v[tag.Fail] || !v[tag.NA] {
@@ -608,5 +1013,160 @@ func TestTargetIsCountedAsRead(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("read: %v", got[0].Read)
+	}
+}
+
+func TestCarryWaiverOnUnjudgedRun(t *testing.T) {
+	d := &drill.Drill{ID: "x/y", Severity: "high"}
+	finding := func(expires string) config.Waiver {
+		w := config.Waiver{Drill: d.ID, Target: "acme/api", Reason: "r", ApprovedBy: "@a", Expires: expires}
+		w.Finding = &struct {
+			File string `yaml:"file"`
+			Hash string `yaml:"hash"`
+		}{"demo.sh", "secret:fake"}
+		return w
+	}
+	wide := config.Waiver{Drill: d.ID, Reason: "r", ApprovedBy: "@a", Expires: "2026-11-20"}
+	openWaived := &tag.Tag{Header: tag.Header{State: tag.Open, Waived: true, WaivedParts: 1, Time: testNow}}
+	openPlain := &tag.Tag{Header: tag.Header{State: tag.Open, Time: testNow}}
+	closed := &tag.Tag{Header: tag.Header{State: tag.Closed, Time: testNow}}
+	cases := []struct {
+		name    string
+		verdict string
+		prev    *tag.Tag
+		ws      []config.Waiver
+		want    bool
+	}{
+		{"finding waiver active, was waived", tag.Skip, openWaived, []config.Waiver{finding("2026-11-20")}, true},
+		{"finding waiver active, was not waived", tag.Skip, openPlain, []config.Waiver{finding("2026-11-20")}, false},
+		{"finding waiver expired", tag.Skip, openWaived, []config.Waiver{finding("2026-11-06")}, false},
+		{"finding waiver for another target", tag.Skip, openWaived, []config.Waiver{func() config.Waiver { w := finding("2026-11-20"); w.Target = "acme/web"; return w }()}, false},
+		{"finding waiver removed", tag.NA, openWaived, nil, false},
+		{"drill-wide waiver, any target", tag.Warn, openPlain, []config.Waiver{wide}, true},
+		{"closed safeguard is not waived", tag.Skip, closed, []config.Waiver{wide}, false},
+		{"no history", tag.Skip, nil, []config.Waiver{wide}, false},
+		{"a PASS is never waived", tag.Pass, openWaived, []config.Waiver{wide}, false},
+	}
+	for _, c := range cases {
+		o := &Outcome{Drill: d, Target: "acme/api", Verdict: c.verdict}
+		CarryWaiver(o, c.prev, c.ws, testNow)
+		if o.Waived != c.want {
+			t.Errorf("%s: waived=%v, want %v", c.name, o.Waived, c.want)
+		}
+		ApplyState(o, c.prev, nil)
+		if c.want && (o.NewlyOpen || ExitCode([]*Outcome{o}, "open") != 0) {
+			t.Errorf("%s: a waived open safeguard must not be newly open or fail CI: %+v", c.name, o)
+		}
+	}
+	// The finding waiver's count carries with it.
+	o := &Outcome{Drill: d, Target: "acme/api", Verdict: tag.Skip}
+	CarryWaiver(o, openWaived, []config.Waiver{finding("2026-11-20")}, testNow)
+	if o.WaivedParts != 1 || len(o.Waivers) != 1 {
+		t.Fatalf("carried waiver detail: %+v", o)
+	}
+	// Expiry after a carried waiver counts as newly open once.
+	o = &Outcome{Drill: d, Target: "acme/api", Verdict: tag.Skip}
+	CarryWaiver(o, openWaived, []config.Waiver{finding("2026-11-06")}, testNow)
+	ApplyState(o, openWaived, nil)
+	if o.Waived || !o.NewlyOpen {
+		t.Fatalf("expiry on an unjudged run must be newly open: %+v", o)
+	}
+}
+
+func TestOneFactForEitherCloudOrEitherProvider(t *testing.T) {
+	for _, c := range []struct {
+		drill, a, b string
+	}{{"recovery/backups-separate-and-retained", "aws", "gcp"}, {"keys/ai-keys-capped", "anthropic", "openai"}} {
+		d := loadDrill(t, c.drill)
+		// Neither connected: the drill waits and names both.
+		got := Decide(d, graph.New(), Options{Now: testNow, Available: map[string]bool{"github": true}})
+		if got[0].Verdict != tag.Skip || got[0].Reason != "needs "+c.a+" or "+c.b {
+			t.Fatalf("%s: %s %q", c.drill, got[0].Verdict, got[0].Reason)
+		}
+		// One failed while the other was read: never a clean result.
+		got = Decide(d, graph.New(), Options{Now: testNow, Available: map[string]bool{c.a: true, c.b: true},
+			Failures: map[string]string{c.a: "HTTP 403"}})
+		if got[0].Verdict != tag.Error || !strings.Contains(got[0].Reason, c.a) {
+			t.Fatalf("%s: %s %q", c.drill, got[0].Verdict, got[0].Reason)
+		}
+	}
+	// Only Google Cloud connected: the drill runs on what it read.
+	g := graph.New()
+	settings(g, 1)
+	scan(g, "gcp_backups", "acme-prod", 1)
+	database(g, "gcp", "ledger", true, 14, "unknown", "")
+	got := Decide(loadDrill(t, "recovery/backups-separate-and-retained"), g, Options{Now: testNow, Available: map[string]bool{"gcp": true}})
+	if got[0].Verdict != tag.Warn {
+		t.Fatalf("%s %s", got[0].Verdict, got[0].Reason)
+	}
+	// Only OpenAI connected.
+	g = graph.New()
+	scan(g, "ai_keys", "openai", 1)
+	aiKey(g, "openai", "key_acmeci", "active", true, true, true)
+	got = Decide(loadDrill(t, "keys/ai-keys-capped"), g, Options{Now: testNow, Available: map[string]bool{"openai": true}})
+	if got[0].Verdict != tag.Pass {
+		t.Fatalf("%s %s", got[0].Verdict, got[0].Reason)
+	}
+}
+
+func TestTier1FailReasonsNameTheThing(t *testing.T) {
+	want := map[string]string{
+		"full Drive and Gmail access, no owner": "app Acme Notes AI (1234-notes.apps.googleusercontent.com), 3 users",
+		"backups only in the same account":      "database orders (aws 111122223333 us-east-1)",
+		"active key with no owner and no cap":   "openai key key_acmeloop (agent) in acme-prod",
+	}
+	for _, c := range drillCases() {
+		w, ok := want[c.name]
+		if !ok {
+			continue
+		}
+		g := graph.New()
+		c.setup(g)
+		got := Decide(loadDrill(t, c.id), g, Options{Now: testNow, Available: allConnectors})
+		if !strings.Contains(got[0].Reason, w) {
+			t.Errorf("%s: %q lacks %q", c.name, got[0].Reason, w)
+		}
+	}
+}
+
+func TestUnmarkedDatabasesAreAllJudged(t *testing.T) {
+	g := graph.New()
+	settings(g, 0)
+	scan(g, "aws_backups", "acme-prod", 1)
+	database(g, "aws", "orders", false, 14, "no", "")
+	got := Decide(loadDrill(t, "recovery/backups-separate-and-retained"), g, Options{Now: testNow, Available: allConnectors})
+	if got[0].Verdict != tag.Fail || !strings.Contains(got[0].Reason, "every database is judged") {
+		t.Fatalf("with nothing named production every database is judged, and the reason says so: %s %q", got[0].Verdict, got[0].Reason)
+	}
+	// One named elsewhere: unmarked databases are not production.
+	g = graph.New()
+	settings(g, 1)
+	scan(g, "aws_backups", "acme-prod", 1)
+	database(g, "aws", "orders", false, 14, "no", "")
+	if got := Decide(loadDrill(t, "recovery/backups-separate-and-retained"), g, Options{Now: testNow, Available: allConnectors}); got[0].Verdict != tag.NA {
+		t.Fatalf("%s %q", got[0].Verdict, got[0].Reason)
+	}
+}
+
+func TestUnreadableEvidenceIsNeverAPass(t *testing.T) {
+	// OAuth grants unreadable: the scope is missing from the delegation.
+	g := graph.New()
+	node(g, string(graph.ScanID("oauth_tokens", "")), graph.KindScan, map[string]any{"scanner": "oauth_tokens", "scope": "",
+		"inspected": int64(0), "partial": "x", "error": "could not read users' OAuth grants: add the scope"})
+	if got := Decide(loadDrill(t, "access/third-party-apps-reviewed"), g, Options{Now: testNow, Available: allConnectors}); got[0].Verdict != tag.Error {
+		t.Fatalf("%s", got[0].Verdict)
+	}
+	// RDS unreadable in an account.
+	g = graph.New()
+	node(g, string(graph.ScanID("aws_backups", "acme-prod")), graph.KindScan, map[string]any{"scanner": "aws_backups", "scope": "acme-prod",
+		"inspected": int64(0), "partial": "x", "error": "could not read RDS in profile acme-prod: AccessDenied"})
+	scan(g, "gcp_backups", "acme-prod", 1)
+	database(g, "gcp", "ledger", true, 14, "yes", "")
+	if got := Decide(loadDrill(t, "recovery/backups-separate-and-retained"), g, Options{Now: testNow, Available: allConnectors}); got[0].Verdict != tag.Error {
+		t.Fatalf("%s", got[0].Verdict)
+	}
+	// Never read at all.
+	if got := Decide(loadDrill(t, "keys/ai-keys-capped"), graph.New(), Options{Now: testNow, Available: allConnectors}); got[0].Verdict != tag.Error {
+		t.Fatalf("%s", got[0].Verdict)
 	}
 }
