@@ -503,6 +503,19 @@ func TestDiffWeakeningRules(t *testing.T) {
 		{KindGitHubUser, "type", "user", "bot", ChangeChanged, false},
 		{KindGitHubTeam, "privacy", "secret", "closed", ChangeChanged, false},
 		{KindGitHubTeam, "parent", "", "platform", ChangeChanged, false},
+		{KindAgentConfig, "egress", "allowlist", "partial", ChangeWeakened, true},
+		{KindAgentConfig, "egress", "partial", "open", ChangeWeakened, true},
+		{KindAgentConfig, "egress", "unsupported", "open", ChangeWeakened, true},
+		{KindAgentConfig, "egress", "open", "allowlist", ChangeChanged, false},
+		{KindAgentConfig, "egress_hosts", []any{"github.com"}, []any{"github.com", "pypi.org"}, ChangeWeakened, true},
+		{KindAgentConfig, "egress_hosts", []any{"github.com", "pypi.org"}, []any{"github.com"}, ChangeChanged, false},
+		{KindAgentConfig, "egress_unbounded", false, true, ChangeWeakened, true},
+		{KindAgentConfig, "egress_unbounded", true, false, ChangeChanged, false},
+		{KindPageScript, "has_integrity", true, false, ChangeWeakened, true},
+		{KindPageScript, "has_integrity", false, true, ChangeChanged, false},
+		{KindPageScript, "owned", true, false, ChangeChanged, false},
+		{KindConfigRestore, "restored", "2026-08-01", "2026-11-01", ChangeChanged, false},
+		{KindConfigRestore, "by", "platform-team", "sre", ChangeChanged, false},
 		{KindAgentConfig, "mcp_servers",
 			[]any{map[string]any{"name": "docs", "credentials": []any{}, "transport": "http", "host": "mcp.acme.com", "host_known": true, "pinned": true}},
 			[]any{map[string]any{"name": "docs", "credentials": []any{}, "transport": "http", "host": "mcp.unknown.example", "host_known": false, "pinned": true}},
@@ -762,5 +775,61 @@ func TestDiffSkipsGitHubPeopleNotRead(t *testing.T) {
 	}
 	if len(d.Skipped) != 2 {
 		t.Fatalf("%v", d.Skipped)
+	}
+}
+
+func TestDiffTier3(t *testing.T) {
+	at := time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC)
+	run := func(second bool) Snapshot {
+		e := &estate{at: at, g: New()}
+		if second {
+			e.at = at.Add(24 * time.Hour)
+		}
+		e.scan("web", "web_public_secrets", "acme.com", 3)
+		e.scan("web", "web_page_scripts", "acme.com", 1)
+		e.scan("files", "secrets", "acme/api", 4)
+		e.scan("gcp", "gcp_backups", "acme-prod", 1)
+		e.node("page-script:www.acme.com/@aa", KindPageScript, "web", map[string]any{"domain": "acme.com", "host": "www.acme.com",
+			"page": "/", "script_host": "cdn.jsdelivr.net", "has_integrity": true, "owned": false})
+		agent := map[string]any{"repo": "acme/api", "file": ".claude/settings.json", "allowed_commands": []any{}, "mcp_servers": []any{}}
+		// A day passing moves the last restore a day further back, and a new
+		// restore moves its time: neither is compared.
+		last := "2026-10-01T00:00:00Z"
+		if second {
+			last = "2026-11-05T00:00:00Z"
+			e.node("page-script:www.acme.com/@bb", KindPageScript, "web", map[string]any{"domain": "acme.com", "host": "www.acme.com",
+				"page": "/", "script_host": "cdn.adtech.example", "has_integrity": false, "owned": false})
+			e.node("public-secret:www.acme.com/assets/app.js#5a1f0c3e9b7d2a4c6e8f0b1d3a5c7e9f", KindPublicSecret, "web", map[string]any{
+				"domain": "acme.com", "host": "www.acme.com", "path": "/assets/app.js", "kind": "gcp_sa_key",
+				"hash": "5a1f0c3e9b7d2a4c6e8f0b1d3a5c7e9f", "key_id": "0123456789abcdef0123456789abcdef01234567", "client_side": false})
+			// A snapshot from before egress existed has none: its first
+			// appearance is not a change.
+			agent["egress"], agent["egress_hosts"], agent["egress_unbounded"] = "open", []any{}, false
+		} else {
+			e.node("config-restore:orders", KindConfigRestore, "config", map[string]any{"database": "orders", "restored": "2026-09-30", "by": "platform-team"})
+		}
+		e.node("agent:acme/api/.claude/settings.json", KindAgentConfig, "files", agent)
+		e.node("gcp:db/acme-prod/orders", KindDatabase, "gcp", map[string]any{"system": "gcp", "project": "acme-prod", "name": "orders",
+			"automated_backups": true, "retention_days": int64(14), "last_restore": last, "restores_readable": true})
+		snap := TakeSnapshot(e.g, e.at)
+		snap.Coverage = &Coverage{Read: []string{"config", "web", "files", "gcp"}}
+		return snap
+	}
+	d := Diff(run(false), run(true))
+	want := map[ID]string{
+		"page-script:www.acme.com/@bb": ChangeWeakened,
+		"public-secret:www.acme.com/assets/app.js#5a1f0c3e9b7d2a4c6e8f0b1d3a5c7e9f": ChangeSecretSeen,
+		"config-restore:orders": ChangeWeakened,
+	}
+	if len(d.Changes) != len(want) {
+		t.Fatalf("%+v", d.Changes)
+	}
+	for _, c := range d.Changes {
+		if want[c.Subject] != c.Type || !c.Weakening {
+			t.Errorf("%+v", c)
+		}
+		if strings.Contains(c.Summary, "0123456789abcdef0123456789abcdef01234567") {
+			t.Errorf("a summary names a key ID: %s", c.Summary)
+		}
 	}
 }

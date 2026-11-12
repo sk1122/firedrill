@@ -93,7 +93,8 @@ func mixedSnapshot(t *testing.T) graph.Snapshot {
 	n("agent:acme/api/.claude/settings.json", graph.KindAgentConfig, map[string]any{"repo": "acme/api", "tool": "claude-code", "scope": "repo",
 		"file": ".claude/settings.json", "unguarded_destructive": []any{"rm -rf"}, "mcp_servers": []any{
 			map[string]any{"name": "fs", "transport": "stdio", "host": "", "host_known": false, "command": "npx", "package": "@acme/mcp-fs",
-				"version": "", "pinned": false, "package_known": true}}}, nil)
+				"version": "", "pinned": false, "package_known": true}},
+		"egress": "partial", "egress_hosts": []any{"github.com", "registry.npmjs.org"}, "egress_unbounded": false}, nil)
 	hash := viewSalt.Sum(fakeToken)
 	n(graph.ID("secret:"+hash+"@acme/api/.claude/settings.local.json:2"), graph.KindSecretSeen, map[string]any{"repo": "acme/api",
 		"kind": "github_token", "file": ".claude/settings.local.json", "hash": hash, "agent_readable": true}, map[string]any{"value": fakeToken})
@@ -263,7 +264,8 @@ func TestPeopleAgentsAndGraphPages(t *testing.T) {
 	}
 
 	agents := read(t, filepath.Join(dir, "agents.html"))
-	for _, want := range []string{"claude-code", "@acme/mcp-fs", "unpinned", "secret:" + viewSalt.Sum(fakeToken)[:12], "rm -rf", "yes, 1 person", "what can it touch?"} {
+	for _, want := range []string{"claude-code", "@acme/mcp-fs", "unpinned", "secret:" + viewSalt.Sum(fakeToken)[:12], "rm -rf", "yes, 1 person", "what can it touch?",
+		"Outbound access", `<span class="warn">partial</span>`, "2 hosts", "registry.npmjs.org"} {
 		if !strings.Contains(agents, want) {
 			t.Errorf("agents page lacks %q", want)
 		}

@@ -1,6 +1,9 @@
 package secrets
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const uuidToken = "6f1b9d2e-7c44-4a10-9e3b-2d5ac81f0e77"
 
@@ -139,5 +142,78 @@ func TestTestPathsAreNotExamplesByDefault(t *testing.T) {
 	c.ExamplePaths = append(c.ExamplePaths, "test/")
 	if got := c.Class("test/k.env"); got != "example" {
 		t.Fatalf("a configured test folder must apply, got %s", got)
+	}
+}
+
+// fakePEM is a made-up private key body, built by concatenation so no scanner
+// reads this file as holding a key.
+func fakePEM(escaped bool) string {
+	nl := "\n"
+	if escaped {
+		nl = `\n`
+	}
+	body := strings.Repeat("MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC7acme", 2)
+	return "-----BEGIN " + "PRIVATE KEY-----" + nl + body + nl + body + nl + "-----END " + "PRIVATE KEY-----" + nl
+}
+
+func TestScanPublicFindsWebKinds(t *testing.T) {
+	keyID := "0123456789abcdef0123456789abcdef01234567"
+	saJSON := `{"type":"service_account","project_id":"acme-prod","private_key_id":"` + keyID + `","private_key":"` + fakePEM(true) + `","client_email":"web@acme-prod.iam.gserviceaccount.com"}`
+	cases := []struct {
+		name, text, kind, keyID string
+		want                    int
+	}{
+		{"service account key in a minified bundle", `var c=JSON.parse('` + saJSON + `');`, "gcp_sa_key", keyID, 1},
+		{"service account key with escaped quotes", strings.ReplaceAll(`x="`+saJSON+`"`, `"`, `\"`), "gcp_sa_key", keyID, 1},
+		{"service account key over several lines", strings.ReplaceAll(saJSON, ",", ",\n"), "gcp_sa_key", keyID, 1},
+		{"a key ID with no key is not a credential", `{"private_key_id":"` + keyID + `"}`, "", "", 0},
+		{"a private key alone", "const k = `" + fakePEM(false) + "`", "private_key", "", 1},
+		{"browser key", `apiKey:"AIza` + "SyA1bC2dE3fG4hI5jK6lM7nO8pQ9rS0tUvw" + `"`, "google_api_key", "", 1},
+		{"publishable key", `STRIPE_PUBLISHABLE_KEY:"pk_live_` + "51AcmeAbCdEfGhIjKl" + `"`, "stripe_publishable", "", 1},
+		{"secret key is still server-side", `k="sk_live_` + "51AcmeAbCdEfGhIjKl" + `"`, "stripe_live", "", 1},
+		{"database url with a password", `DATABASE_URL:"postgres://app:` + "Hx7pQ2mZ9vL4" + `@db.acme.internal:5432/orders"`, "database_url", "", 1},
+		{"database url with no password", `u="postgres://db.acme.internal/orders"`, "", "", 0},
+		{"named secret", `CLIENT_SECRET:"Zx8mQ2pL9vT4rW7yB1nC6dF3"`, "generic_secret", "", 1},
+		{"named key", `SEARCH_KEY:"Zx8mQ2pL9vT4rW7yB1nC6dF3"`, "generic", "", 1},
+		{"aws access key keeps its ID", "AKIA" + "IOSFODNN7ABCDEFG", "aws_access_key", "AKIA" + "IOSFODNN7ABCDEFG", 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ScanPublic(c.text)
+			if len(got) != c.want {
+				t.Fatalf("got %d findings: %+v", len(got), got)
+			}
+			if c.want == 0 {
+				return
+			}
+			if got[0].Kind != c.kind || got[0].KeyID != c.keyID || got[0].Value == "" {
+				t.Fatalf("got %+v", got[0])
+			}
+		})
+	}
+	// One key reads the same whether escaped in a string or written out.
+	a, b := ScanPublic(`x='`+fakePEM(true)+`'`), ScanPublic(fakePEM(false))
+	if len(a) != 1 || len(b) != 1 || a[0].Value != b[0].Value {
+		t.Fatalf("%+v %+v", a, b)
+	}
+}
+
+func TestScanPublicKindsAreSplitInOnePlace(t *testing.T) {
+	for _, k := range []string{"google_api_key", "stripe_publishable", "razorpay_live", "generic"} {
+		if !IsClientSide(k) {
+			t.Errorf("%s is made for a browser", k)
+		}
+	}
+	for _, k := range []string{"gcp_sa_key", "private_key", "database_url", "generic_secret", "stripe_live", "aws_access_key", "github_token", "github_pat"} {
+		if IsClientSide(k) {
+			t.Errorf("%s is a server-side credential", k)
+		}
+	}
+}
+
+func TestScanLeavesRepoKindsAlone(t *testing.T) {
+	// The repo scanner does not report browser keys: they are normal in a repo.
+	if got := Scan(`apiKey: "AIza` + "SyA1bC2dE3fG4hI5jK6lM7nO8pQ9rS0tUvw" + `"`); len(got) != 0 {
+		t.Fatalf("%+v", got)
 	}
 }

@@ -1,5 +1,6 @@
 // Package gcp reads IAM bindings, Cloud Storage bucket access, service account
-// keys and Cloud SQL backup settings in every listed Google Cloud project.
+// keys, and Cloud SQL backup settings and restore operations in every listed
+// Google Cloud project.
 // Every call is a GET, except
 // the token exchange and getIamPolicy on each listed project, each allowed by
 // exact URL.
@@ -44,8 +45,10 @@ const (
 	storageHost  = "storage.googleapis.com"
 	analyzerHost = "policyanalyzer.googleapis.com"
 	// Cloud SQL Admin API: instances.list, for each instance's backup
-	// configuration, deletion protection, region and replicas.
+	// configuration, deletion protection, region and replicas, and
+	// operations.list, for the restores and clones each instance ran. Both GET.
 	// https://docs.cloud.google.com/sql/docs/mysql/admin-api/rest/v1/instances/list
+	// https://docs.cloud.google.com/sql/docs/mysql/admin-api/rest/v1/operations/list
 	sqlHost  = "sqladmin.googleapis.com"
 	tokenURL = "https://oauth2.googleapis.com/token"
 )
@@ -116,7 +119,10 @@ func (c *Connector) Collections() []connector.Collection {
 		Name:       CollectionBackups,
 		Nodes:      []string{graph.KindDatabase},
 		Permission: "Cloud SQL Viewer (roles/cloudsql.viewer), which Viewer includes, and the Cloud SQL Admin API turned on in each project",
-		Calls:      []string{"GET https://" + sqlHost + "/v1/projects/{project}/instances"},
+		Calls: []string{
+			"GET https://" + sqlHost + "/v1/projects/{project}/instances",
+			"GET https://" + sqlHost + "/v1/projects/{project}/operations?instance={instance}, for each instance, to find restores and clones",
+		},
 	}}
 }
 

@@ -79,7 +79,7 @@ func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s conne
 // other agent config path (see IsAgentConfig) is still scanned for secrets.
 var agentFiles = map[string]bool{
 	".claude/settings.json": true, ".claude/settings.local.json": true, ".mcp.json": true,
-	".cursor/mcp.json": true, ".vscode/mcp.json": true, ".cursorignore": true, ".gemini/settings.json": true,
+	".cursor/mcp.json": true, ".cursor/sandbox.json": true, ".vscode/mcp.json": true, ".cursorignore": true, ".gemini/settings.json": true,
 }
 
 // localOverride reports an agent file meant to stay on one machine, such as
@@ -99,33 +99,24 @@ func scanRepo(t connector.RepoTarget, all []File, s connector.Scope, out graph.W
 	classes := classesFrom(s)
 	destructive := append(append([]string{}, DestructiveCommands...), s.Project.Config.Agents.DestructiveCommands...)
 
-	// Agent settings come first, since they decide what agents may read.
+	// Agent settings come first, since they decide what agents may read. They
+	// are all parsed before any is written, since a tool's settings across
+	// files decide each file's egress.
 	var denyRead []string
-	configs := 0
+	type parsed struct {
+		cfg        *AgentConfig
+		id         string
+		gitignored bool
+		rel        string
+	}
+	var parsedConfigs []parsed
 	addConfig := func(rel, id string, data []byte, scope string, gitignored bool) error {
 		cfg, err := ParseAgentFile(rel, data, scope)
 		if err != nil {
 			return err
 		}
-		configs++
 		denyRead = append(denyRead, cfg.DenyRead...)
-		servers := []any{}
-		for _, srv := range cfg.Servers {
-			servers = append(servers, map[string]any{
-				"name": srv.Name, "credentials": credentials(srv, s, t.Path != ""),
-				"transport": srv.Transport, "host": srv.Host, "host_known": hostKnown(srv.Host, s),
-				"command": srv.Command, "package": srv.Package, "version": srv.Version, "pinned": srv.Pinned,
-				"package_known": packageKnown(srv.Package, s),
-			})
-			mcp := graph.ID("mcp:" + repo + "/" + srv.Name)
-			out.Node(graph.Node{ID: mcp, Kind: "mcp_server", Attrs: map[string]any{"repo": repo, "name": srv.Name}, Source: "files", SeenAt: s.Now})
-		}
-		node(id, graph.KindAgentConfig, map[string]any{
-			"tool": cfg.Tool, "scope": cfg.Scope, "file": cfg.File,
-			"allowed_commands": toAny(cfg.Allowed), "denied_commands": toAny(cfg.Denied),
-			"deny_read_paths": toAny(cfg.DenyRead), "unguarded_destructive": toAny(Unguarded(cfg, destructive)),
-			"mcp_servers": servers, "gitignored": gitignored, "local_override": scope == "repo" && localOverride(rel),
-		})
+		parsedConfigs = append(parsedConfigs, parsed{cfg: cfg, id: id, gitignored: gitignored, rel: rel})
 		return nil
 	}
 	for _, f := range all {
@@ -137,7 +128,7 @@ func scanRepo(t connector.RepoTarget, all []File, s connector.Scope, out graph.W
 		}
 	}
 	if s.IncludeHome && t.Path != "" && s.HomeDir != "" {
-		for _, rel := range []string{".claude/settings.json", ".cursor/mcp.json", ".vscode/mcp.json", ".gemini/settings.json"} {
+		for _, rel := range []string{".claude/settings.json", ".cursor/mcp.json", ".cursor/sandbox.json", ".vscode/mcp.json", ".gemini/settings.json"} {
 			data, err := os.ReadFile(filepath.Join(s.HomeDir, rel))
 			if err != nil {
 				continue
@@ -146,6 +137,35 @@ func scanRepo(t connector.RepoTarget, all []File, s connector.Scope, out graph.W
 				return err
 			}
 		}
+	}
+	cfgs := make([]*AgentConfig, len(parsedConfigs))
+	for i, p := range parsedConfigs {
+		cfgs[i] = p.cfg
+	}
+	egress := JudgeEgress(cfgs)
+	configs := 0
+	for _, p := range parsedConfigs {
+		cfg := p.cfg
+		configs++
+		servers := []any{}
+		for _, srv := range cfg.Servers {
+			servers = append(servers, map[string]any{
+				"name": srv.Name, "credentials": credentials(srv, s, t.Path != ""),
+				"transport": srv.Transport, "host": srv.Host, "host_known": hostKnown(srv.Host, s),
+				"command": srv.Command, "package": srv.Package, "version": srv.Version, "pinned": srv.Pinned,
+				"package_known": packageKnown(srv.Package, s),
+			})
+			mcp := graph.ID("mcp:" + repo + "/" + srv.Name)
+			out.Node(graph.Node{ID: mcp, Kind: "mcp_server", Attrs: map[string]any{"repo": repo, "name": srv.Name}, Source: "files", SeenAt: s.Now})
+		}
+		e := egress[cfg]
+		node(p.id, graph.KindAgentConfig, map[string]any{
+			"tool": cfg.Tool, "scope": cfg.Scope, "file": cfg.File,
+			"allowed_commands": toAny(cfg.Allowed), "denied_commands": toAny(cfg.Denied),
+			"deny_read_paths": toAny(cfg.DenyRead), "unguarded_destructive": toAny(Unguarded(cfg, destructive)),
+			"mcp_servers": servers, "gitignored": p.gitignored, "local_override": cfg.Scope == "repo" && localOverride(p.rel),
+			"egress": e.Egress, "egress_hosts": toAny(e.Hosts), "egress_unbounded": e.Unbounded,
+		})
 	}
 	graph.WriteScan(out, "files", "agent_configs", repo, configs, "", s.Now)
 
@@ -275,16 +295,7 @@ func hostKnown(host string, s connector.Scope) bool {
 	if Loopback(host) {
 		return true
 	}
-	known := append(append([]string{}, s.VerifiedDomains...), s.Project.Config.Agents.MCPHosts...)
-	for _, h := range s.Project.Hosts {
-		known = append(known, h.Host)
-	}
-	for _, k := range known {
-		if k = strings.TrimSpace(k); k != "" && connector.UnderDomain(host, k) {
-			return true
-		}
-	}
-	return false
+	return connector.HostOwned(host, s, s.Project.Config.Agents.MCPHosts...)
 }
 
 // packageKnown says whether an MCP server runs no fetched package, or one named

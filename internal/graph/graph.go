@@ -170,6 +170,11 @@ const (
 	KindWebResponse  = "web_response"
 	KindSourceMap    = "public_source_map"
 	KindAPIDoc       = "public_api_doc"
+	// A credential found in a public JavaScript bundle or source map, by
+	// fingerprint and key ID only, and a script an owned page loads from
+	// another host.
+	KindPublicSecret = "public_secret"
+	KindPageScript   = "page_script"
 	KindLeaver       = "hr_leaver"
 	KindConfigHost   = "config_host"
 	KindConfigDomain = "config_domain"
@@ -189,6 +194,7 @@ const (
 	KindConfigBackup   = "config_backup"
 	KindConfigAIKey    = "config_ai_key"
 	KindConfigOwner    = "config_owner"
+	KindConfigRestore  = "config_restore"
 	KindConfigSettings = "config_settings"
 	KindScan           = "scan"
 	KindConnectorFail  = "connector_failure"

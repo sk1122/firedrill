@@ -1,6 +1,6 @@
 # Connect Google Cloud
 
-Google Cloud unlocks the GCP pack: public buckets, uniform bucket access, Owner and Editor only for your own domains, no Editor on service accounts, no project-wide impersonation, and service account keys no older than 90 days. With or without AWS, it also unlocks `recovery/backups-separate-and-retained` for Cloud SQL.
+Google Cloud unlocks the GCP pack: public buckets, uniform bucket access, Owner and Editor only for your own domains, no Editor on service accounts, no project-wide impersonation, and service account keys no older than 90 days. With or without AWS, it also unlocks `recovery/backups-separate-and-retained` and `recovery/restore-exercised` for Cloud SQL, and lets `doors/no-live-key-in-public-bundle` tell whether a service account key found in public JavaScript is live.
 
 Firedrill reads through a **reader service account** that has read roles only and **no key**. You log in as it through `gcloud`, so nothing long-lived is stored.
 
@@ -107,6 +107,25 @@ Cloud SQL keeps automated backups in the instance's own project; the API has no 
 
 Retention is the number of daily backups kept (`retainedBackups`), read as days. Read replicas are judged through their primary; a replica is not a backup.
 
+### What the restore drill can see
+
+`recovery/restore-exercised` asks that each production database was restored from its backups within `recovery.restore_days` (90 unless set in `config.yaml`). Firedrill reads each instance's operations (`operations.list`, GET only) and keeps the latest that finished with no error:
+
+- **`CLONE`** runs on the instance being cloned, so a clone counts for that instance. It shows the data can be brought up elsewhere; the operation does not say whether it was a point-in-time clone.
+- **`RESTORE_VOLUME`** restores a backup into the instance it runs on, usually a scratch instance. The operation does not name the backup it came from, so it counts for every database in that project, and the result says so.
+- Imports, exports and backups are not restores. A failed or unfinished operation does not count.
+
+Google does not document how long Cloud SQL keeps operations, so an older restore, or one done another way, goes in `.firedrill/restores.yaml`:
+
+```yaml
+- database: orders                      # the instance name
+  restored: 2026-10-20
+  by: platform-team                     # a team or role, never an email
+  note: restored last night's backup into orders-restore-test; row counts matched
+```
+
+If an instance's operations cannot be read and nothing is declared, the drill warns rather than passing or failing. Only the newest 5,000 operations of an instance are read. AWS restores are not read (out of scope for now); an AWS database passes only with a restores.yaml entry.
+
 ## 8. Check it
 
 ```bash
@@ -132,7 +151,7 @@ firedrill run
 
 ## What Firedrill calls
 
-Every call is a GET, including `GET https://sqladmin.googleapis.com/v1/projects/{project}/instances` for Cloud SQL and `GET https://iam.googleapis.com/v1/{projects/{project} or organizations/{org}}/roles/{role}` once per custom role a binding names, plus three exact POSTs the guard allows: the token exchange, minting the reader's token, and `getIamPolicy` on each listed project, which only reads. `firedrill run --dry-run` lists them all.
+Every call is a GET, including `GET https://sqladmin.googleapis.com/v1/projects/{project}/instances` and `GET https://sqladmin.googleapis.com/v1/projects/{project}/operations?instance={instance}` for Cloud SQL and `GET https://iam.googleapis.com/v1/{projects/{project} or organizations/{org}}/roles/{role}` once per custom role a binding names, plus three exact POSTs the guard allows: the token exchange, minting the reader's token, and `getIamPolicy` on each listed project, which only reads. `firedrill run --dry-run` lists them all.
 
 ## In CI
 

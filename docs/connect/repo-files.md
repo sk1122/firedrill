@@ -20,7 +20,7 @@ A checkout whose folder name matches a repo in config replaces the download for 
 firedrill run --path ../api --include-home
 ```
 
-`--include-home` also reads user-level agent settings in your home folder, `~/.claude/settings.json`, `~/.cursor/mcp.json` and `~/.vscode/mcp.json`. CI never sees these, and its results say "committed files only".
+`--include-home` also reads user-level agent settings in your home folder, `~/.claude/settings.json`, `~/.cursor/mcp.json`, `~/.cursor/sandbox.json`, `~/.vscode/mcp.json` and `~/.gemini/settings.json`. CI never sees these, and its results say "committed files only".
 
 ## Tuning the secret scan
 
@@ -46,6 +46,30 @@ agents:
 ```
 
 A pinned package that isn't on `mcp_packages` gives WARN, not FAIL. Firedrill keeps only a URL's hostname and a command's base name and package: never the path, query or arguments, which can carry tokens.
+
+## Limiting where agents can reach
+
+`agent/egress-allowlisted` fails when a coding agent's committed settings leave outbound network access open, or allow every host, and warns when only tool-level rules exist or the tool has no such setting. It passes when a real boundary limits access to listed hosts. What counts, per tool:
+
+- **Claude Code**, in `.claude/settings.json` (merged with `settings.local.json`, and your user file with `--include-home`):
+
+  ```json
+  {
+    "sandbox": {
+      "enabled": true,
+      "allowUnsandboxedCommands": false,
+      "network": { "allowedDomains": ["github.com", "*.npmjs.org"] }
+    },
+    "permissions": { "allow": ["WebFetch(domain:docs.acme.com)"] }
+  }
+  ```
+
+  The sandbox limits Bash and what it starts; WebFetch follows its own permission rules, so a bare `WebFetch` allow rule, `sandbox.excludedCommands`, or leaving the unsandboxed retry on makes it partial. Without the sandbox, deny rules on `WebFetch`, `WebSearch`, `curl` or `wget` are partial: a program reached another way is not stopped. A host outside the list still prompts unless `sandbox.network.strictAllowlist` is set in user or managed settings, which Firedrill does not read.
+- **Cursor**: commit `.cursor/sandbox.json` with `"networkPolicy": {"default": "deny", "allow": [...]}`. The network mode chosen in Cursor's own settings (such as Allow All) is not in the file and is not checked.
+- **VS Code**: in `.vscode/mcp.json`, run each local server with `"sandboxEnabled": true` and `"sandbox": {"network": {"allowedDomains": [...]}}`. VS Code's agent terminal settings are not read.
+- **Gemini CLI** has no setting that lists hosts, and local MCP servers under Claude Code and Cursor have none either, so those warn.
+
+`*` or `0.0.0.0/0` in an allowlist fails. The Agents page shows each config's outbound access and its hosts. Only committed settings are read: whether a sandbox actually enforces them on each machine is not checked.
 
 ## JavaScript lockfiles
 

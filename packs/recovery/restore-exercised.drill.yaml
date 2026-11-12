@@ -1,0 +1,14 @@
+firedrill: v0
+id: recovery/restore-exercised
+safeguard: "A restore of each production database has succeeded within the allowed window."
+severity: medium
+fetch:
+  dbs: { fact: recovery.databases }
+applies_when: dbs.found.exists(d, d.production)
+na_reason: "no production database was found in the connected accounts and projects"
+pass_when:
+  - dbs.found.filter(d, d.production && d.restore_known && !d.restore_current).size() == 0
+warn_when:
+  - dbs.found.exists(d, d.production && !d.restore_known)
+fix: "Restore each production database from its backups into a scratch instance, check the data, and do it again within recovery.restore_days (90 unless set). On Cloud SQL the restore or clone shows in the instance's operations; a restore the API cannot show, or one older than Cloud SQL keeps operations for, goes in .firedrill/restores.yaml with the date and the team that ran it. AWS restores are not read."
+maps_to: [SOC2:A1.3, ISO27001:A.8.13]

@@ -2,6 +2,7 @@ package gcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -64,15 +65,21 @@ func (c *Connector) collectCloudSQL(ctx context.Context, a *api, s connector.Sco
 			msg := fmt.Sprintf("could not read Cloud SQL in %s: %v", project, err)
 			attrs["error"], attrs["partial"] = msg, msg
 		default:
-			n := 0
+			var primaries []sqlInstance
 			for _, in := range insts {
 				if in.MasterInstanceName != "" || in.InstanceType == "READ_REPLICA_INSTANCE" {
 					continue // a read replica is judged through its primary
 				}
-				writeInstance(in, project, s, out)
-				n++
+				primaries = append(primaries, in)
 			}
-			attrs["inspected"] = int64(n)
+			restores, err := readRestores(ctx, a, project, primaries)
+			if err != nil {
+				return err
+			}
+			for _, in := range primaries {
+				writeInstance(in, project, s, out, restores.of(in.Name))
+			}
+			attrs["inspected"] = int64(len(primaries))
 		}
 		out.Node(graph.Node{ID: graph.ScanID(BackupScanner, project), Kind: graph.KindScan, Source: "gcp", SeenAt: s.Now, Attrs: attrs})
 	}
@@ -106,7 +113,7 @@ func listInstances(ctx context.Context, a *api, project string) ([]sqlInstance, 
 // backups in the instance's own project, so the API never shows a copy in a
 // different project: separate_copy is unknown unless backups.yaml declares one.
 // Retention is a count of daily backups, so it reads as days.
-func writeInstance(in sqlInstance, project string, s connector.Scope, out graph.Writer) {
+func writeInstance(in sqlInstance, project string, s connector.Scope, out graph.Writer, rs restoreEvidence) {
 	bc := in.Settings.BackupConfiguration
 	retention := int64(-1)
 	if rs := bc.BackupRetentionSettings; rs != nil && rs.RetainedBackups != nil && (rs.RetentionUnit == "" || rs.RetentionUnit == "COUNT") {
@@ -149,5 +156,141 @@ func writeInstance(in sqlInstance, project string, s connector.Scope, out graph.
 			"automated_backups": bc.Enabled, "retention_days": retention, "deletion_protection": in.Settings.DeletionProtectionEnabled,
 			"point_in_time_recovery": bc.PointInTimeRecoveryEnabled,
 			"separate_copy":          "unknown", "copy_detail": strings.Join(detail, "; "),
+			"last_restore": rs.at, "restore_scope": rs.scope, "restore_detail": rs.detail, "restores_readable": rs.readable,
 		}})
+}
+
+// sqlOperation is one Cloud SQL operation, as operations.list returns it.
+// https://docs.cloud.google.com/sql/docs/mysql/admin-api/rest/v1/operations
+type sqlOperation struct {
+	OperationType string `json:"operationType"`
+	Status        string `json:"status"`
+	EndTime       string `json:"endTime"`
+	TargetID      string `json:"targetId"`
+	Error         *struct {
+		Errors []json.RawMessage `json:"errors"`
+	} `json:"error"`
+}
+
+// Operation types that show a restore was exercised. RESTORE_VOLUME
+// "restores an instance backup" into the instance it runs on; the operation
+// does not say whose backup it was. CLONE runs on the instance being cloned,
+// the source, and brings its data up as a new instance. An import, an export
+// and a backup are not restores.
+const (
+	opRestore = "RESTORE_VOLUME"
+	opClone   = "CLONE"
+)
+
+// maxOpPages caps how many pages of 500 operations are read per instance.
+const maxOpPages = 10
+
+// restoreEvidence is what the operations show for one database.
+type restoreEvidence struct {
+	at       string // when the latest restore that counts for it finished, RFC 3339, or ""
+	scope    string // instance, project, or "" when none was found
+	detail   string
+	readable bool // every instance's operations in the project were read
+}
+
+// projectRestores holds what one project's operations show.
+type projectRestores struct {
+	project    string
+	clones     map[string]string // instance to its latest finished clone
+	restore    string            // latest finished backup restore anywhere in the project
+	restoredTo string            // the instance it ran on
+	unreadable []string
+	capped     []string
+}
+
+func (p projectRestores) of(instance string) restoreEvidence {
+	r := restoreEvidence{readable: len(p.unreadable) == 0}
+	var notes []string
+	clone := p.clones[instance]
+	switch {
+	case clone != "" && clone >= p.restore:
+		r.at, r.scope = clone, "instance"
+		notes = append(notes, "a clone of "+instance+" finished "+clone[:10]+"; a clone shows its data can be brought up elsewhere")
+	case p.restore != "":
+		r.at, r.scope = p.restore, "project"
+		notes = append(notes, "a backup restore into "+p.restoredTo+" finished "+p.restore[:10]+
+			"; the operation does not name the backup it came from, so it counts for every database in "+p.project)
+	}
+	if len(p.unreadable) > 0 {
+		notes = append(notes, "operations could not be read for "+strings.Join(p.unreadable, ", "))
+	}
+	if len(p.capped) > 0 {
+		notes = append(notes, fmt.Sprintf("only the latest %d operations were read for %s", maxOpPages*500, strings.Join(p.capped, ", ")))
+	}
+	r.detail = strings.Join(notes, "; ")
+	return r
+}
+
+// readRestores reads each instance's operations and keeps the latest restore
+// and clone that finished without an error. An instance whose operations
+// cannot be read is named, so nothing found there never reads as never
+// restored.
+func readRestores(ctx context.Context, a *api, project string, insts []sqlInstance) (projectRestores, error) {
+	p := projectRestores{project: project, clones: map[string]string{}}
+	for _, in := range insts {
+		ops, capped, err := listOperations(ctx, a, project, in.Name)
+		if errors.Is(err, connector.ErrBlocked) {
+			return p, err
+		}
+		if err != nil {
+			p.unreadable = append(p.unreadable, fmt.Sprintf("%s (%v)", in.Name, err))
+			continue
+		}
+		if capped {
+			p.capped = append(p.capped, in.Name)
+		}
+		for _, op := range ops {
+			if op.Status != "DONE" || op.Error != nil {
+				continue
+			}
+			end := normTime(op.EndTime)
+			if end == "" {
+				continue
+			}
+			target := op.TargetID
+			if target == "" {
+				target = in.Name
+			}
+			switch op.OperationType {
+			case opClone:
+				if end > p.clones[target] {
+					p.clones[target] = end
+				}
+			case opRestore:
+				if end > p.restore {
+					p.restore, p.restoredTo = end, target
+				}
+			}
+		}
+	}
+	return p, nil
+}
+
+func listOperations(ctx context.Context, a *api, project, instance string) ([]sqlOperation, bool, error) {
+	var out []sqlOperation
+	tok := ""
+	for page := 0; page < maxOpPages; page++ {
+		var res struct {
+			Items []sqlOperation `json:"items"`
+			Next  string         `json:"nextPageToken"`
+		}
+		u := "https://" + sqlHost + "/v1/projects/" + url.PathEscape(project) + "/operations?instance=" + url.QueryEscape(instance) + "&maxResults=500"
+		if tok != "" {
+			u += "&pageToken=" + url.QueryEscape(tok)
+		}
+		if err := a.do(ctx, http.MethodGet, u, nil, &res); err != nil {
+			return nil, false, err
+		}
+		out = append(out, res.Items...)
+		if res.Next == "" {
+			return out, false, nil
+		}
+		tok = res.Next
+	}
+	return out, true, nil
 }

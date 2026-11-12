@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sk1122/firedrill/connector"
+	"github.com/sk1122/firedrill/internal/config"
 	"github.com/sk1122/firedrill/internal/graph"
 )
 
@@ -23,7 +24,7 @@ func init() { connector.Register(New()) }
 // Collections lists what it reads.
 func (c *Connector) Collections() []connector.Collection {
 	return []connector.Collection{{Name: "config", Nodes: []string{graph.KindTargetRepo, graph.KindConfigDomain, graph.KindConfigHost,
-		graph.KindConfigSettings, graph.KindConfigApp, graph.KindConfigBackup, graph.KindConfigAIKey, graph.KindConfigOwner}}}
+		graph.KindConfigSettings, graph.KindConfigApp, graph.KindConfigBackup, graph.KindConfigRestore, graph.KindConfigAIKey, graph.KindConfigOwner}}}
 }
 
 // Available is always true.
@@ -58,13 +59,14 @@ func (c *Connector) Collect(_ context.Context, _ connector.Collection, s connect
 const SettingsID = graph.ID("config:settings")
 
 // writeRegisters writes the thresholds and the registers a team keeps: owners
-// and reviews of third-party apps, copies of databases, and owners and limits
-// of AI keys, and owners of principals no person holds.
+// and reviews of third-party apps, copies and restores of databases, and
+// owners and limits of AI keys.
 func writeRegisters(s connector.Scope, out graph.Writer) {
 	cfg := s.Project.Config
 	out.Node(graph.Node{ID: SettingsID, Kind: graph.KindConfigSettings, Source: "config", SeenAt: s.Now,
 		Attrs: map[string]any{
 			"review_days": int64(cfg.AppReviewDays()), "min_retention_days": int64(cfg.MinRetentionDays()),
+			"restore_days":       int64(cfg.RestoreDays()),
 			"production_markers": int64(len(cfg.Production)),
 		}})
 	for _, a := range s.Project.Apps {
@@ -74,6 +76,18 @@ func writeRegisters(s connector.Scope, out graph.Writer) {
 	for _, b := range s.Project.Backups {
 		out.Node(graph.Node{ID: graph.ID("config-backup:" + b.Database), Kind: graph.KindConfigBackup, Source: "config", SeenAt: s.Now,
 			Attrs: map[string]any{"database": b.Database, "copy_location": b.CopyLocation, "owner": b.Owner, "verified": b.Verified}})
+	}
+	// One node per database, its latest restore, so a newer date on an entry
+	// is a change and never reads as an entry removed.
+	latest := map[string]config.Restore{}
+	for _, r := range s.Project.Restores {
+		if prev, ok := latest[r.Database]; !ok || r.Restored > prev.Restored {
+			latest[r.Database] = r
+		}
+	}
+	for _, r := range latest {
+		out.Node(graph.Node{ID: graph.ID("config-restore:" + r.Database), Kind: graph.KindConfigRestore, Source: "config", SeenAt: s.Now,
+			Attrs: map[string]any{"database": r.Database, "restored": r.Restored, "by": r.By, "note": r.Note}})
 	}
 	for _, k := range s.Project.AIKeys {
 		ref := k.KeyID

@@ -918,3 +918,32 @@ func TestWebRefusesUnverifiedHostAndWontFollowOffDomainRedirects(t *testing.T) {
 		}
 	}
 }
+
+func TestEgressAllowlistedDrill(t *testing.T) {
+	id := "agent/egress-allowlisted"
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		// UK AISI: nothing outside the agent limited where it could reach.
+		{"no restriction", map[string]string{".claude/settings.json": `{"permissions":{"allow":["Bash(npm test)"]}}`}, tag.Fail},
+		{"wildcard allowlist", map[string]string{".claude/settings.json": `{"sandbox":{"enabled":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":["*"]}}}`}, tag.Fail},
+		{"web tools restricted only", map[string]string{".claude/settings.json": `{"permissions":{"deny":["WebFetch","Bash(curl:*)"]}}`}, tag.Warn},
+		{"sandbox allowlist", map[string]string{".claude/settings.json": `{"sandbox":{"enabled":true,"allowUnsandboxedCommands":false,
+			"network":{"allowedDomains":["github.com","*.npmjs.org"]}}}`}, tag.Pass},
+		{"cursor sandbox.json", map[string]string{".cursor/sandbox.json": `{"networkPolicy":{"default":"deny","allow":["registry.npmjs.org"]}}`, ".cursorignore": ".env\n"}, tag.Pass},
+		{"gemini has no host allowlist", map[string]string{".gemini/settings.json": `{"tools":{"sandbox":true}}`}, tag.Warn},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := runFiles(t, id, writeRepo(t, "r", c.files))
+			if o.Verdict != c.want {
+				t.Fatalf("got %s: %s", o.Verdict, o.Reason)
+			}
+		})
+	}
+	if o := runFiles(t, id, writeRepo(t, "r", map[string]string{"a": "x"})); o.Verdict != tag.NA {
+		t.Fatalf("no agent config: %s %s", o.Verdict, o.Reason)
+	}
+}

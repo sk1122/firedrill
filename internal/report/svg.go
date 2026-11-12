@@ -22,14 +22,14 @@ var zoneNames = [4]string{"Outside", "People and agents", "Credentials", "Produc
 // credential's place, so it is drawn with credentials.
 func zoneOf(n graph.Node) int {
 	switch n.Kind {
-	case graph.KindHost, graph.KindWebResponse, graph.KindSourceMap, graph.KindAPIDoc, graph.KindOAuthApp, graph.KindCNAME,
+	case graph.KindHost, graph.KindWebResponse, graph.KindSourceMap, graph.KindAPIDoc, graph.KindPageScript, graph.KindOAuthApp, graph.KindCNAME,
 		graph.KindDNSRecord, graph.KindConfigHost, graph.KindConfigDomain:
 		return 0
 	case graph.KindPerson, graph.KindLeaver, graph.KindAgentConfig, "mcp_server", graph.KindConfigOwner:
 		return 1
 	case graph.KindIdentityUser, graph.KindGitHubUser, graph.KindGitHubTeam, graph.KindGitHubApp, graph.KindDeployKey,
 		graph.KindGoogleGroup, graph.KindGCPBinding, graph.KindSecret, graph.KindSecretSeen, graph.KindAWSKey,
-		graph.KindAWSPrincipal, graph.KindGCPKey, graph.KindAIKey, "":
+		graph.KindAWSPrincipal, graph.KindGCPKey, graph.KindAIKey, graph.KindPublicSecret, "":
 		return 2
 	}
 	return 3

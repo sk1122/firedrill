@@ -78,6 +78,9 @@ func TestSafeShapesUnderExemptKeysAreUntouched(t *testing.T) {
 		"agent:acme-api/.mcp.json",
 		"scan:secrets/acme-api",
 		"host:db.acme.example",
+		"public-secret:www.acme.com/assets/app.js#0123456789abcdef0123456789abcdef",
+		"page-script:www.acme.com/@0123456789abcdef0123456789abcdef",
+		"config-restore:orders",
 	}
 	for _, key := range []string{"keys", "credentials", "id"} {
 		for _, v := range safe {

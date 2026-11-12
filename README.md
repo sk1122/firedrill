@@ -10,7 +10,7 @@
   <a href="https://github.com/sk1122/firedrill/actions/workflows/ci.yml"><img src="https://github.com/sk1122/firedrill/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-16161A" alt="License: Apache-2.0"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-16161A" alt="Go 1.27"></a>
-  <a href="https://github.com/sk1122/firedrill-drills"><img src="https://img.shields.io/badge/drill%20hub-34%20drills-D3261A" alt="Drill hub"></a>
+  <a href="https://github.com/sk1122/firedrill-drills"><img src="https://img.shields.io/badge/drill%20hub-38%20drills-D3261A" alt="Drill hub"></a>
 </p>
 
 <p align="center"><img src="docs/assets/hazard.svg" alt="" width="100%" height="12"></p>
@@ -57,7 +57,7 @@ firedrill connect github
 firedrill run
 ```
 
-If the GitHub CLI is logged in, `connect github` reuses its login. With GitHub alone, 18 of the 34 starter drills run. The rest are listed with what connects them.
+If the GitHub CLI is logged in, `connect github` reuses its login. With GitHub alone, 19 of the 38 starter drills run. The rest are listed with what connects them.
 
 No GitHub connection yet? Point it at a checkout:
 
@@ -73,18 +73,18 @@ firedrill verify change/no-solo-ship
 
 ## What it drills
 
-34 starter drills in ten packs, plus more in the [drill hub](https://github.com/sk1122/firedrill-drills):
+38 starter drills in ten packs, plus more in the [drill hub](https://github.com/sk1122/firedrill-drills):
 
 | Pack | Examples |
 | --- | --- |
 | **Change** | Nobody merges and deploys to production alone. History on main can't be rewritten. Actions are pinned to a commit. CI reaches the cloud through OIDC, never a stored key. |
 | **Access** | Every admin has MFA enforced. People who left hold nothing in Google Workspace, GCP or GitHub. Every admin is a current person or has a named owner. No admin sits unused for 90 days. No third-party app holds Gmail, Drive or admin access without an owner and a current review. |
-| **Agent** | No production credential sits in a file a coding agent can read. Destructive agent commands need approval. Every MCP server points at a known host and runs a pinned package. An agent never works through a human's token or bypass. |
+| **Agent** | No production credential sits in a file a coding agent can read. Destructive agent commands need approval. Every MCP server points at a known host and runs a pinned package. An agent never works through a human's token or bypass. Committed agent settings limit outbound access to an allowlist. |
 | **Paths** | No one person can both skip review on a repo that deploys to production and delete production data. |
 | **Supply** | Every JavaScript project commits its lockfile and CI installs from it unchanged. No dependency quietly gains an install script. |
-| **Doors** | No DNS record points at a deleted host. No API docs or source maps are public. Every host has an owner. |
+| **Doors** | No DNS record points at a deleted host. No API docs or source maps are public. Every host has an owner. No key in public JavaScript matches a live cloud key. Every script loaded from another host carries an integrity hash. |
 | **GCP** | No public buckets. Only your own domains hold Owner. No service account key is older than 90 days. |
-| **Recovery** | Every production database keeps automated backups long enough, with a copy in a different account or project. |
+| **Recovery** | Every production database keeps automated backups long enough, with a copy in a different account or project, and has been restored recently. |
 | **Keys** | Every Anthropic and OpenAI API key has an owner and sits under a hard spend limit. |
 | **Code** | Your own Semgrep rules report nothing at error level. |
 
@@ -142,7 +142,7 @@ Nothing calls GitHub, Google, AWS, Google Cloud, Anthropic or OpenAI until `fire
 
 Exit codes: `0` by default. `1` when an unwaived critical or high safeguard turned open in this run. `2` on any ERROR, which wins over 1. `--fail-on open` also exits 1 while a critical or high safeguard stays open, and `--fail-on any` while any does.
 
-`firedrill report` writes a static HTML board: every open safeguard first, then each pack with its run history. A People page shows what each person can do across GitHub, GCP and Google Workspace, by short hashed ID and never ranked; an Agents page shows what each agent config can reach; and graph pages each draw one question, such as who can reach production data alone. `access/leavers-gone-everywhere` supersedes `access/leavers-locked-out`, and `access/every-admin-is-someone` supersedes `gcp/no-editor-service-accounts`; an existing install keeps its own copies until it removes them.
+`firedrill report` writes a static HTML board: every open safeguard first, then each pack with its run history. A People page shows what each person can do across GitHub, GCP and Google Workspace, by short hashed ID and never ranked; an Agents page shows what each agent config can reach, including the outbound hosts its settings allow; and graph pages each draw one question, such as who can reach production data alone. `access/leavers-gone-everywhere` supersedes `access/leavers-locked-out`, and `access/every-admin-is-someone` supersedes `gcp/no-editor-service-accounts`; an existing install keeps its own copies until it removes them.
 
 Each run also compares itself with the previous run and stores the result in `diffs/` next to its snapshot. `firedrill run` ends with a count of what changed; `firedrill diff` shows each change, weakenings first, and the board has a Changes page. Only settings are compared, never timestamps, and a system not read in both runs is left out and named, so an outage never reads as everything removed.
 

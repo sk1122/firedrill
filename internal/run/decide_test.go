@@ -81,7 +81,7 @@ func agentConfig(g *graph.Graph, unguarded []any, creds ...string) {
 	}
 	node(g, "agent:claude/acme/api", graph.KindAgentConfig, map[string]any{"repo": "acme/api", "tool": "claude-code", "scope": "repo",
 		"file": ".mcp.json", "allowed_commands": []any{}, "denied_commands": []any{}, "deny_read_paths": []any{},
-		"unguarded_destructive": unguarded, "mcp_servers": servers})
+		"unguarded_destructive": unguarded, "mcp_servers": servers, "egress": "open", "egress_hosts": []any{}, "egress_unbounded": false})
 }
 
 // stdioServer is an MCP server row for a local command, with every field.
@@ -104,7 +104,8 @@ func mcpConfig(g *graph.Graph, servers ...map[string]any) {
 	}
 	node(g, "agent:acme/api/.mcp.json", graph.KindAgentConfig, map[string]any{"repo": "acme/api", "tool": "claude-code", "scope": "repo",
 		"file": ".mcp.json", "allowed_commands": []any{}, "denied_commands": []any{}, "deny_read_paths": []any{},
-		"unguarded_destructive": []any{}, "mcp_servers": list, "gitignored": false, "local_override": false})
+		"unguarded_destructive": []any{}, "mcp_servers": list, "gitignored": false, "local_override": false,
+		"egress": "open", "egress_hosts": []any{}, "egress_unbounded": false})
 }
 
 func workflow(g *graph.Graph, perms string, triggers, secrets []any) {
@@ -146,7 +147,8 @@ func agentFile(g *graph.Graph, file string, local, gitignored bool) {
 	}
 	node(g, "agent:acme/api/"+file, graph.KindAgentConfig, map[string]any{"repo": "acme/api", "tool": tool, "scope": "repo",
 		"file": file, "allowed_commands": []any{}, "denied_commands": []any{}, "deny_read_paths": []any{},
-		"unguarded_destructive": []any{}, "mcp_servers": []any{}, "gitignored": gitignored, "local_override": local})
+		"unguarded_destructive": []any{}, "mcp_servers": []any{}, "gitignored": gitignored, "local_override": local,
+		"egress": "open", "egress_hosts": []any{}, "egress_unbounded": false})
 }
 
 func user(g *graph.Graph, email string, admin, suspended, enforced bool, login string) {
@@ -189,7 +191,7 @@ func gcpKey(g *graph.Graph, id, created, lastUsed string, known bool) {
 // listed under production.
 func settings(g *graph.Graph, production int64) {
 	node(g, "config:settings", graph.KindConfigSettings, map[string]any{
-		"review_days": int64(180), "min_retention_days": int64(7), "production_markers": production})
+		"review_days": int64(180), "min_retention_days": int64(7), "restore_days": int64(90), "production_markers": production})
 }
 
 // oauthApp is a third-party app users granted access, high risk when it holds
@@ -256,7 +258,7 @@ var allConnectors = map[string]bool{"github": true, "google": true, "aws": true,
 // drillCases are a passing, a failing and a not-applicable setup for every
 // starter drill. They also generate the drills' fixture files.
 func drillCases() []drillCase {
-	return append(baseCases(), tier2Cases()...)
+	return append(append(baseCases(), tier2Cases()...), tier3Cases()...)
 }
 
 func baseCases() []drillCase {
@@ -784,8 +786,8 @@ func TestEveryDrillGoesGreenRedAndNA(t *testing.T) {
 		}
 		covered[c.id][c.verdictWant] = true
 	}
-	if len(covered) != 34 {
-		t.Errorf("covered %d drills, want 34", len(covered))
+	if len(covered) != 38 {
+		t.Errorf("covered %d drills, want 38", len(covered))
 	}
 	for id, v := range covered {
 		if !v[tag.Pass] || !v[tag.Fail] || !v[tag.NA] {

@@ -449,6 +449,7 @@ func registerFiles() {
 		Shape: foundShape(map[string]*Shape{
 			"tool": Str, "scope": Str, "file": Str, "allowed_commands": List(Str), "denied_commands": List(Str),
 			"deny_read_paths": List(Str), "unguarded_destructive": List(Str), "gitignored": Bool, "local_override": Bool,
+			"egress": Str, "egress_hosts": List(Str), "egress_unbounded": Bool,
 			"mcp_servers": List(Obj(map[string]*Shape{
 				"name": Str, "credentials": List(Str), "transport": Str, "host": Str, "host_known": Bool,
 				"command": Str, "package": Str, "version": Str, "pinned": Bool, "package_known": Bool,
@@ -457,7 +458,7 @@ func registerFiles() {
 		Fn: func(g graph.Reader, a Args) (Result, error) {
 			r, data := repoScan(g, a, "agent_configs", graph.KindAgentConfig,
 				"tool", "scope", "file", "allowed_commands", "denied_commands", "deny_read_paths",
-				"unguarded_destructive", "mcp_servers", "gitignored", "local_override")
+				"unguarded_destructive", "mcp_servers", "gitignored", "local_override", "egress", "egress_hosts", "egress_unbounded")
 			data["shared_credentials"] = sharedCredentials(data["found"].([]any))
 			return r, nil
 		},
@@ -608,6 +609,18 @@ func registerDoors() {
 	Register(Def{Name: "web.source_maps", Connector: "web", Scanning: true, Args: []string{"domain"},
 		Shape: foundShape(map[string]*Shape{"host": Str, "bundle": Str, "map_url": Str}, nil),
 		Fn:    domainScan("web_source_maps", graph.KindSourceMap, "api", "host", "bundle", "map_url")})
+	Register(Def{Name: "web.public_secrets", Connector: "web", Scanning: true, Args: []string{"domain"},
+		Shape: foundShape(map[string]*Shape{
+			"host": Str, "path": Str, "kind": Str, "hash": Str, "key_id": Str, "client_side": Bool, "live": Str,
+		}, nil),
+		Fn: publicSecrets})
+	Register(Def{Name: "web.page_scripts", Connector: "web", Scanning: true, Args: []string{"domain"},
+		Shape: foundShape(map[string]*Shape{
+			"host": Str, "page": Str, "script_host": Str, "script_path": Str, "script_hash": Str,
+			"has_integrity": Bool, "crossorigin": Bool, "owned": Bool,
+		}, nil),
+		Fn: domainScan("web_page_scripts", graph.KindPageScript, "api",
+			"host", "page", "script_host", "script_path", "script_hash", "has_integrity", "crossorigin", "owned")})
 	Register(Def{Name: "web.api_docs", Connector: "web", Scanning: true, Args: []string{"domain"},
 		Shape: foundShape(map[string]*Shape{"host": Str, "path": Str, "status": Int}, nil),
 		Fn:    domainScan("web_api_docs", graph.KindAPIDoc, "api", "host", "path", "status")})
@@ -631,6 +644,46 @@ func registerDoors() {
 			}
 			return Result{Read: []graph.ID{n.ID}, Source: "api", Data: attrsOf(n, "status", "headers", "head", "tail")}, nil
 		}})
+}
+
+// publicSecrets lists the credentials found in a domain's public bundles and
+// source maps, each with whether its key is live. The join is made here, from
+// whatever the graph holds when the drill runs, so it does not matter which
+// connector ran first. Key IDs are matched against the Google Cloud service
+// account keys the GCP connector read, which only a service account key's
+// private_key_id can equal: a match is live when that key is not disabled,
+// and not live when it is. A key the inventory does not hold,
+// including a deleted one, which the keys list no longer shows, is unknown,
+// and so is every secret with no readable ID. AWS access key IDs are not
+// matched.
+func publicSecrets(g graph.Reader, a Args) (Result, error) {
+	r, err := domainScan("web_public_secrets", graph.KindPublicSecret, "api",
+		"host", "path", "kind", "hash", "key_id", "client_side")(g, a)
+	if err != nil {
+		return r, err
+	}
+	keys := map[string]graph.Node{}
+	for _, n := range g.Nodes(graph.KindGCPKey) {
+		if id := strAttr(n, "key_id"); id != "" {
+			keys[id] = n
+		}
+	}
+	data := r.Data.(map[string]any)
+	for _, row := range data["found"].([]any) {
+		m := row.(map[string]any)
+		live := "unknown"
+		if id, _ := m["key_id"].(string); id != "" {
+			if k, ok := keys[id]; ok {
+				live = "yes"
+				if isTrue(k.Attrs["disabled"]) {
+					live = "no"
+				}
+				r.Read = append(r.Read, k.ID)
+			}
+		}
+		m["live"] = live
+	}
+	return r, nil
 }
 
 // settingsInt reads one threshold from the config settings node, or its
@@ -719,8 +772,9 @@ var backupShape = Obj(map[string]*Shape{
 		"system": Str, "account": Str, "project": Str, "region": Str, "name": Str, "engine": Str,
 		"production": Bool, "production_basis": Str, "automated_backups": Bool, "retention_days": Int, "retention_ok": Bool,
 		"deletion_protection": Bool, "separate_copy": Str, "copy_detail": Str,
+		"last_restore_days": Int, "restore_source": Str, "restore_current": Bool, "restore_known": Bool, "restore_detail": Str,
 	})),
-	"systems": List(Str), "min_retention_days": Int,
+	"systems": List(Str), "min_retention_days": Int, "restore_days": Int,
 })
 
 // backupScanners are the scan records the aws and gcp connectors write for
@@ -743,6 +797,13 @@ func registerBackups() {
 // production, or it is tagged so; when nothing anywhere is named or tagged,
 // every database is judged and production_basis says so. A copy declared in
 // backups.yaml counts where the API shows none.
+//
+// Each row also says when the database was last restored: from the Cloud SQL
+// operations the gcp connector read, or a restore declared in restores.yaml,
+// whichever is later. restore_known is false when no restore was found and
+// the operations could not all be read, so nothing found never reads as never
+// restored. AWS restores are not read, so an AWS row has only what
+// restores.yaml declares.
 func backupRows(g graph.Reader, a Args, fact string, systems ...string) (Result, error) {
 	r := Result{Source: "api"}
 	read := []any{}
@@ -774,6 +835,14 @@ func backupRows(g graph.Reader, a Args, fact string, systems ...string) (Result,
 	declared := map[string]graph.Node{}
 	for _, n := range g.Nodes(graph.KindConfigBackup) {
 		declared[strAttr(n, "database")] = n
+	}
+	restoreDays := settingsInt(g, "restore_days", 90)
+	restores := map[string]graph.Node{}
+	for _, n := range g.Nodes(graph.KindConfigRestore) {
+		db := strAttr(n, "database")
+		if prev, ok := restores[db]; !ok || strAttr(n, "restored") > strAttr(prev, "restored") {
+			restores[db] = n
+		}
 	}
 	var dbs []graph.Node
 	anyProduction := settingsInt(g, "production_markers", 0) > 0
@@ -814,11 +883,42 @@ func backupRows(g graph.Reader, a Args, fact string, systems ...string) (Result,
 				", verified "+strAttr(reg, "verified"), "; ")
 			r.Read = append(r.Read, reg.ID)
 		}
+		decl, ok := restores[strAttr(n, "name")]
+		if !ok {
+			decl, ok = restores[string(n.ID)]
+		}
+		if ok {
+			r.Read = append(r.Read, decl.ID)
+		}
+		restoreFields(row, n, decl, ok, restoreDays, a.Now)
 		rows = append(rows, row)
 		r.Read = append(r.Read, n.ID)
 	}
-	r.Data = map[string]any{"found": rows, "systems": read, "min_retention_days": minDays}
+	r.Data = map[string]any{"found": rows, "systems": read, "min_retention_days": minDays, "restore_days": restoreDays}
 	return r, nil
+}
+
+// restoreFields fills in a database row's last restore: the later of what the
+// API showed and what restores.yaml declares.
+func restoreFields(row map[string]any, db, decl graph.Node, declared bool, window int64, now time.Time) {
+	days, source, detail := int64(-1), "none", strAttr(db, "restore_detail")
+	if strAttr(db, "system") == "aws" {
+		detail = "AWS restores are not read (out of scope for now); a restore can be declared in restores.yaml"
+	}
+	if at := strAttr(db, "last_restore"); at != "" {
+		days, source = daysSince(at, now), "api"
+	}
+	if declared {
+		if d := daysSinceDate(strAttr(decl, "restored"), now); d >= 0 && (days < 0 || d < days) {
+			days, source = d, "declared"
+			detail = strings.TrimPrefix(detail+"; declared restore on "+strAttr(decl, "restored")+" by "+strAttr(decl, "by"), "; ")
+		}
+	}
+	row["last_restore_days"] = days
+	row["restore_source"] = source
+	row["restore_current"] = days >= 0 && days <= window
+	row["restore_known"] = days >= 0 || isTrue(db.Attrs["restores_readable"])
+	row["restore_detail"] = detail
 }
 
 func isTrue(v any) bool {

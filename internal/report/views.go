@@ -80,6 +80,11 @@ type AgentRow struct {
 	Unguarded                       []string
 	Bypass                          string
 	GraphHref                       string
+	// Egress is how far committed settings limit outbound access, with the
+	// hosts allowed.
+	Egress      string
+	EgressHosts []string
+	Unbounded   bool
 }
 
 // ServerRow is one MCP server in an agent config.
@@ -305,7 +310,11 @@ func (c *viewCtx) agents_() {
 		repo, _ := n.Attrs["repo"].(string)
 		anchor := "agent-" + tag.Slug(string(n.ID))
 		row := AgentRow{Anchor: anchor, Tool: str(n, "tool"), Repo: repo, File: str(n, "file"), Scope: str(n, "scope"),
-			Unguarded: strs(n.Attrs["unguarded_destructive"])}
+			Unguarded: strs(n.Attrs["unguarded_destructive"]), Egress: str(n, "egress"), EgressHosts: strs(n.Attrs["egress_hosts"])}
+		row.Unbounded, _ = n.Attrs["egress_unbounded"].(bool)
+		if row.Egress == "" {
+			row.Egress = "not read"
+		}
 		servers, _ := n.Attrs["mcp_servers"].([]any)
 		for _, s := range servers {
 			m, _ := s.(map[string]any)

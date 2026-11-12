@@ -1,0 +1,69 @@
+firedrill: v0
+drill: doors/third-party-scripts-pinned
+cases:
+    - name: CDN script with no integrity hash
+      expect: FAIL
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        scripts:
+            found:
+                - crossorigin: false
+                  has_integrity: false
+                  host: www.acme.com
+                  owned: false
+                  page: /
+                  script_hash: 7c2e4a6b8d0f1a3c5e7b9d1f3a5c7e9b
+                  script_host: cdn.adtech.example
+                  script_path: /tag/v3/loader.js
+            inspected: 2
+      inspected:
+        scripts: 2
+    - name: integrity hash present
+      expect: PASS
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        scripts:
+            found:
+                - crossorigin: true
+                  has_integrity: true
+                  host: www.acme.com
+                  owned: false
+                  page: /
+                  script_hash: 7c2e4a6b8d0f1a3c5e7b9d1f3a5c7e9b
+                  script_host: cdn.jsdelivr.net
+                  script_path: /npm/acme-widgets@2.1.0/dist/widgets.min.js
+            inspected: 2
+      inspected:
+        scripts: 2
+    - name: owned CDN host
+      expect: PASS
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        scripts:
+            found:
+                - crossorigin: false
+                  has_integrity: false
+                  host: www.acme.com
+                  owned: true
+                  page: /
+                  script_hash: 1b3d5f7a9c2e4a6c8e0b2d4f6a8c0e2d
+                  script_host: static.acme.com
+                  script_path: /js/app.js
+            inspected: 2
+      inspected:
+        scripts: 2
+    - name: no page read
+      expect: N/A
+      target:
+        domain: acme.com
+        verified: true
+      facts:
+        scripts:
+            found: []
+            inspected: 0

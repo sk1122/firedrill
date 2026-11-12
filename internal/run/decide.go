@@ -428,6 +428,13 @@ func describeRow(row map[string]any, n int) string {
 		}
 		return fmt.Sprintf("%s, first in %s", count, f)
 	}
+	if sh, _ := row["script_host"].(string); sh != "" {
+		return fmt.Sprintf("%s, first: script from %s on %s%s", count, sh, row["host"], row["page"])
+	}
+	if k, _ := row["kind"].(string); k != "" && row["client_side"] != nil {
+		// A credential in a public body, named by kind and place, never value.
+		return fmt.Sprintf("%s, first: %s in %s%s", count, strings.ReplaceAll(k, "_", " "), row["host"], row["path"])
+	}
 	if h, _ := row["host"].(string); h != "" {
 		return fmt.Sprintf("%s, first on %s", count, h)
 	}

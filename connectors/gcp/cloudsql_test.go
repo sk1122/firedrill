@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
@@ -38,6 +39,22 @@ func (f *sqlFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"items":[
 			{"name":"orders-replica","region":"europe-west1","databaseVersion":"POSTGRES_16","instanceType":"READ_REPLICA_INSTANCE","masterInstanceName":"acme-prod:orders","settings":{}},
 			{"name":"scratch","region":"europe-west1","databaseVersion":"MYSQL_8_0","settings":{"backupConfiguration":{"enabled":false}}}]}`)
+	case host == sqlHost && r.Method == http.MethodGet && r.URL.Path == "/v1/projects/acme-prod/operations":
+		switch r.URL.Query().Get("instance") {
+		case "orders":
+			if r.URL.Query().Get("pageToken") == "" {
+				// An import is not a restore, and a restore that failed is not one either.
+				_, _ = io.WriteString(w, `{"items":[
+					{"operationType":"IMPORT","status":"DONE","endTime":"2026-11-01T10:00:00Z","targetId":"orders"},
+					{"operationType":"RESTORE_VOLUME","status":"DONE","endTime":"2026-11-02T10:00:00Z","targetId":"orders","error":{"errors":[{"code":"X","message":"m"}]}},
+					{"operationType":"RESTORE_VOLUME","status":"RUNNING","targetId":"orders"}],"nextPageToken":"o2"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"items":[{"operationType":"CLONE","status":"DONE","endTime":"2026-10-18T09:30:00.120Z","targetId":"orders"}]}`)
+		default:
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"error":{"code":403,"message":"denied","status":"PERMISSION_DENIED"}}`)
+		}
 	case host == sqlHost && r.URL.Path == "/v1/projects/acme-dev/instances":
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = io.WriteString(w, `{"error":{"code":403,"message":"Cloud SQL Admin API has not been used","status":"PERMISSION_DENIED","details":[{"reason":"SERVICE_DISABLED"}]}}`)
@@ -89,6 +106,15 @@ func TestCollectCloudSQL(t *testing.T) {
 	if scratch.Attrs["automated_backups"] != false || scratch.Attrs["retention_days"] != int64(0) {
 		t.Fatalf("%+v", scratch.Attrs)
 	}
+	if orders.Attrs["last_restore"] != "2026-10-18T09:30:00Z" || orders.Attrs["restore_scope"] != "instance" || orders.Attrs["restores_readable"] != false {
+		t.Fatalf("a finished clone counts for its source; another instance's operations were unreadable: %+v", orders.Attrs)
+	}
+	if d := orders.Attrs["restore_detail"].(string); !strings.Contains(d, "clone of orders") || !strings.Contains(d, "could not be read for scratch") {
+		t.Fatal(d)
+	}
+	if scratch.Attrs["last_restore"] != "" || scratch.Attrs["restore_scope"] != "" || scratch.Attrs["restores_readable"] != false {
+		t.Fatalf("nothing read is not never restored: %+v", scratch.Attrs)
+	}
 	prod, _ := g.Get(graph.ScanID(BackupScanner, "acme-prod"))
 	if prod.Attrs["inspected"] != int64(2) || prod.Attrs["partial"] != nil {
 		t.Fatalf("%+v", prod.Attrs)
@@ -114,5 +140,66 @@ func TestCloudSQLWritesAreRefused(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, "https://"+sqlHost+"/v1/projects/acme-prod/instances/orders/export", nil)
 	if _, err := tr.RoundTrip(req); !errors.Is(err, connector.ErrBlocked) {
 		t.Fatal("an export is a POST and is refused")
+	}
+}
+
+func TestCloudSQLRestoreIntoAnotherInstanceCountsForTheProject(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Header.Get("X-Original-Host")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case host == "oauth2.googleapis.com":
+			_, _ = io.WriteString(w, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)
+		case r.Method != http.MethodGet:
+			t.Errorf("only GET: %s %s", r.Method, r.URL.Path)
+		case r.URL.Path == "/v1/projects/acme-prod/instances":
+			_, _ = io.WriteString(w, `{"items":[{"name":"orders","settings":{"backupConfiguration":{"enabled":true}}},{"name":"restore-drill","settings":{}}]}`)
+		case r.URL.Path == "/v1/projects/acme-prod/operations" && r.URL.Query().Get("instance") == "restore-drill":
+			_, _ = io.WriteString(w, `{"items":[{"operationType":"RESTORE_VOLUME","status":"DONE","endTime":"2026-10-23T08:00:00Z","targetId":"restore-drill"}]}`)
+		case r.URL.Path == "/v1/projects/acme-prod/operations":
+			_, _ = io.WriteString(w, `{"kind":"sql#operationsList"}`)
+		default:
+			t.Errorf("unexpected %s", r.URL.Path)
+		}
+	})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	c := newConn(srv)
+	s := scope("acme-prod")
+	g := graph.New()
+	if err := c.Collect(context.Background(), sqlCollection(c), s, g); err != nil {
+		t.Fatal(err)
+	}
+	orders, _ := g.Get("gcp:db/acme-prod/orders")
+	if orders.Attrs["last_restore"] != "2026-10-23T08:00:00Z" || orders.Attrs["restore_scope"] != "project" || orders.Attrs["restores_readable"] != true {
+		t.Fatalf("a restore into a scratch instance counts for the project, at lower confidence: %+v", orders.Attrs)
+	}
+	if d := orders.Attrs["restore_detail"].(string); !strings.Contains(d, "restore-drill") || !strings.Contains(d, "does not name the backup") {
+		t.Fatal(d)
+	}
+	for _, call := range s.Log.Calls() {
+		if call.Method != http.MethodGet && call.Endpoint != tokenURL {
+			t.Fatalf("Cloud SQL is read with GET only: %+v", call)
+		}
+	}
+}
+
+func TestCloudSQLOperationsWritesAreRefused(t *testing.T) {
+	// The restore read adds no host: the policy's hosts are the ones it had.
+	hosts := []string{}
+	for h := range Policy([]string{"acme-prod"}, "").Hosts {
+		hosts = append(hosts, h)
+	}
+	sort.Strings(hosts)
+	if strings.Join(hosts, " ") != "cloudresourcemanager.googleapis.com iam.googleapis.com policyanalyzer.googleapis.com sqladmin.googleapis.com storage.googleapis.com" {
+		t.Fatalf("hosts: %v", hosts)
+	}
+	tr := &connector.Transport{Policy: Policy([]string{"acme-prod"}, ""), Log: &connector.CallLog{}, Connector: "gcp"}
+	for _, u := range []string{"/v1/projects/acme-prod/operations/op-1/cancel", "/v1/projects/acme-prod/instances/orders/restoreBackup",
+		"/v1/projects/acme-prod/instances/orders/clone"} {
+		req, _ := http.NewRequest(http.MethodPost, "https://"+sqlHost+u, nil)
+		if _, err := tr.RoundTrip(req); !errors.Is(err, connector.ErrBlocked) {
+			t.Errorf("POST %s must be refused: %v", u, err)
+		}
 	}
 }

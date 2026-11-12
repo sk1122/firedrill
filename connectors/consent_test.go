@@ -211,6 +211,10 @@ func TestAmbientCredentialsAreNotConsent(t *testing.T) {
 		if strings.Contains(p, "/groups") || strings.Contains(p, "/roles/") {
 			t.Errorf("a linking call left before connect: %s", p)
 		}
+		// Nor Cloud SQL operations, read for restores.
+		if strings.Contains(p, "/operations") {
+			t.Errorf("a restore read left before connect: %s", p)
+		}
 	}
 
 	// What connect records after a successful access check.

@@ -31,6 +31,9 @@ type AgentConfig struct {
 	DenyRead    []string
 	DefaultMode string
 	Servers     []MCPServer
+	// Net is what the file says about outbound network access, for a Claude
+	// Code settings file or Cursor's sandbox.json; nil otherwise.
+	Net *NetSettings
 }
 
 // MCPServer is one MCP server and the raw values passed to it. Values are held
@@ -44,6 +47,10 @@ type MCPServer struct {
 	Package   string // the package or image the command fetches, if any
 	Version   string // its exact version or digest, if given
 	Pinned    bool   // no package, or an exact version or digest
+	// Sandboxed is a VS Code stdio server run with sandboxEnabled, which
+	// reaches only SandboxHosts, its sandbox.network.allowedDomains.
+	Sandboxed    bool
+	SandboxHosts []string
 }
 
 // ParseAgentFile reads one agent config by its path.
@@ -66,6 +73,14 @@ func ParseAgentFile(rel string, data []byte, scope string) (*AgentConfig, error)
 			return parseMCP(rel, stripComments(data), scope, "gemini")
 		}
 		return parseClaudeSettings(rel, data, scope)
+	case "sandbox.json":
+		if strings.HasPrefix(rel, ".cursor/") {
+			c, err := parseCursorSandbox(rel, data, scope)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", rel, err)
+			}
+			return c, nil
+		}
 	case "mcp.json", ".mcp.json":
 		tool := "claude-code"
 		if strings.Contains(rel, ".cursor/") {
@@ -83,13 +98,15 @@ func parseClaudeSettings(rel string, data []byte, scope string) (*AgentConfig, e
 		Permissions struct {
 			Allow       []string `json:"allow"`
 			Deny        []string `json:"deny"`
+			Ask         []string `json:"ask"`
 			DefaultMode string   `json:"defaultMode"`
 		} `json:"permissions"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", rel, err)
 	}
-	c := &AgentConfig{Tool: "claude-code", Scope: scope, File: rel, DefaultMode: doc.Permissions.DefaultMode}
+	c := &AgentConfig{Tool: "claude-code", Scope: scope, File: rel, DefaultMode: doc.Permissions.DefaultMode,
+		Net: parseClaudeNet(data, doc.Permissions.Allow, doc.Permissions.Deny, doc.Permissions.Ask)}
 	for _, a := range doc.Permissions.Allow {
 		if tool, arg := splitRule(a); tool == "Bash" || tool == "*" {
 			c.Allowed = append(c.Allowed, arg)
@@ -156,6 +173,12 @@ func parseMCP(rel string, data []byte, scope, tool string) (*AgentConfig, error)
 		}
 		s.Values = append(s.Values, e.Args...)
 		describe(&s, e)
+		if tool == "vscode" && s.Transport == "stdio" && e.SandboxEnabled {
+			s.Sandboxed = true
+			if e.Sandbox != nil {
+				s.SandboxHosts = e.Sandbox.Network.AllowedDomains
+			}
+		}
 		c.Servers = append(c.Servers, s)
 	}
 	return c, nil
@@ -203,6 +226,15 @@ type mcpEntry struct {
 	URL       string            `json:"url"`
 	HTTPURL   string            `json:"httpUrl"`
 	ServerURL string            `json:"serverUrl"`
+	// VS Code only: run a stdio server in a sandbox that reaches only its
+	// allowed domains.
+	// https://code.visualstudio.com/docs/copilot/reference/mcp-configuration
+	SandboxEnabled bool `json:"sandboxEnabled"`
+	Sandbox        *struct {
+		Network struct {
+			AllowedDomains []string `json:"allowedDomains"`
+		} `json:"network"`
+	} `json:"sandbox"`
 }
 
 var varRef = regexp.MustCompile(`\$\{(?:env:)?([A-Za-z_][A-Za-z0-9_]*)\}|^\$([A-Za-z_][A-Za-z0-9_]*)$`)

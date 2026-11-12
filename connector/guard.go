@@ -258,3 +258,24 @@ func UnderDomain(host, domain string) bool {
 	host, domain = strings.ToLower(host), strings.ToLower(domain)
 	return host == domain || strings.HasSuffix(host, "."+domain)
 }
+
+// HostOwned says whether a host is the company's own: under a verified domain
+// or a host in hosts.yaml, or under one of the extra hosts or domains given.
+// An empty host is not owned.
+func HostOwned(host string, s Scope, extra ...string) bool {
+	if host == "" {
+		return false
+	}
+	known := append(append([]string{}, s.VerifiedDomains...), extra...)
+	if s.Project != nil {
+		for _, h := range s.Project.Hosts {
+			known = append(known, h.Host)
+		}
+	}
+	for _, k := range known {
+		if k = strings.TrimSpace(k); k != "" && UnderDomain(host, k) {
+			return true
+		}
+	}
+	return false
+}

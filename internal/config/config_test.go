@@ -102,6 +102,7 @@ func TestRegistersAndThresholds(t *testing.T) {
 	write(dir, "apps.yaml", "- {client_id: 1234-acme.apps.googleusercontent.com, name: Acme Notes, owner: \"@it\", reviewed: 2026-10-01}\n")
 	write(dir, "backups.yaml", "- {database: orders, copy_location: vault in 444455556666, owner: \"@platform\", verified: 2026-11-01}\n")
 	write(dir, "ai-keys.yaml", "- {provider: anthropic, workspace: wrkspc_01AcmeProd, owner: \"@ml\", monthly_limit_usd: 500, verified: 2026-11-01}\n")
+	write(dir, "restores.yaml", "- {database: orders, restored: 2026-10-20, by: platform-team, note: restored into a scratch instance and row counts checked}\n")
 	p, err := Load(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +110,10 @@ func TestRegistersAndThresholds(t *testing.T) {
 	if len(p.Apps) != 1 || len(p.Backups) != 1 || len(p.AIKeys) != 1 || *p.AIKeys[0].MonthlyLimitUSD != 500 {
 		t.Fatalf("%+v", p)
 	}
-	if p.Config.AppReviewDays() != DefaultAppReviewDays || p.Config.MinRetentionDays() != DefaultMinRetentionDays {
+	if len(p.Restores) != 1 || p.Restores[0].By != "platform-team" {
+		t.Fatalf("%+v", p.Restores)
+	}
+	if p.Config.AppReviewDays() != DefaultAppReviewDays || p.Config.MinRetentionDays() != DefaultMinRetentionDays || p.Config.RestoreDays() != 90 {
 		t.Fatal("defaults")
 	}
 	if !p.Config.IsProduction("acme-staging", "111122223333") || p.Config.IsProduction("acme-staging", "") {
@@ -127,6 +131,11 @@ func TestRegistersAndThresholds(t *testing.T) {
 		{"ai-keys.yaml", "- {provider: openai, project: proj_x}\n"},
 		{"ai-keys.yaml", "- {provider: openai, project: proj_x, verified: 2026-11-01, monthly_limit_usd: -1}\n"},
 		{"config.yaml", "recovery: {min_retention_days: -1}\n"},
+		{"config.yaml", "recovery: {restore_days: -1}\n"},
+		{"restores.yaml", "- {database: orders, by: platform-team}\n"},
+		{"restores.yaml", "- {database: orders, restored: last month, by: platform-team}\n"},
+		{"restores.yaml", "- {database: orders, restored: 2026-10-20}\n"},
+		{"restores.yaml", "- {database: orders, restored: 2026-10-20, by: ravi@acme.example}\n"},
 	}
 	for _, b := range bad {
 		d := t.TempDir()

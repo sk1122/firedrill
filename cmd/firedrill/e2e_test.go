@@ -96,7 +96,7 @@ func TestFromCleanMachineToFirstFailThenFixedMeansFixed(t *testing.T) {
 	e := newEnv(t)
 	start := time.Now()
 	out := e.mustRun("init", "--yes", "--owner", "@arjun")
-	if !strings.Contains(out, "34 starter drills") || !strings.Contains(out, "salt") {
+	if !strings.Contains(out, "38 starter drills") || !strings.Contains(out, "salt") {
 		t.Fatalf("init: %s", out)
 	}
 	if info, err := os.Stat(filepath.Join(e.home, ".config/firedrill/salt")); err != nil || info.Mode().Perm() != 0o600 {
@@ -497,13 +497,13 @@ func TestHubInstallUpdateAndRefusals(t *testing.T) {
 	e.vars = append(e.vars, "FIREDRILL_SALT="+strings.Repeat("a", 64))
 	h := e.hubCopy()
 	e.mustRun("init", "--yes", "--owner", "@me")
-	if out := e.mustRun("hub", "--from", h, "index", h, "--out", filepath.Join(e.work, "index.json")); !strings.Contains(out, "34 drills, 154 test cases, 0 with problems") {
+	if out := e.mustRun("hub", "--from", h, "index", h, "--out", filepath.Join(e.work, "index.json")); !strings.Contains(out, "38 drills, 175 test cases, 0 with problems") {
 		t.Fatal(out)
 	}
 	if out := e.mustRun("test", filepath.Join(h, "drills")); !strings.Contains(out, "0 failing, 0 drills with problems") {
 		t.Fatal(out)
 	}
-	if out := e.mustRun("hub", "--from", h, "update", "--yes"); !strings.Contains(out, "0 replaced, 0 added, 34 current") {
+	if out := e.mustRun("hub", "--from", h, "update", "--yes"); !strings.Contains(out, "0 replaced, 0 added, 38 current") {
 		t.Fatalf("starters from init are recorded as current:\n%s", out)
 	}
 	local := filepath.Join(e.work, ".firedrill", "drills")
@@ -512,7 +512,7 @@ func TestHubInstallUpdateAndRefusals(t *testing.T) {
 	editFile(t, filepath.Join(local, "change", "no-solo-ship.drill.yaml"), "severity: critical", "severity: medium")
 	out := e.mustRun("hub", "--from", h, "update", "--yes")
 	if !strings.Contains(out, "- severity: medium\n+ severity: high") || !strings.Contains(out, "no-solo-ship: you edited it") ||
-		!strings.Contains(out, "1 replaced, 0 added, 32 current, 1 left alone") {
+		!strings.Contains(out, "1 replaced, 0 added, 36 current, 1 left alone") {
 		t.Fatalf("a hub change is shown and applied; an edited drill is left alone:\n%s", out)
 	}
 	if b, _ := os.ReadFile(filepath.Join(local, "change", "no-solo-ship.drill.yaml")); !strings.Contains(string(b), "severity: medium") {

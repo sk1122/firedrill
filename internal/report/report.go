@@ -231,7 +231,7 @@ var coverageKinds = map[string]bool{
 	graph.KindIdentityUser: true, graph.KindAWSPrincipal: true, graph.KindAgentConfig: true, graph.KindWorkflow: true,
 	graph.KindTFBucket: true, graph.KindManifest: true, graph.KindOAuthApp: true, graph.KindDatabase: true, graph.KindAIKey: true,
 	graph.KindGitHubUser: true, graph.KindGitHubTeam: true, graph.KindGitHubApp: true, graph.KindDeployKey: true,
-	graph.KindGCPBinding: true, graph.KindGoogleGroup: true,
+	graph.KindGCPBinding: true, graph.KindGoogleGroup: true, graph.KindPublicSecret: true, graph.KindPageScript: true,
 }
 
 // Build assembles the board from tags and the estate. Shadow is judged at each
@@ -523,6 +523,15 @@ func displayName(it *graph.EstateItem) string {
 		who, _ := it.Attrs["member_type"].(string)
 		h := id[strings.LastIndex(id, "/")+1:]
 		return fmt.Sprintf("%s for a %s (%s) in %s", role, strings.ReplaceAll(who, "_", " "), h[:min(8, len(h))], project)
+	}
+	attr := func(k string) string { s, _ := it.Attrs[k].(string); return s }
+	switch it.Kind {
+	case graph.KindPublicSecret:
+		// By kind and fingerprint, never by value.
+		h := attr("hash")
+		return fmt.Sprintf("%s %s in %s%s", strings.ReplaceAll(attr("kind"), "_", " "), h[:min(8, len(h))], attr("host"), attr("path"))
+	case graph.KindPageScript:
+		return fmt.Sprintf("script from %s on %s%s", attr("script_host"), attr("host"), attr("page"))
 	}
 	if it.Kind == graph.KindGitHubTeam {
 		if s, ok := it.Attrs["slug"].(string); ok && s != "" {

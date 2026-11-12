@@ -1,0 +1,116 @@
+firedrill: v0
+drill: agent/egress-allowlisted
+cases:
+    - name: no restriction
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  egress: open
+                  egress_hosts: []
+                  egress_unbounded: false
+                  file: .claude/settings.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        agents: 1
+    - name: wildcard allowlist
+      expect: FAIL
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  egress: allowlist
+                  egress_hosts:
+                    - '*'
+                  egress_unbounded: true
+                  file: .claude/settings.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        agents: 1
+    - name: web tools restricted only
+      expect: WARN
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  egress: partial
+                  egress_hosts: []
+                  egress_unbounded: false
+                  file: .claude/settings.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        agents: 1
+    - name: sandbox allowlist
+      expect: PASS
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths: []
+                  egress: allowlist
+                  egress_hosts:
+                    - '*.npmjs.org'
+                    - github.com
+                  egress_unbounded: false
+                  file: .claude/settings.json
+                  gitignored: false
+                  local_override: false
+                  mcp_servers: []
+                  scope: repo
+                  tool: claude-code
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+      inspected:
+        agents: 1
+    - name: no agent config
+      expect: N/A
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found: []
+            inspected: 0
+            shared_credentials: []

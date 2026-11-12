@@ -12,6 +12,9 @@ cases:
                 - allowed_commands: []
                   denied_commands: []
                   deny_read_paths: []
+                  egress: open
+                  egress_hosts: []
+                  egress_unbounded: false
                   file: .mcp.json
                   mcp_servers:
                     - command: acme-mcp
@@ -54,6 +57,9 @@ cases:
                 - allowed_commands: []
                   denied_commands: []
                   deny_read_paths: []
+                  egress: open
+                  egress_hosts: []
+                  egress_unbounded: false
                   file: .mcp.json
                   mcp_servers:
                     - command: acme-mcp

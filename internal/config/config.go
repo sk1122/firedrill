@@ -79,6 +79,9 @@ type Config struct {
 		// MinRetentionDays is the fewest days of automated backups a production
 		// database may keep. Unset means 7.
 		MinRetentionDays *int `yaml:"min_retention_days"`
+		// RestoreDays is how many days may pass since a production database
+		// was last restored from its backups. Unset means 90.
+		RestoreDays *int `yaml:"restore_days"`
 	} `yaml:"recovery"`
 	// Production names what is production: AWS account IDs, AWS profile names
 	// and Google Cloud project IDs. A database tagged or labelled env or
@@ -97,6 +100,7 @@ const (
 	DefaultReviewAfterDays  = 30
 	DefaultAppReviewDays    = 180
 	DefaultMinRetentionDays = 7
+	DefaultRestoreDays      = 90
 )
 
 // AppReviewDays returns google.review_days, or its default when unset.
@@ -113,6 +117,14 @@ func (c Config) MinRetentionDays() int {
 		return DefaultMinRetentionDays
 	}
 	return *c.Recovery.MinRetentionDays
+}
+
+// RestoreDays returns recovery.restore_days, or its default when unset.
+func (c Config) RestoreDays() int {
+	if c.Recovery.RestoreDays == nil {
+		return DefaultRestoreDays
+	}
+	return *c.Recovery.RestoreDays
 }
 
 // IsProduction says whether any of the given names (an account ID, a profile
@@ -250,6 +262,15 @@ type Backup struct {
 	Verified     string `yaml:"verified"`
 }
 
+// Restore is one entry of restores.yaml: a restore of a database from its
+// backups that the team ran and checked, where the API shows none.
+type Restore struct {
+	Database string `yaml:"database"`
+	Restored string `yaml:"restored"`
+	By       string `yaml:"by"`
+	Note     string `yaml:"note"`
+}
+
 // AIKey is one entry of ai-keys.yaml: the owner and spend limit of an AI
 // provider key, workspace or project, where the provider's API does not show
 // them.
@@ -281,11 +302,12 @@ type Project struct {
 	Hosts   []Host
 	// People maps a GitHub login to the email of the person who holds it.
 	// Several logins may map to one email. Keys match case-insensitively.
-	People  map[string]string
-	Apps    []App
-	Backups []Backup
-	AIKeys  []AIKey
-	Owners  []Owner
+	People   map[string]string
+	Apps     []App
+	Backups  []Backup
+	Restores []Restore
+	AIKeys   []AIKey
+	Owners   []Owner
 }
 
 // PersonOf returns the email people.yaml gives a GitHub login, matching the
@@ -317,8 +339,8 @@ func isDate(s string) bool {
 	return err == nil
 }
 
-// validateRegisters checks apps.yaml, backups.yaml, ai-keys.yaml, owners.yaml
-// and people.yaml.
+// validateRegisters checks apps.yaml, backups.yaml, restores.yaml,
+// ai-keys.yaml, owners.yaml and people.yaml.
 func (p *Project) validateRegisters() error {
 	owner := func(file string, i int, o string) error {
 		if emailLike.MatchString(o) {
@@ -346,6 +368,20 @@ func (p *Project) validateRegisters() error {
 		}
 		if err := owner("backups.yaml", i, b.Owner); err != nil {
 			return err
+		}
+	}
+	for i, r := range p.Restores {
+		if r.Database == "" || r.Restored == "" || r.By == "" {
+			return fmt.Errorf("restores.yaml entry %d: database, restored and by are required", i+1)
+		}
+		if !isDate(r.Restored) {
+			return fmt.Errorf("restores.yaml entry %d: restored must be YYYY-MM-DD", i+1)
+		}
+		if emailLike.MatchString(r.By) {
+			return fmt.Errorf("restores.yaml entry %d: by must be a team or role, not an email address", i+1)
+		}
+		if emailLike.MatchString(r.Note) {
+			return fmt.Errorf("restores.yaml entry %d: note must not hold an email address", i+1)
 		}
 	}
 	for i, k := range p.AIKeys {
@@ -410,11 +446,11 @@ func Load(dir string) (*Project, error) {
 	if p.Config.ShadowWindow() < 0 || p.Config.ReviewAfter() < 0 {
 		return nil, errors.New("config.yaml: shadow_days and review_after_days must be 0 or more")
 	}
-	if p.Config.AppReviewDays() < 0 || p.Config.MinRetentionDays() < 0 {
-		return nil, errors.New("config.yaml: google.review_days and recovery.min_retention_days must be 0 or more")
+	if p.Config.AppReviewDays() < 0 || p.Config.MinRetentionDays() < 0 || p.Config.RestoreDays() < 0 {
+		return nil, errors.New("config.yaml: google.review_days, recovery.min_retention_days and recovery.restore_days must be 0 or more")
 	}
 	for name, out := range map[string]any{"waivers.yaml": &p.Waivers, "hosts.yaml": &p.Hosts, "people.yaml": &p.People,
-		"apps.yaml": &p.Apps, "backups.yaml": &p.Backups, "ai-keys.yaml": &p.AIKeys, "owners.yaml": &p.Owners} {
+		"apps.yaml": &p.Apps, "backups.yaml": &p.Backups, "restores.yaml": &p.Restores, "ai-keys.yaml": &p.AIKeys, "owners.yaml": &p.Owners} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if os.IsNotExist(err) {
 			continue

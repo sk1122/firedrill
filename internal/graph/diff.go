@@ -122,7 +122,8 @@ var stableAttrs = map[string][]string{
 	KindEnvironment:  {"required_reviewers", "prevent_self_review", "admin_bypass", "protected_branches_only"},
 	KindActionsPerms: {"can_approve_pull_requests", "default_token_permission"},
 	KindGitHubRepo:   {"private"},
-	KindAgentConfig:  {"allowed_commands", "denied_commands", "deny_read_paths", "unguarded_destructive", "mcp_servers", "gitignored"},
+	KindAgentConfig: {"allowed_commands", "denied_commands", "deny_read_paths", "unguarded_destructive", "mcp_servers", "gitignored",
+		"egress", "egress_hosts", "egress_unbounded"},
 	KindWorkflow: {"permissions", "triggers", "secrets", "unpinned_actions", "pull_request_target_checkout",
 		"unfrozen_installs", "cloud_key_secrets", "uses_oidc"},
 	KindManifest: {"manager", "lockfile", "lockfile_committed", "install_scripts", "install_scripts_known"},
@@ -136,8 +137,13 @@ var stableAttrs = map[string][]string{
 	KindHost:       {},
 	KindSourceMap:  {},
 	KindAPIDoc:     {},
-	KindTFBucket:   {"public_acl", "public_policy", "public_access_block"},
-	KindConfigHost: {"owner"},
+	// A credential in a public bundle is keyed by host, path and fingerprint,
+	// so its existence is the change. Whether its key is live is worked out
+	// by the fact at each run and is not compared.
+	KindPublicSecret: {},
+	KindPageScript:   {"has_integrity", "owned"},
+	KindTFBucket:     {"public_acl", "public_policy", "public_access_block"},
+	KindConfigHost:   {"owner"},
 	// The line is left out: an edit above a secret is not a change.
 	KindSecretSeen: {"agent_readable"},
 	// scopes is left out: sensitive_scopes shows each change that matters, and
@@ -159,14 +165,19 @@ var stableAttrs = map[string][]string{
 	// edges.
 	KindGoogleGroup: {"external_members", "all_users", "members_known"},
 	KindConfigOwner: {"owner"},
+	// A declared restore: a newer date is a plain change. How many days ago
+	// a restore ran, and whether that is inside the window, is worked out by
+	// the fact and never compared, so a day passing is not a change.
+	KindConfigRestore: {"restored", "by"},
 }
 
 // addedLater are attributes a snapshot from before they existed lacks. Their
 // first appearance is not a change, or an upgrade would read every admin
 // binding as a new admin.
 var addedLater = map[string]map[string]bool{
-	KindGCPBinding: {"is_admin": true, "destructive": true, "power_known": true},
-	KindGCPProject: {"production": true},
+	KindGCPBinding:  {"is_admin": true, "destructive": true, "power_known": true},
+	KindGCPProject:  {"production": true},
+	KindAgentConfig: {"egress": true, "egress_hosts": true, "egress_unbounded": true},
 }
 
 // Compared reports whether the diff compares a node kind.
@@ -460,6 +471,7 @@ func (c *coverage) state(sc scope) state {
 // domainScanner names the scanner that covers a domain-scoped kind.
 var domainScanner = map[string]string{
 	KindHost: "ctlog", KindCNAME: "dns", KindSourceMap: "web_source_maps", KindAPIDoc: "web_api_docs",
+	KindPublicSecret: "web_public_secrets", KindPageScript: "web_page_scripts",
 }
 
 func nodeScope(n Node) scope {
@@ -798,6 +810,12 @@ func addedNode(n Node) Change {
 		}
 	case KindSourceMap, KindAPIDoc:
 		weak(ChangePublic, "now served: "+label(n))
+	case KindPublicSecret:
+		weak(ChangeSecretSeen, "credential now public: "+label(n))
+	case KindPageScript:
+		if !isTrue(n.Attrs["owned"]) && !isTrue(n.Attrs["has_integrity"]) {
+			weak(ChangeWeakened, "new "+label(n)+" with no integrity hash")
+		}
 	case KindGitHubRepo:
 		if n.Attrs["private"] == false {
 			weak(ChangePublic, "new public "+label(n))
@@ -829,6 +847,8 @@ func removedNode(n Node) Change {
 		c.Type, c.Weakening, c.Summary = ChangeWeakened, true, "gone: "+label(n)
 	case KindConfigOwner:
 		c.Type, c.Weakening, c.Summary = ChangeWeakened, true, "gone: "+label(n)+"; its principal no longer has an owner"
+	case KindConfigRestore:
+		c.Type, c.Weakening, c.Summary = ChangeWeakened, true, "gone: "+label(n)
 	}
 	return c
 }
@@ -1040,6 +1060,12 @@ func label(n Node) string {
 		return "source map " + str(n, "host") + str(n, "map_url")
 	case KindAPIDoc:
 		return "API docs " + str(n, "host") + str(n, "path")
+	case KindPublicSecret:
+		return fmt.Sprintf("%s %s in %s%s", strings.ReplaceAll(str(n, "kind"), "_", " "), short(str(n, "hash")), str(n, "host"), str(n, "path"))
+	case KindPageScript:
+		return fmt.Sprintf("script from %s on %s%s", str(n, "script_host"), str(n, "host"), str(n, "page"))
+	case KindConfigRestore:
+		return "declared restore of database " + str(n, "database")
 	case KindTFBucket:
 		return fmt.Sprintf("Terraform bucket %s in %s/%s", str(n, "name"), str(n, "repo"), str(n, "file"))
 	case KindConfigHost:
@@ -1241,6 +1267,28 @@ func classifyAttr(attr string, before, after any) (string, bool, string) {
 		return ChangeChanged, false, "its lockfile now records install scripts"
 	case "mcp_servers":
 		return classifyServers(before, after)
+	case "egress":
+		b, _ := before.(string)
+		a, _ := after.(string)
+		if egressRank[a] > egressRank[b] {
+			return ChangeWeakened, true, fmt.Sprintf("outbound access moved from %s to %s", show(before), show(after))
+		}
+		return ChangeChanged, false, fmt.Sprintf("outbound access moved from %s to %s", show(before), show(after))
+	case "egress_unbounded":
+		if on {
+			return ChangeWeakened, true, "its allowlist now allows every host"
+		}
+		return ChangeChanged, false, "its allowlist no longer allows every host"
+	case "has_integrity":
+		if off {
+			return ChangeWeakened, true, "its integrity hash was removed"
+		}
+		return ChangeChanged, false, "it now carries an integrity hash"
+	case "owned":
+		if off {
+			return ChangeChanged, false, "its host is no longer one you own"
+		}
+		return ChangeChanged, false, "its host is now one you own"
 	case "automated_backups":
 		if off {
 			return ChangeWeakened, true, "automated backups were turned off"
@@ -1330,7 +1378,7 @@ func classifyAttr(attr string, before, after any) (string, bool, string) {
 				return ChangePublic, true, "now public to " + strings.Join(added, ", ")
 			}
 		case "unpinned_actions", "allowed_commands", "unguarded_destructive", "destructive_actions", "member_domains",
-			"unfrozen_installs", "cloud_key_secrets", "install_scripts":
+			"unfrozen_installs", "cloud_key_secrets", "install_scripts", "egress_hosts":
 			if len(added) > 0 {
 				return ChangeWeakened, true, detail
 			}
@@ -1343,6 +1391,10 @@ func classifyAttr(attr string, before, after any) (string, bool, string) {
 	}
 	return ChangeChanged, false, changed
 }
+
+// egressRank orders an agent config's egress from most restricted to open, as
+// the files connector writes it.
+var egressRank = map[string]int{"allowlist": 0, "partial": 1, "unsupported": 2, "open": 3}
 
 // classifyServers compares MCP servers by name, then their credentials, host,
 // pin and package. A server given a new credential, moved to a host nobody
