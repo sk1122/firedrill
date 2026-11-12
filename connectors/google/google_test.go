@@ -82,7 +82,7 @@ func TestCollectUsersThroughGuardWithPaging(t *testing.T) {
 			}
 			pages++
 			if r.URL.Query().Get("pageToken") == "" {
-				_, _ = io.WriteString(w, `{"users":[{"primaryEmail":"Ravi@acme.com","isAdmin":true,"isEnforcedIn2Sv":true,"isEnrolledIn2Sv":true,"lastLoginTime":"2026-10-01T00:00:00.000Z","creationTime":"2020-01-01T00:00:00.000Z"}],"nextPageToken":"p2"}`)
+				_, _ = io.WriteString(w, `{"users":[{"primaryEmail":"Ravi@acme.com","aliases":["rk@acme.com"],"nonEditableAliases":["Ravi.Old@acme.com"],"isAdmin":true,"isEnforcedIn2Sv":true,"isEnrolledIn2Sv":true,"lastLoginTime":"2026-10-01T00:00:00.000Z","creationTime":"2020-01-01T00:00:00.000Z"}],"nextPageToken":"p2"}`)
 				return
 			}
 			_, _ = io.WriteString(w, `{"users":[{"primaryEmail":"new@acme.com","suspended":true,"lastLoginTime":"1970-01-01T00:00:00.000Z","creationTime":"2026-11-01T00:00:00.000Z"}]}`)
@@ -119,6 +119,16 @@ func TestCollectUsersThroughGuardWithPaging(t *testing.T) {
 	if ravi.Attrs["is_admin"] != true || ravi.Attrs["mfa_enforced"] != true || ravi.Attrs["last_login"] != "2026-10-01T00:00:00Z" {
 		t.Fatalf("%+v", ravi.Attrs)
 	}
+	if al, _ := ravi.Private["aliases"].([]string); len(al) != 2 || al[0] != "rk@acme.com" || al[1] != "ravi.old@acme.com" {
+		t.Fatalf("aliases are kept, lowercased, for the link step: %+v", ravi.Private)
+	}
+	for _, u := range users {
+		for k, v := range u.Attrs {
+			if strings.Contains(strings.ToLower(k+toStr(v)), "alias") || strings.Contains(toStr(v), "@") {
+				t.Fatalf("aliases stay out of attributes: %+v", u.Attrs)
+			}
+		}
+	}
 	if byEmail["new@acme.com"].Attrs["last_login"] != "" {
 		t.Fatal("Google's zero time means never")
 	}
@@ -149,3 +159,5 @@ func TestBadKeyDoesNotEchoContent(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func toStr(v any) string { b, _ := json.Marshal(v); return string(b) }

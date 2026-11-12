@@ -157,7 +157,7 @@ func write(u *admin.User, s connector.Scope, out graph.Writer) {
 			"mfa_enrolled": u.IsEnrolledIn2Sv, "mfa_enforced": u.IsEnforcedIn2Sv,
 			"last_login": normalizeTime(u.LastLoginTime), "created": normalizeTime(u.CreationTime),
 		},
-		Private: map[string]any{"email": strings.ToLower(u.PrimaryEmail)},
+		Private: map[string]any{"email": strings.ToLower(u.PrimaryEmail), "aliases": aliasesOf(u)},
 	})
 }
 

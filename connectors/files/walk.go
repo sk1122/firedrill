@@ -274,7 +274,7 @@ func WalkLocal(root string) ([]File, error) {
 			}
 			// Agent config and lockfiles are read even when gitignored, since
 			// whether they are committed is what a drill asks.
-			if all && !alwaysRead(rel) && (!(IsAgentConfig(rel) || IsLockfile(rel)) || fd) {
+			if all && !alwaysRead(rel) && (!IsAgentConfig(rel) && !IsLockfile(rel) || fd) {
 				continue
 			}
 			info, err := e.Info()

@@ -607,7 +607,7 @@ func TestTier2RecordsHoldNoAddressOrLogin(t *testing.T) {
 				tags++
 			}
 		}
-		for _, s := range []string{"@acme.example", "@partner.example", "@mail.example", "Ana-Dev", "ana-dev", "ghost-owner", "cy-acme", anaToken} {
+		for _, s := range []string{"@acme.example", "ana.s@acme.example", "@partner.example", "@mail.example", "Ana-Dev", "ana-dev", "ghost-owner", "cy-acme", anaToken} {
 			if strings.Contains(string(b), s) {
 				t.Errorf("%s holds %s", p, s)
 			}

@@ -483,7 +483,8 @@ func (r *peopleRun) resolveBypass(full string, perms map[string]string, collabOK
 		}
 		switch a.Kind {
 		case actorUser:
-			r.person(&gh.User{Login: gh.Ptr(a.Name)})
+			login := a.Name
+			r.person(&gh.User{Login: &login})
 			addUsers([]string{strings.ToLower(a.Name)}, a.Via, "")
 		case actorTeam:
 			slug := a.Name

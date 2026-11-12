@@ -125,8 +125,6 @@ type GraphNote struct {
 	Text, Href string
 }
 
-var systemNames = map[string]string{"google": "Google Workspace", "gcp": "GCP", "github": "GitHub"}
-
 // AddViews builds the People, Agents and Graph pages from the latest snapshot
 // and the latest diff. A nil snapshot leaves each page saying so. Call it
 // after Build, so items and failing drills are known.
