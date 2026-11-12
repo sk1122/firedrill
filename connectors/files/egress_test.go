@@ -95,7 +95,7 @@ func TestMCPAndOtherToolsEgress(t *testing.T) {
 		// Cursor has no setting that limits a local MCP server.
 		".cursor/mcp.json":      {EgressUnsupported, []string{"*.acme.com", "registry.npmjs.org"}, false},
 		".cursor/sandbox.json":  {EgressAllowlist, []string{"*.acme.com", "registry.npmjs.org"}, false},
-		".cursorignore":         {EgressAllowlist, []string{"*.acme.com", "registry.npmjs.org"}, false},
+		".cursorignore":         {EgressNone, []string{}, false},
 		".vscode/mcp.json":      {EgressAllowlist, []string{"api.acme.com", "mcp.acme.com"}, false},
 		".gemini/settings.json": {EgressUnsupported, []string{}, false},
 	}
@@ -123,5 +123,18 @@ func TestMCPAndOtherToolsEgress(t *testing.T) {
 	}
 	if EgressRank(EgressOpen) <= EgressRank(EgressUnsupported) || EgressRank(EgressPartial) <= EgressRank(EgressAllowlist) {
 		t.Fatal("rank")
+	}
+}
+
+// A .cursorignore only lists what Cursor may not read. It grants nothing and
+// limits no host, so it is not judged for egress.
+func TestCursorignoreIsNotJudgedForEgress(t *testing.T) {
+	got := judge(t, map[string]string{".cursorignore": ".env\nsecrets/\n"}, nil)
+	if e := got[".cursorignore"]; e.Egress != EgressNone || len(e.Hosts) != 0 || e.Unbounded {
+		t.Fatalf("%+v", e)
+	}
+	c, err := ParseAgentFile(".cursorignore", []byte(".env\n"), "repo")
+	if err != nil || len(c.DenyRead) != 1 || c.DenyRead[0] != ".env" || !c.NoEgress {
+		t.Fatalf("its deny-read paths still count: %+v %v", c, err)
 	}
 }

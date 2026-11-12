@@ -52,6 +52,6 @@ Some evidence no API shows. Files under `.firedrill/` hold it. Each entry names 
 | `restores.yaml` | A restore of a database the API cannot show: `database`, `restored` (YYYY-MM-DD), `by` (a team or role) and an optional `note` | `recovery/restore-exercised` |
 | `ai-keys.yaml` | Owner and monthly spend limit of an AI key, workspace or project | `keys/ai-keys-capped` |
 | `owners.yaml` | The team that owns a principal no person holds: a GCP service account's address, or a graph ID such as `github:app/123456` or `github:deploy-key/acme/api`, with `principal`, `owner` and an optional `note` | `people.admins`, `people.unlinked` |
-| `people.yaml` | A flat map of GitHub login to the email of the person who holds it, such as `ana-acme: ana@acme.example`. Logins match case-insensitively, and several may name one person. A login with no entry stays unlinked; it is never guessed. This file holds emails and never reaches a record | `people.accounts`, `people.admins`, `people.unlinked` |
+| `people.yaml` | A flat map of GitHub login to the email of the person who holds it, such as `ana-acme: ana@acme.example`. Logins match case-insensitively, and several may name one person. A login with no entry stays unlinked; it is never guessed, and an admin login with no entry warns on `access/every-admin-is-someone` as not mapped to a person, rather than failing. This file holds emails and never reaches a record | `people.accounts`, `people.admins`, `people.unlinked` |
 
 Declared evidence is shown as declared in each result.

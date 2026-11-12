@@ -143,10 +143,16 @@ func scanRepo(t connector.RepoTarget, all []File, s connector.Scope, out graph.W
 		cfgs[i] = p.cfg
 	}
 	egress := JudgeEgress(cfgs)
-	configs := 0
+	// configs counts every agent file; agents counts those that configure an
+	// agent whose egress can be judged, so a .cursorignore alone counts as
+	// no agent for the egress boundary.
+	configs, agents := 0, 0
 	for _, p := range parsedConfigs {
 		cfg := p.cfg
 		configs++
+		if !cfg.NoEgress {
+			agents++
+		}
 		servers := []any{}
 		for _, srv := range cfg.Servers {
 			servers = append(servers, map[string]any{
@@ -211,9 +217,9 @@ func scanRepo(t connector.RepoTarget, all []File, s connector.Scope, out graph.W
 	}
 	graph.WriteScan(out, "files", "secrets", repo, inspected, "", s.Now)
 	graph.WriteScan(out, "files", "workflows", repo, workflows, "", s.Now)
-	writeBoundary(repo, all, agentJobs, configs > 0, s.IncludeHome && t.Path != "", node)
+	writeBoundary(repo, all, agentJobs, agents > 0, s.IncludeHome && t.Path != "", node)
 	places := len(agentJobs)
-	if configs > 0 {
+	if agents > 0 {
 		places++
 	}
 	graph.WriteScan(out, "files", "egress_boundary", repo, places, "", s.Now)

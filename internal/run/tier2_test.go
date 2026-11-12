@@ -296,6 +296,18 @@ func tier2Cases() []drillCase {
 			ana := human(g, "ana", "github")
 			githubUser(g, ana, "ana", "admin")
 		}},
+		{"access/every-admin-is-someone", tag.Warn, "GitHub owners not mapped to a person", func(g *graph.Graph) {
+			// A first run: people.yaml is empty and Google is not connected. A
+			// human account Firedrill cannot link is unverified, not nobody's.
+			readGitHub(g)
+			githubUser(g, "", "ghost", "admin")
+			githubUser(g, "", "ivy", "admin")
+		}},
+		{"access/every-admin-is-someone", tag.Fail, "a bot owns the org with no owner", func(g *graph.Graph) {
+			readGitHub(g)
+			node(g, "github:user/deploy-bot", graph.KindGitHubUser, map[string]any{"org": "acme", "org_role": "admin", "type": "bot"})
+			githubUser(g, "", "ghost", "admin")
+		}},
 		{"access/every-admin-is-someone", tag.NA, "no admin", func(g *graph.Graph) {
 			readGoogle(g)
 			ana := human(g, "ana", "google")

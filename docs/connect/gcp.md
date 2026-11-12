@@ -28,7 +28,7 @@ You need permission to create service accounts in `HOME_PROJECT` and to change I
 gcloud services enable iam.googleapis.com iamcredentials.googleapis.com cloudresourcemanager.googleapis.com policyanalyzer.googleapis.com sqladmin.googleapis.com --project HOME_PROJECT
 ```
 
-Calls are billed to the reader's own project, so other projects need no APIs turned on.
+Calls are billed to the reader's own project, so other projects need no APIs turned on. Google checks whether an API is on in the project a call is billed to (the [quota project](https://docs.cloud.google.com/docs/quotas/quota-project)), so `sqladmin.googleapis.com` must be on in `HOME_PROJECT` even when no database lives there.
 
 ## 3. Create the reader
 
@@ -148,12 +148,16 @@ firedrill run
 | `gcloud` refuses `--scopes` without `cloud-platform` | gcloud's own login always needs the full scope. That's why Firedrill uses the reader: its roles keep it to reads, whatever the scope |
 | `ACCESS_TOKEN_SCOPE_INSUFFICIENT` | You're on a Firedrill older than v0.1.0; upgrade |
 | A project shows ERROR `could not read` | The reader has no roles there, or the project ID is wrong. Repeat step 4 for it |
-| `could not read Cloud SQL ... not turned on` | Turn on `sqladmin.googleapis.com` in `HOME_PROJECT` (step 2). Only the backups drill is affected |
+| `Note: the Cloud SQL Admin API is not turned on in acme-a, acme-b, so there is no Cloud SQL instance there to read` | Nothing to do. The Service Usage API said the API is off in those projects themselves, so they hold no Cloud SQL instance; with every project like this the recovery drills give N/A |
+| `Read only in part: Cloud SQL could not be read in acme-a, acme-b, where the Cloud SQL Admin API is on: turn on sqladmin.googleapis.com in …` | The API is on in those projects but off in the project calls are billed to. Turn on `sqladmin.googleapis.com` in `HOME_PROJECT` (step 2). The recovery drills give WARN, not ERROR, until then |
+| `Read only in part: Cloud SQL could not be read in acme-a, and whether it is used there could not be told: …` | Turn on `sqladmin.googleapis.com` in `HOME_PROJECT`, or grant the reader Viewer on the project, which includes `serviceusage.services.get`, so Firedrill can tell whether the API is off there. The recovery drills give WARN |
+| `Read only in part: Cloud SQL could not be read in acme-a: the reader may not list its instances; …` | Grant the reader Cloud SQL Viewer (`roles/cloudsql.viewer`), which Viewer includes, on the project (step 4). The recovery drills give WARN |
+| `could not read Cloud SQL in acme-a: HTTP 5…` or a network error | A genuine failure: the backup drills give ERROR. Rerun |
 | `Not connected yet: connect gcp` | No projects in config, or no login file. Do steps 6 and 7 |
 
 ## What Firedrill calls
 
-Every call is a GET, including `GET https://sqladmin.googleapis.com/v1/projects/{project}/instances` and `GET https://sqladmin.googleapis.com/v1/projects/{project}/operations?instance={instance}` for Cloud SQL and `GET https://iam.googleapis.com/v1/{projects/{project} or organizations/{org}}/roles/{role}` once per custom role a binding names, plus four exact POSTs the guard allows: the token exchange, minting the reader's token, `getIamPolicy` on each listed project, which only reads, and, only after a diff, `https://logging.googleapis.com/v2/entries:list`, which also only reads (filtered to one listed project's Admin Activity log, `SetIamPolicy` and the window between the two runs; at most 50 audit calls a run across every source). `firedrill run --dry-run` lists them all.
+Every call is a GET, including `GET https://sqladmin.googleapis.com/v1/projects/{project}/instances` and `GET https://sqladmin.googleapis.com/v1/projects/{project}/operations?instance={instance}` for Cloud SQL, `GET https://serviceusage.googleapis.com/v1/projects/{project}/services/sqladmin.googleapis.com` only when a Cloud SQL read says the API is not turned on (the guard allows no other path on that host, since it also turns services on and off; [services.get](https://docs.cloud.google.com/service-usage/docs/reference/rest/v1/services/get) needs `serviceusage.services.get`, which Viewer includes), and `GET https://iam.googleapis.com/v1/{projects/{project} or organizations/{org}}/roles/{role}` once per custom role a binding names, plus four exact POSTs the guard allows: the token exchange, minting the reader's token, `getIamPolicy` on each listed project, which only reads, and, only after a diff, `https://logging.googleapis.com/v2/entries:list`, which also only reads (filtered to one listed project's Admin Activity log, `SetIamPolicy` and the window between the two runs; at most 50 audit calls a run across every source). `firedrill run --dry-run` lists them all.
 
 ## In CI
 

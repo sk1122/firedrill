@@ -49,9 +49,18 @@ const (
 	// operations.list, for the restores and clones each instance ran. Both GET.
 	// https://docs.cloud.google.com/sql/docs/mysql/admin-api/rest/v1/instances/list
 	// https://docs.cloud.google.com/sql/docs/mysql/admin-api/rest/v1/operations/list
-	sqlHost  = "sqladmin.googleapis.com"
-	tokenURL = "https://oauth2.googleapis.com/token"
+	sqlHost = "sqladmin.googleapis.com"
+	// Service Usage: services.get on the Cloud SQL Admin API alone, to tell
+	// whether it is turned on in a listed project when a Cloud SQL read
+	// says it is not. GET; needs serviceusage.services.get, which Viewer
+	// includes.
+	// https://docs.cloud.google.com/service-usage/docs/reference/rest/v1/services/get
+	usageHost = "serviceusage.googleapis.com"
+	tokenURL  = "https://oauth2.googleapis.com/token"
 )
+
+// usagePath is the one Service Usage path Firedrill may read.
+var usagePath = regexp.MustCompile(`^/v1/projects/[a-z0-9-]+/services/sqladmin\.googleapis\.com$`)
 
 // Connector reads Google Cloud.
 type Connector struct {
@@ -70,10 +79,10 @@ func New() *Connector {
 
 func init() { connector.Register(New()) }
 
-// Policy allows GET on the four API hosts, the token exchange, getIamPolicy on
-// each listed project, Cloud Logging's entries.list (a read), and, when
-// impersonating, the one generateAccessToken URL in the credentials file, each
-// by exact URL.
+// Policy allows GET on the five API hosts, GET of one Service Usage path, the
+// token exchange, getIamPolicy on each listed project, Cloud Logging's
+// entries.list (a read), and, when impersonating, the one generateAccessToken
+// URL in the credentials file, each by exact URL.
 func Policy(projects []string, impersonationURL string) connector.Policy {
 	post := map[string]bool{tokenURL: true}
 	if impersonationURL != "" {
@@ -86,8 +95,11 @@ func Policy(projects []string, impersonationURL string) connector.Policy {
 	// a project's IAM policy. See audit.go.
 	post[entriesListURL] = true
 	return connector.Policy{
-		Hosts:    map[string]bool{crmHost: true, iamHost: true, storageHost: true, analyzerHost: true, sqlHost: true},
+		Hosts:    map[string]bool{crmHost: true, iamHost: true, storageHost: true, analyzerHost: true, sqlHost: true, usageHost: true},
 		PostURLs: post,
+		// Service Usage also enables and disables services, so only the read
+		// of the Cloud SQL Admin API's state is allowed.
+		Paths: map[string][]*regexp.Regexp{usageHost: {usagePath}},
 	}
 }
 
@@ -123,10 +135,11 @@ func (c *Connector) Collections() []connector.Collection {
 	}, {
 		Name:       CollectionBackups,
 		Nodes:      []string{graph.KindDatabase},
-		Permission: "Cloud SQL Viewer (roles/cloudsql.viewer), which Viewer includes, and the Cloud SQL Admin API turned on in each project",
+		Permission: "Cloud SQL Viewer (roles/cloudsql.viewer), which Viewer includes, and the Cloud SQL Admin API turned on in the project calls are billed to",
 		Calls: []string{
 			"GET https://" + sqlHost + "/v1/projects/{project}/instances",
 			"GET https://" + sqlHost + "/v1/projects/{project}/operations?instance={instance}, for each instance, to find restores and clones",
+			"GET https://" + usageHost + "/v1/projects/{project}/services/sqladmin.googleapis.com, only when a Cloud SQL read says the API is not turned on, to tell whether it is off in that project (serviceusage.services.get, which Viewer includes)",
 		},
 	}}
 }
@@ -227,6 +240,10 @@ type apiError struct {
 	Status int
 	Reason string
 	Msg    string
+	// Consumer is the project a disabled API was checked in, from the
+	// error's ErrorInfo, such as projects/123: the project the call was
+	// billed to, which is not always the one it was about.
+	Consumer string
 }
 
 func (e *apiError) Error() string {
@@ -264,18 +281,22 @@ func (a *api) do(ctx context.Context, method, u string, body any, out any) error
 				Message string `json:"message"`
 				Status  string `json:"status"`
 				Details []struct {
-					Reason string `json:"reason"`
+					Reason   string            `json:"reason"`
+					Metadata map[string]string `json:"metadata"`
 				} `json:"details"`
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(data, &e)
-		reason := e.Error.Status
+		ae := &apiError{Status: resp.StatusCode, Reason: e.Error.Status, Msg: e.Error.Message}
 		for _, d := range e.Error.Details {
 			if d.Reason != "" {
-				reason = d.Reason
+				ae.Reason = d.Reason
+			}
+			if c := d.Metadata["consumer"]; c != "" {
+				ae.Consumer = c
 			}
 		}
-		return &apiError{Status: resp.StatusCode, Reason: reason, Msg: e.Error.Message}
+		return ae
 	}
 	return json.Unmarshal(data, out)
 }

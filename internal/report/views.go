@@ -36,13 +36,17 @@ type Views struct {
 	PeopleNote  string // why no people are listed, when none are
 	People      []PersonRow
 	Unlinked    []PrincipalRow
-	Orphans     []PrincipalRow
-	Cuts        []CutRow
-	Basis       string // production_basis, when nothing is marked production
-	PagesCut    int    // people with power left without a page by the bound
-	Agents      []AgentRow
-	AgentNote   string
-	Graphs      []GraphPage
+	// Unmapped are people's own accounts, GitHub users and GCP user:
+	// members, that link to no person record. Someone may answer for them;
+	// Firedrill could not tell who.
+	Unmapped  []PrincipalRow
+	Orphans   []PrincipalRow
+	Cuts      []CutRow
+	Basis     string // production_basis, when nothing is marked production
+	PagesCut  int    // people with power left without a page by the bound
+	Agents    []AgentRow
+	AgentNote string
+	Graphs    []GraphPage
 	// SecretPagesCut counts secrets left without a page by MaxSecretPages.
 	SecretPagesCut int
 }
@@ -267,8 +271,13 @@ func (c *viewCtx) people_() {
 	if un, _ := factData(c.g, "people.unlinked", c.now); un != nil {
 		for _, u := range rowsOf(un) {
 			id := fmt.Sprint(u["id"])
-			v.Unlinked = append(v.Unlinked, PrincipalRow{System: fmt.Sprint(u["system"]), Kind: fmt.Sprint(u["kind"]),
-				Name: nameOf(c.g, graph.ID(id)), Reason: fmt.Sprint(u["reason"]), Admin: u["is_admin"] == true, Href: c.items[graph.ID(id)]})
+			row := PrincipalRow{System: fmt.Sprint(u["system"]), Kind: fmt.Sprint(u["kind"]),
+				Name: nameOf(c.g, graph.ID(id)), Reason: fmt.Sprint(u["reason"]), Admin: u["is_admin"] == true, Href: c.items[graph.ID(id)]}
+			if u["human"] == true {
+				v.Unmapped = append(v.Unmapped, row)
+			} else {
+				v.Unlinked = append(v.Unlinked, row)
+			}
 		}
 	}
 	for _, o := range run.Orphans(c.g, c.now) {

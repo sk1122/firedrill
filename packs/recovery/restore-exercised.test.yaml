@@ -29,6 +29,7 @@ cases:
             restore_days: 90
             systems:
                 - gcp
+            unread: []
     - name: declared restore
       expect: PASS
       facts:
@@ -57,6 +58,7 @@ cases:
             restore_days: 90
             systems:
                 - gcp
+            unread: []
     - name: last restore older than the window
       expect: FAIL
       facts:
@@ -85,6 +87,7 @@ cases:
             restore_days: 90
             systems:
                 - gcp
+            unread: []
     - name: never restored, operations readable
       expect: FAIL
       facts:
@@ -113,6 +116,7 @@ cases:
             restore_days: 90
             systems:
                 - gcp
+            unread: []
     - name: operations unreadable
       expect: WARN
       facts:
@@ -141,6 +145,7 @@ cases:
             restore_days: 90
             systems:
                 - gcp
+            unread: []
     - name: no production database
       expect: N/A
       facts:
@@ -169,3 +174,27 @@ cases:
             restore_days: 90
             systems:
                 - gcp
+            unread: []
+    - name: Cloud SQL off in every project
+      expect: N/A
+      facts:
+        dbs:
+            found: []
+            min_retention_days: 7
+            restore_days: 90
+            systems:
+                - gcp
+            unread: []
+    - name: Cloud SQL could not be read
+      expect: WARN
+      facts:
+        dbs:
+            found: []
+            min_retention_days: 7
+            restore_days: 90
+            systems:
+                - gcp
+            unread:
+                - acme-prod
+      partial:
+        dbs: 'Cloud SQL could not be read in acme-prod, where the Cloud SQL Admin API is on: turn on sqladmin.googleapis.com in projects/999, the project Firedrill''s calls are billed to'

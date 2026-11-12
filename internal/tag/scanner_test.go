@@ -11,9 +11,9 @@ import (
 func TestScanTagHashesSecretsAndLeavesStructuredFields(t *testing.T) {
 	h := graph.NewHasher("salt")
 	tg := &Tag{Evidence: Evidence{Facts: map[string]any{
-		"doc": map[string]any{"password": "Zx8mQ2pL9vT4rW7yB1nC6dF3", "name": "plain value"},
+		"doc": map[string]any{"password": fakeSecret, "name": "plain value"},
 		"secrets": map[string]any{"found": []any{map[string]any{
-			"hash": "0123456789abcdef0123456789abcdef", "key_id": "AKIAIOSFODNN7ABCDEFG", "file": "scripts/domains.sh",
+			"hash": "0123456789abcdef0123456789abcdef", "key_id": fakeKeyID, "file": "scripts/domains.sh",
 		}}},
 	}}}
 	ScanTag(tg, h)
@@ -22,7 +22,7 @@ func TestScanTagHashesSecretsAndLeavesStructuredFields(t *testing.T) {
 	if strings.Contains(s, "Zx8mQ2pL9vT4rW7yB1nC6dF3") {
 		t.Fatal("a raw secret reached the record")
 	}
-	if !strings.Contains(s, "AKIAIOSFODNN7ABCDEFG") || !strings.Contains(s, "0123456789abcdef0123456789abcdef") {
+	if !strings.Contains(s, fakeKeyID) || !strings.Contains(s, "0123456789abcdef0123456789abcdef") {
 		t.Fatalf("structured fields must pass untouched: %s", s)
 	}
 	if len(tg.Header.ScannerNotes) != 1 {
@@ -31,7 +31,7 @@ func TestScanTagHashesSecretsAndLeavesStructuredFields(t *testing.T) {
 }
 
 func TestScanSnapshot(t *testing.T) {
-	s := graph.Snapshot{Nodes: []graph.Node{{ID: "n", Attrs: map[string]any{"v": "sk_live_abcdefghijklmnop", "ok": "hello"}}}}
+	s := graph.Snapshot{Nodes: []graph.Node{{ID: "n", Attrs: map[string]any{"v": fakeLive, "ok": "hello"}}}}
 	if n := ScanSnapshot(&s, graph.NewHasher("s")); n != 1 {
 		t.Fatalf("replaced %d", n)
 	}
@@ -45,6 +45,13 @@ func TestScanSnapshot(t *testing.T) {
 
 // fakeSecret is not a real credential; it has the shape LooksLikeSecret accepts.
 const fakeSecret = "Zx8mQ2pL9vT4rW7yB1nC6dF3"
+
+// Made-up credentials, built by concatenation so this file holds none the
+// scanner would find in it.
+const (
+	fakeKeyID = "AKIA" + "IOSFODNN7ABCDEFG"
+	fakeLive  = "sk_live_" + "abcdefghijklmnop"
+)
 
 func TestExemptKeysAreExemptByShapeNotName(t *testing.T) {
 	h := graph.NewHasher("salt")
@@ -70,8 +77,8 @@ func TestSafeShapesUnderExemptKeysAreUntouched(t *testing.T) {
 		"0123456789abcdef0123456789abcdef",
 		"secret:0123456789abcdef0123456789abcdef",
 		"var:STRIPE_API_KEY",
-		"AKIAIOSFODNN7ABCDEFG", "ASIAIOSFODNN7ABCDEFG",
-		"aws:key/AKIAIOSFODNN7ABCDEFG",
+		fakeKeyID, "ASIAIOSFODNN7ABCDEFG",
+		"aws:key/" + fakeKeyID,
 		"github:repo/acme/api",
 		"file:acme-api/config/prod.env",
 		"gcp:key/acme-project/sa@acme-project.iam.gserviceaccount.com/0123456789abcdef0123456789abcdef01234567",
@@ -97,7 +104,7 @@ func TestScanTagScansReasonAndConditionResults(t *testing.T) {
 	h := graph.NewHasher("salt")
 	tg := &Tag{
 		Header: Header{
-			Reason:     "query failed: bad token " + fakeSecret + " for aws:key/AKIAIOSFODNN7ABCDEFG",
+			Reason:     "query failed: bad token " + fakeSecret + " for aws:key/" + fakeKeyID,
 			Conditions: []Condition{{Expr: "a", Result: "true"}, {Expr: "b", Result: "error: " + fakeSecret}},
 		},
 		Evidence: Evidence{Facts: map[string]any{}},
@@ -107,7 +114,7 @@ func TestScanTagScansReasonAndConditionResults(t *testing.T) {
 	if strings.Contains(string(b), fakeSecret) {
 		t.Fatalf("a secret reached the header: %s", b)
 	}
-	if !strings.Contains(tg.Header.Reason, "aws:key/AKIAIOSFODNN7ABCDEFG") || tg.Header.Conditions[0].Result != "true" {
+	if !strings.Contains(tg.Header.Reason, "aws:key/"+fakeKeyID) || tg.Header.Conditions[0].Result != "true" {
 		t.Fatalf("safe text changed: %+v", tg.Header)
 	}
 	if len(tg.Header.ScannerNotes) != 2 {
@@ -146,7 +153,7 @@ func TestScanDiffKeepsNodeIDsAndHashesValues(t *testing.T) {
 		"github:branch-rule/acme/api/default",
 		"github:workflow/acme/api/.github/workflows/release.yml",
 		"agent:acme/api/.mcp.json",
-		"aws:key/AKIAIOSFODNN7ABCDEFG",
+		"aws:key/" + fakeKeyID,
 		"google:user/aaaa1111bbbb2222cccc3333dddd4444",
 		"gcp:binding/acme-prod/roles/owner/bbbb2222cccc3333dddd4444eeee5555",
 	}
@@ -194,7 +201,7 @@ func TestPackageNamesSurviveAndSecretsDoNot(t *testing.T) {
 	// A secret under the same keys is still replaced, alone, with a prefix or
 	// as a UUID-shaped token.
 	for _, key := range []string{"package", "command", "install_scripts", "new_install_scripts", "version", "cloud_key_secrets"} {
-		for _, v := range []string{fakeSecret, "mcp-" + fakeSecret, "sk_live_abcdefghijklmnop", "6f1b9d2e-7c44-4a10-9e3b-2d5ac81f0e77"} {
+		for _, v := range []string{fakeSecret, "mcp-" + fakeSecret, fakeLive, "6f1b9d2e-" + "7c44-4a10-9e3b-2d5ac81f0e77"} {
 			var notes []string
 			out := ScanValue(map[string]any{key: []any{v}}, h, "w", &notes)
 			b, _ := json.Marshal(out)
@@ -269,5 +276,21 @@ func TestGitHubLoginsSurviveAndSecretsDoNot(t *testing.T) {
 		if !safeShape(id) {
 			t.Errorf("%s is a safe ID", id)
 		}
+	}
+}
+
+// A repo or scope name stays readable however long and mixed it is, and a
+// secret under those keys is still replaced.
+func TestRepoNamesSurviveAndSecretsDoNot(t *testing.T) {
+	h := graph.NewHasher("salt")
+	for _, name := range []string{"acme-payments-api-2026", "acme/payments-api-2026", "acme-prod-europe-west1-2026"} {
+		s := graph.Snapshot{Nodes: []graph.Node{{ID: "n", Attrs: map[string]any{"repo": name, "scope": name}}}}
+		if n := ScanSnapshot(&s, h); n != 0 {
+			t.Errorf("%s: replaced %d values", name, n)
+		}
+	}
+	s := graph.Snapshot{Nodes: []graph.Node{{ID: "n", Attrs: map[string]any{"repo": fakeSecret, "scope": fakeLive}}}}
+	if n := ScanSnapshot(&s, h); n != 2 {
+		t.Fatalf("secrets under repo and scope must be replaced, got %d", n)
 	}
 }

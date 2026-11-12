@@ -25,17 +25,16 @@ cases:
             inspected: 1
             shared_credentials: []
         boundary:
-            agents_configured: true
+            agents_configured: false
             boundary: unknown
             ci_agent_jobs: []
             ci_agent_jobs_bounded: []
             ci_agent_jobs_exposed: []
             devcontainer: none
-            inspected: 1
+            inspected: 0
             managed: not_read
       inspected:
         agents: 1
-        boundary: 1
     - name: wildcard allowlist
       expect: FAIL
       target:
@@ -61,17 +60,16 @@ cases:
             inspected: 1
             shared_credentials: []
         boundary:
-            agents_configured: true
+            agents_configured: false
             boundary: unknown
             ci_agent_jobs: []
             ci_agent_jobs_bounded: []
             ci_agent_jobs_exposed: []
             devcontainer: none
-            inspected: 1
+            inspected: 0
             managed: not_read
       inspected:
         agents: 1
-        boundary: 1
     - name: web tools restricted only
       expect: WARN
       target:
@@ -96,17 +94,16 @@ cases:
             inspected: 1
             shared_credentials: []
         boundary:
-            agents_configured: true
+            agents_configured: false
             boundary: unknown
             ci_agent_jobs: []
             ci_agent_jobs_bounded: []
             ci_agent_jobs_exposed: []
             devcontainer: none
-            inspected: 1
+            inspected: 0
             managed: not_read
       inspected:
         agents: 1
-        boundary: 1
     - name: sandbox allowlist
       expect: PASS
       target:
@@ -133,17 +130,16 @@ cases:
             inspected: 1
             shared_credentials: []
         boundary:
-            agents_configured: true
+            agents_configured: false
             boundary: unknown
             ci_agent_jobs: []
             ci_agent_jobs_bounded: []
             ci_agent_jobs_exposed: []
             devcontainer: none
-            inspected: 1
+            inspected: 0
             managed: not_read
       inspected:
         agents: 1
-        boundary: 1
     - name: no agent config
       expect: N/A
       target:
@@ -163,6 +159,41 @@ cases:
             devcontainer: none
             inspected: 0
             managed: not_read
+    - name: only a .cursorignore
+      expect: N/A
+      target:
+        local: true
+        name: acme/api
+      facts:
+        agents:
+            found:
+                - allowed_commands: []
+                  denied_commands: []
+                  deny_read_paths:
+                    - .env
+                  egress: none
+                  egress_hosts: []
+                  egress_unbounded: false
+                  file: .cursorignore
+                  gitignored: false
+                  local_override: false
+                  mcp_servers: []
+                  scope: repo
+                  tool: cursor
+                  unguarded_destructive: []
+            inspected: 1
+            shared_credentials: []
+        boundary:
+            agents_configured: false
+            boundary: unknown
+            ci_agent_jobs: []
+            ci_agent_jobs_bounded: []
+            ci_agent_jobs_exposed: []
+            devcontainer: none
+            inspected: 0
+            managed: not_read
+      inspected:
+        agents: 1
     - name: CI job runs an agent with secrets and no egress control (UK AISI)
       expect: FAIL
       target:

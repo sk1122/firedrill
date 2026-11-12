@@ -7,16 +7,9 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: true
         protection_available: true
       facts:
-        env:
-            admin_bypass: false
-            exists: true
-            prevent_self_review: true
-            protected_branches_only: true
-            required_reviewers:
-                - '@a'
-            reviewers_available: false
         people:
             bypass_known: true
             found:
@@ -74,16 +67,9 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: true
         protection_available: true
       facts:
-        env:
-            admin_bypass: false
-            exists: true
-            prevent_self_review: true
-            protected_branches_only: true
-            required_reviewers:
-                - '@a'
-            reviewers_available: false
         people:
             bypass_known: true
             found:
@@ -162,16 +148,9 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: true
         protection_available: true
       facts:
-        env:
-            admin_bypass: false
-            exists: true
-            prevent_self_review: true
-            protected_branches_only: true
-            required_reviewers:
-                - '@a'
-            reviewers_available: false
         people:
             bypass_known: true
             found:
@@ -231,16 +210,9 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: true
         protection_available: true
       facts:
-        env:
-            admin_bypass: false
-            exists: true
-            prevent_self_review: true
-            protected_branches_only: true
-            required_reviewers:
-                - '@a'
-            reviewers_available: false
         people:
             bypass_known: false
             found:
@@ -296,16 +268,9 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: true
         protection_available: true
       facts:
-        env:
-            admin_bypass: false
-            exists: true
-            prevent_self_review: true
-            protected_branches_only: true
-            required_reviewers:
-                - '@a'
-            reviewers_available: false
         people:
             bypass_known: true
             found: []
@@ -339,16 +304,9 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: true
         protection_available: true
       facts:
-        env:
-            admin_bypass: false
-            exists: true
-            prevent_self_review: true
-            protected_branches_only: true
-            required_reviewers:
-                - '@a'
-            reviewers_available: false
         people:
             bypass_known: true
             found:
@@ -403,15 +361,69 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: false
         protection_available: true
       facts:
-        env:
-            admin_bypass: false
-            exists: false
-            prevent_self_review: false
-            protected_branches_only: false
-            required_reviewers: []
-            reviewers_available: false
+        people:
+            bypass_known: true
+            found:
+                - email: ana@acme.example
+                  external: false
+                  gcp_admin:
+                    - acme-prod
+                  gcp_destructive:
+                    - acme-prod
+                  gcp_power_known: true
+                  gcp_roles:
+                    - acme-prod:roles/owner
+                  github_admin_repos: []
+                  github_bypass:
+                    - acme/api
+                  github_org_role: admin
+                  github_present: true
+                  github_repos: []
+                  google_active: false
+                  google_admin: false
+                  google_present: false
+                  id: person:ana
+                  leaver: false
+                  prod_destructive:
+                    - acme-prod
+                  systems:
+                    - gcp
+                    - github
+            group_members_known: true
+            production_basis: ""
+            systems_read:
+                - gcp
+                - github
+            unlinked:
+                bypass_repos: []
+                gcp: 0
+                github: 0
+                total: 0
+        projects:
+            - member_domains: []
+              name: acme-prod
+              number: "1"
+        rules:
+            bypass: allowed
+            bypass_actors_known: true
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: marked production with no environment
+      expect: FAIL
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        production: true
+        protection_available: true
+      facts:
         people:
             bypass_known: true
             found:

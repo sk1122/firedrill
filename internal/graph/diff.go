@@ -3,6 +3,7 @@ package graph
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"sort"
 	"strings"
@@ -234,6 +235,7 @@ func Compared(kind string) bool {
 // and file rather than line. The result is sorted: weakenings first, then by
 // type, then by subject.
 func Diff(old, new Snapshot) DiffResult {
+	old, new = restoreScopes(old), restoreScopes(new)
 	res := DiffResult{From: old.Time, To: new.Time, Changes: []Change{}, Skipped: []string{}}
 	oc, nc := coverageOf(old), coverageOf(new)
 	skips := map[string]string{}
@@ -241,6 +243,9 @@ func Diff(old, new Snapshot) DiffResult {
 		a, b := oc.state(sc), nc.state(sc)
 		if a == stateRead && b == stateRead {
 			return true
+		}
+		if a == stateAbsent && b == stateAbsent {
+			return false // neither run read it: there is nothing to say
 		}
 		var parts []string
 		if a != stateRead {
@@ -372,6 +377,54 @@ var emailRe = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}
 // noEmails keeps addresses out of a summary. People are hashed IDs, and a
 // service account address is replaced too, to be safe.
 func noEmails(s string) string { return emailRe.ReplaceAllString(s, "[address]") }
+
+// restoreScopes undoes the record scanner on the names nodes are scoped by.
+// The scanner may replace a repo, project or domain name that looks like a
+// secret with its hash in every attribute, while node IDs keep it, so a scan
+// record's ID still holds the real name its scope attribute lost. Each
+// replaced name is put back wherever a node's repo, project, domain or scope
+// attribute holds it, so a node is scoped by the name its scan record is
+// found under. The snapshot passed in is not changed.
+func restoreScopes(s Snapshot) Snapshot {
+	real := map[string]string{}
+	for _, n := range s.Nodes {
+		var attr, name string
+		var ok bool
+		switch n.Kind {
+		case KindScan:
+			scanner, _ := n.Attrs["scanner"].(string)
+			attr, _ = n.Attrs["scope"].(string)
+			name, ok = strings.CutPrefix(string(n.ID), "scan:"+scanner+"/")
+		case KindGCPProject:
+			attr, _ = n.Attrs["name"].(string)
+			name, ok = strings.CutPrefix(string(n.ID), "gcp:project/")
+		}
+		if ok && attr != name && strings.HasPrefix(attr, "secret:") {
+			real[attr] = name
+		}
+	}
+	if len(real) == 0 {
+		return s
+	}
+	out := s
+	out.Nodes = make([]Node, len(s.Nodes))
+	for i, n := range s.Nodes {
+		for _, k := range []string{"repo", "project", "domain", "scope", "name"} {
+			if k == "name" && n.Kind != KindGCPProject {
+				continue
+			}
+			v, _ := n.Attrs[k].(string)
+			if r, ok := real[v]; ok {
+				attrs := make(map[string]any, len(n.Attrs))
+				maps.Copy(attrs, n.Attrs)
+				n.Attrs = attrs
+				n.Attrs[k] = r
+			}
+		}
+		out.Nodes[i] = n
+	}
+	return out
+}
 
 // ---- coverage
 
@@ -923,7 +976,15 @@ func edgeDiff(e Edge, isNew bool, new, old Snapshot, power map[ID]string) Change
 	case EdgeFoundIn:
 		c.Type, c.Weakening, c.Summary = ChangeSecretSeen, true, fmt.Sprintf("%s seen in a new place: %s", from, to)
 	case EdgeDeploysTo:
+		// A new environment that gates its deploys, with a required reviewer or
+		// protected branches only, is a new path but not a weakening by
+		// itself, so a team that adds a production environment is not flagged
+		// for it. One that gates nothing is.
 		c.Type, c.Weakening, c.Summary = ChangeDeployPath, true, fmt.Sprintf("new deploy path: %s deploys to %s", from, to)
+		if n, ok := nodeIn(e.To, new); ok && (len(listOf(norm(n.Attrs["required_reviewers"]))) > 0 || isTrue(n.Attrs["protected_branches_only"])) {
+			c.Weakening = false
+			c.Summary += ", gated by a reviewer or protected branches"
+		}
 	case EdgeAdminOf:
 		c.Type, c.Weakening, c.Summary = ChangeNewAdmin, true, fmt.Sprintf("%s is now an admin of %s", from, to)
 	case EdgeCanBypass:
@@ -1479,8 +1540,9 @@ func classifyAttr(attr string, before, after any) (string, bool, string) {
 }
 
 // egressRank orders an agent config's egress from most restricted to open, as
-// the files connector writes it.
-var egressRank = map[string]int{"allowlist": 0, "partial": 1, "unsupported": 2, "open": 3}
+// the files connector writes it. none is a file with no egress setting, such
+// as a .cursorignore, which is never judged.
+var egressRank = map[string]int{"none": 0, "allowlist": 0, "partial": 1, "unsupported": 2, "open": 3}
 
 // classifyServers compares MCP servers by name, then their credentials, host,
 // pin and package. A server given a new credential, moved to a host nobody

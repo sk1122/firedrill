@@ -7,6 +7,7 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: false
         protection_available: true
       facts:
         bots:
@@ -26,6 +27,7 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: false
         protection_available: true
       facts:
         bots:
@@ -45,6 +47,7 @@ cases:
         name: acme/api
         plan: free
         private: true
+        production: false
         protection_available: false
       facts:
         bots:

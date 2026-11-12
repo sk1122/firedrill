@@ -69,6 +69,8 @@ A pinned package that isn't on `mcp_packages` gives WARN, not FAIL. Firedrill ke
 - **VS Code**: in `.vscode/mcp.json`, run each local server with `"sandboxEnabled": true` and `"sandbox": {"network": {"allowedDomains": [...]}}`. VS Code's agent terminal settings are not read.
 - **Gemini CLI** has no setting that lists hosts, and local MCP servers under Claude Code and Cursor have none either, so those warn.
 
+A `.cursorignore` only lists what Cursor may not read. Its paths still keep secrets out of agent reach, but it opens and limits no outbound access, so it is not judged here: a repo whose only agent file is a `.cursorignore` gives N/A, unless a CI job there runs an agent.
+
 `*` or `0.0.0.0/0` in an allowlist fails. The Agents page shows each config's outbound access and its hosts. Only committed settings are read: whether a sandbox actually enforces them on each machine is not checked.
 
 ### A boundary outside the agent

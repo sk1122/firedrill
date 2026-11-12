@@ -7,6 +7,7 @@ cases:
         name: acme/api
         plan: enterprise
         private: true
+        production: true
         protection_available: true
       facts:
         bots:
@@ -15,6 +16,8 @@ cases:
         env:
             admin_bypass: false
             exists: true
+            names:
+                - production
             prevent_self_review: true
             protected_branches_only: true
             required_reviewers:
@@ -34,6 +37,7 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: true
         protection_available: true
       facts:
         bots:
@@ -42,6 +46,8 @@ cases:
         env:
             admin_bypass: false
             exists: true
+            names:
+                - production
             prevent_self_review: false
             protected_branches_only: true
             required_reviewers: []
@@ -60,6 +66,7 @@ cases:
         name: acme/api
         plan: enterprise
         private: true
+        production: true
         protection_available: true
       facts:
         bots:
@@ -68,6 +75,8 @@ cases:
         env:
             admin_bypass: false
             exists: true
+            names:
+                - production
             prevent_self_review: true
             protected_branches_only: true
             required_reviewers:
@@ -87,6 +96,7 @@ cases:
         name: acme/api
         plan: enterprise
         private: true
+        production: true
         protection_available: true
       facts:
         bots:
@@ -95,6 +105,8 @@ cases:
         env:
             admin_bypass: false
             exists: true
+            names:
+                - production
             prevent_self_review: true
             protected_branches_only: true
             required_reviewers:
@@ -114,6 +126,7 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: false
         protection_available: true
       facts:
         bots:
@@ -122,6 +135,7 @@ cases:
         env:
             admin_bypass: false
             exists: false
+            names: []
             prevent_self_review: false
             protected_branches_only: false
             required_reviewers: []
@@ -140,6 +154,7 @@ cases:
         name: acme/api
         plan: free
         private: true
+        production: true
         protection_available: false
       facts:
         bots:
@@ -148,6 +163,8 @@ cases:
         env:
             admin_bypass: false
             exists: true
+            names:
+                - production
             prevent_self_review: false
             protected_branches_only: false
             required_reviewers: []
@@ -160,3 +177,59 @@ cases:
             dismiss_stale: false
             force_push_allowed: false
             required_approvals: 0
+    - name: marked production with no environment, main protected
+      expect: WARN
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        production: true
+        protection_available: true
+      facts:
+        bots:
+            can_approve_pull_requests: false
+            default_token_permission: read
+        env:
+            admin_bypass: false
+            exists: false
+            names: []
+            prevent_self_review: false
+            protected_branches_only: false
+            required_reviewers: []
+            reviewers_available: false
+        rules:
+            bypass: none
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1
+    - name: marked production with no environment, bypass allowed
+      expect: FAIL
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        production: true
+        protection_available: true
+      facts:
+        bots:
+            can_approve_pull_requests: false
+            default_token_permission: read
+        env:
+            admin_bypass: false
+            exists: false
+            names: []
+            prevent_self_review: false
+            protected_branches_only: false
+            required_reviewers: []
+            reviewers_available: false
+        rules:
+            bypass: allowed
+            bypass_source: api
+            code_owner_review: false
+            deletion_allowed: false
+            dismiss_stale: true
+            force_push_allowed: false
+            required_approvals: 1

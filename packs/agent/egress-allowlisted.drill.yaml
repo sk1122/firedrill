@@ -6,7 +6,8 @@ for_each: repos
 fetch:
   agents: { fact: files.agent_configs }
   boundary: { fact: files.egress_boundary }
-na_reason: "agents run with their defaults; check laptops with --include-home"
+applies_when: agents.found.exists(a, a.egress != "none") || boundary.agents_configured
+na_reason: "no committed agent settings and no CI job running an agent (a .cursorignore only limits what Cursor reads); agents run with their defaults, so check laptops with --include-home"
 pass_when:
   - agents.found.filter(a, a.egress == "open").size() == 0
   - agents.found.filter(a, a.egress_unbounded).size() == 0

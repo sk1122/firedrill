@@ -249,6 +249,14 @@ func TestPeopleAgentsAndGraphPages(t *testing.T) {
 			t.Errorf("people page lacks %q", want)
 		}
 	}
+	// ghost-owner is a person's account not mapped to anyone: listed apart
+	// from the service account nobody owns.
+	unmapped, _, _ := strings.Cut(people[strings.Index(people, "People's accounts not mapped to a person (1)"):], "</table>")
+	nobody, _, _ := strings.Cut(people[strings.Index(people, "Accounts no person or owner answers for (1)"):], "</table>")
+	if !strings.Contains(unmapped, "no entry in people.yaml") || strings.Contains(nobody, "no entry in people.yaml") ||
+		!strings.Contains(nobody, "a service account with power") {
+		t.Errorf("people's own accounts and principals nobody owns are listed apart:\n%s\n%s", unmapped, nobody)
+	}
 	// Sorted by ID, never by power.
 	var order []string
 	for _, m := range regexp.MustCompile(`<tr id="person-([0-9a-f]{8})"`).FindAllStringSubmatch(people, -1) {

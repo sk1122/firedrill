@@ -23,6 +23,7 @@ func init() {
 	registerAIKeys()
 	registerGitHubPeople()
 	registerPeople()
+	applyIdentity()
 }
 
 func registerTargets() {
@@ -72,10 +73,19 @@ func listOf(g graph.Reader, kind, source string, fields ...string) Result {
 
 func registerGitHub() {
 	Register(Def{
+		// production is true for a repo listed under production in config, or
+		// with a production environment (see productionEnvs).
 		Name: "github.repos", Connector: "github",
-		Shape: List(Obj(map[string]*Shape{"name": Str, "private": Bool, "plan": Str, "protection_available": Bool})),
+		Shape: List(Obj(map[string]*Shape{"name": Str, "private": Bool, "plan": Str, "protection_available": Bool, "production": Bool})),
 		Fn: func(g graph.Reader, _ Args) (Result, error) {
-			return listOf(g, graph.KindGitHubRepo, "api", "name", "private", "plan", "protection_available"), nil
+			r := listOf(g, graph.KindGitHubRepo, "api", "name", "private", "plan", "protection_available")
+			listed := productionRepos(g)
+			for _, row := range r.Data.([]any) {
+				m := row.(map[string]any)
+				name, _ := m["name"].(string)
+				m["production"] = listed[strings.ToLower(name)] || len(productionEnvs(g, name)) > 0
+			}
+			return r, nil
 		},
 	})
 	Register(Def{
@@ -106,10 +116,16 @@ func registerGitHub() {
 		},
 	})
 	Register(Def{
+		// name production means any production environment: one named
+		// production, prod or live, or listed under
+		// github.production_environments, in any case. With several, each
+		// gating field is the weakest of them, since a repo is only as gated as
+		// its least protected production environment; names lists them. Any
+		// other name is matched exactly.
 		Name: "github.environment", Connector: "github", Args: []string{"name"},
 		Shape: Obj(map[string]*Shape{
 			"exists": Bool, "reviewers_available": Bool, "required_reviewers": List(Str),
-			"prevent_self_review": Bool, "admin_bypass": Bool, "protected_branches_only": Bool,
+			"prevent_self_review": Bool, "admin_bypass": Bool, "protected_branches_only": Bool, "names": List(Str),
 		}),
 		Fn: func(g graph.Reader, a Args) (Result, error) {
 			repo := a.TargetName()
@@ -118,18 +134,36 @@ func registerGitHub() {
 				return Result{}, notCollected("github.environment", repo)
 			}
 			reviewers := reviewersAvailable(repoNode)
-			id := graph.ID("github:env/" + repo + "/" + a.String("name"))
-			n, ok := g.Get(id)
-			if !ok {
+			var envs []graph.Node
+			if name := a.String("name"); strings.EqualFold(name, "production") {
+				envs = productionEnvs(g, repo)
+			} else if n, ok := g.Get(graph.ID("github:env/" + repo + "/" + name)); ok {
+				envs = []graph.Node{n}
+			}
+			if len(envs) == 0 {
 				return Result{Read: []graph.ID{repoNode.ID}, Source: "api", Data: map[string]any{
 					"exists": false, "reviewers_available": reviewers, "required_reviewers": []any{},
-					"prevent_self_review": false, "admin_bypass": false, "protected_branches_only": false,
+					"prevent_self_review": false, "admin_bypass": false, "protected_branches_only": false, "names": []any{},
 				}}, nil
 			}
-			row := attrsOf(n, "required_reviewers", "prevent_self_review", "admin_bypass", "protected_branches_only")
-			row["exists"] = true
-			row["reviewers_available"] = reviewers
-			return Result{Read: []graph.ID{n.ID, repoNode.ID}, Source: "api", Data: row}, nil
+			row := map[string]any{"exists": true, "reviewers_available": reviewers, "names": []any{}}
+			read := []graph.ID{repoNode.ID}
+			for i, n := range envs {
+				read = append(read, n.ID)
+				row["names"] = append(row["names"].([]any), strings.TrimPrefix(string(n.ID), "github:env/"+repo+"/"))
+				got := attrsOf(n, "required_reviewers", "prevent_self_review", "admin_bypass", "protected_branches_only")
+				if i == 0 {
+					maps.Copy(row, got)
+					continue
+				}
+				if l, _ := got["required_reviewers"].([]any); len(l) < len(row["required_reviewers"].([]any)) {
+					row["required_reviewers"] = l
+				}
+				row["prevent_self_review"] = isTrue(row["prevent_self_review"]) && isTrue(got["prevent_self_review"])
+				row["admin_bypass"] = isTrue(row["admin_bypass"]) || isTrue(got["admin_bypass"])
+				row["protected_branches_only"] = isTrue(row["protected_branches_only"]) && isTrue(got["protected_branches_only"])
+			}
+			return Result{Read: read, Source: "api", Data: row}, nil
 		},
 	})
 	Register(Def{
@@ -145,6 +179,50 @@ func registerGitHub() {
 				Data: attrsOf(n, "can_approve_pull_requests", "default_token_permission")}, nil
 		},
 	})
+}
+
+// productionEnvs lists a repo's production environments: those whose name, in
+// any case, is one the settings node lists, or production, prod or live when
+// there is none. They come sorted by ID.
+func productionEnvs(g graph.Reader, repo string) []graph.Node {
+	names := map[string]bool{}
+	if n, ok := g.Get(graph.ID("config:settings")); ok {
+		if l, ok := n.Attrs["production_environments"].([]any); ok {
+			for _, v := range l {
+				if s, ok := v.(string); ok {
+					names[strings.ToLower(s)] = true
+				}
+			}
+		}
+	}
+	if len(names) == 0 {
+		for _, s := range []string{"production", "prod", "live"} {
+			names[s] = true
+		}
+	}
+	prefix := "github:env/" + repo + "/"
+	var out []graph.Node
+	for _, n := range g.Nodes(graph.KindEnvironment) {
+		if name, ok := strings.CutPrefix(string(n.ID), prefix); ok && names[strings.ToLower(name)] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// productionRepos is the set of repos listed under production in config, in
+// lower case.
+func productionRepos(g graph.Reader) map[string]bool {
+	out := map[string]bool{}
+	if n, ok := g.Get(graph.ID("config:settings")); ok {
+		l, _ := n.Attrs["production_repos"].([]any)
+		for _, v := range l {
+			if s, ok := v.(string); ok {
+				out[strings.ToLower(s)] = true
+			}
+		}
+	}
+	return out
 }
 
 // reviewersAvailable says whether the plan offers required reviewers on
@@ -805,6 +883,10 @@ var backupShape = Obj(map[string]*Shape{
 		"last_restore_days": Int, "restore_source": Str, "restore_current": Bool, "restore_known": Bool, "restore_detail": Str,
 	})),
 	"systems": List(Str), "min_retention_days": Int, "restore_days": Int,
+	// unread lists the projects or profiles whose databases could not be
+	// looked at at all, so a drill can warn rather than read nothing found as
+	// no database.
+	"unread": List(Str),
 })
 
 // backupScanners are the scan records the aws and gcp connectors write for
@@ -837,7 +919,8 @@ func registerBackups() {
 func backupRows(g graph.Reader, a Args, fact string, systems ...string) (Result, error) {
 	r := Result{Source: "api"}
 	read := []any{}
-	var partial []string
+	unread := []any{}
+	var scans []graph.Node
 	for _, sys := range systems {
 		got := false
 		for _, n := range g.Nodes(graph.KindScan) {
@@ -847,9 +930,10 @@ func backupRows(g graph.Reader, a Args, fact string, systems ...string) (Result,
 			if msg := strAttr(n, "error"); msg != "" {
 				return Result{}, fmt.Errorf("%s: %s", fact, msg)
 			}
-			if p := strAttr(n, "partial"); p != "" {
-				partial = append(partial, p)
+			if isTrue(n.Attrs["unread"]) {
+				unread = append(unread, strAttr(n, "scope"))
 			}
+			scans = append(scans, n)
 			r.Read = append(r.Read, n.ID)
 			got = true
 		}
@@ -860,7 +944,9 @@ func backupRows(g graph.Reader, a Args, fact string, systems ...string) (Result,
 	if len(read) == 0 {
 		return Result{}, fmt.Errorf("%s: no databases were read from %s", fact, strings.Join(systems, " or "))
 	}
-	r.Partial = strings.Join(partial, "; ")
+	// A problem shared by many projects, such as an API off where calls are
+	// billed, reads as one line naming them.
+	r.Partial = strings.Join(GroupScanMessages(scans, "partial"), "; ")
 	minDays := settingsInt(g, "min_retention_days", 7)
 	declared := map[string]graph.Node{}
 	for _, n := range g.Nodes(graph.KindConfigBackup) {
@@ -924,7 +1010,7 @@ func backupRows(g graph.Reader, a Args, fact string, systems ...string) (Result,
 		rows = append(rows, row)
 		r.Read = append(r.Read, n.ID)
 	}
-	r.Data = map[string]any{"found": rows, "systems": read, "min_retention_days": minDays, "restore_days": restoreDays}
+	r.Data = map[string]any{"found": rows, "systems": read, "min_retention_days": minDays, "restore_days": restoreDays, "unread": unread}
 	return r, nil
 }
 

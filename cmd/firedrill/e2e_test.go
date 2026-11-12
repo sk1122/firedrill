@@ -497,7 +497,7 @@ func TestHubInstallUpdateAndRefusals(t *testing.T) {
 	e.vars = append(e.vars, "FIREDRILL_SALT="+strings.Repeat("a", 64))
 	h := e.hubCopy()
 	e.mustRun("init", "--yes", "--owner", "@me")
-	if out := e.mustRun("hub", "--from", h, "index", h, "--out", filepath.Join(e.work, "index.json")); !strings.Contains(out, "38 drills, 180 test cases, 0 with problems") {
+	if out := e.mustRun("hub", "--from", h, "index", h, "--out", filepath.Join(e.work, "index.json")); !strings.Contains(out, "38 drills, 194 test cases, 0 with problems") {
 		t.Fatal(out)
 	}
 	if out := e.mustRun("test", filepath.Join(h, "drills")); !strings.Contains(out, "0 failing, 0 drills with problems") {

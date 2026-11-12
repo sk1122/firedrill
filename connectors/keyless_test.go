@@ -120,7 +120,7 @@ func TestSecretDrillVerdicts(t *testing.T) {
 		{"fake key in a .example file does not fail", tag.Pass, map[string]string{"k.env.example": "API_KEY=" + railwayToken, "a.txt": "x"}},
 		{"example file does not fail", tag.Pass, map[string]string{".env.example": "API_KEY=" + railwayToken}},
 		{"prod env file fails", tag.Fail, map[string]string{".env.production": "API_KEY=" + railwayToken}},
-		{"known prefix fails", tag.Fail, map[string]string{"lib/x.py": `k = "sk_live_abcdefghijklmnop"`}},
+		{"known prefix fails", tag.Fail, map[string]string{"lib/x.py": `k = "` + "sk_live_" + "abcdefghijklmnop" + `"`}},
 		{"denied to the agent passes", tag.Pass, map[string]string{
 			".env.production":       "API_KEY=" + railwayToken,
 			".claude/settings.json": `{"permissions":{"deny":["Read(./.env.production)"]}}`,
@@ -155,7 +155,7 @@ func TestSharedProdKeys(t *testing.T) {
 	if shared.Verdict != tag.Fail {
 		t.Fatalf("got %s", shared.Verdict)
 	}
-	apart := runFiles(t, "access/no-shared-prod-keys", writeRepo(t, "r", map[string]string{".env.production": "API_KEY=" + railwayToken, ".env.staging": "API_KEY=Zx8mQ2pL9vT4rW7yB1nC6dF3"}))
+	apart := runFiles(t, "access/no-shared-prod-keys", writeRepo(t, "r", map[string]string{".env.production": "API_KEY=" + railwayToken, ".env.staging": "API_KEY=" + "Zx8mQ2pL9" + "vT4rW7yB1nC6dF3"}))
 	if apart.Verdict != tag.Pass {
 		t.Fatalf("got %s", apart.Verdict)
 	}

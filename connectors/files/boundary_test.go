@@ -218,3 +218,34 @@ func TestScanRepoWritesEgressBoundary(t *testing.T) {
 }
 
 func fmtSprintf(f string, a ...any) string { return fmt.Sprintf(f, a...) }
+
+// A repo whose only agent file is a .cursorignore has no agent whose egress
+// can be judged: no boundary place is counted and agents are not configured.
+func TestCursorignoreAloneConfiguresNoAgent(t *testing.T) {
+	root := writeTree(t, map[string]string{".cursorignore": ".env\n", ".env": "ACME_TOKEN=" + "x7Kq9Lm2Np4Rs6Tv8Wx0Yz3Ab5Cd7Ef9"})
+	all, err := WalkLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := graph.New()
+	s := connector.Scope{Project: &config.Project{}, Hasher: graph.NewHasher("salt"), Now: time.Unix(0, 0)}
+	if err := scanRepo(connector.RepoTarget{Name: "acme/api", Path: root}, all, s, g); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := g.Get("egress-boundary:acme/api")
+	if n.Attrs["agents_configured"] != false {
+		t.Fatalf("%+v", n.Attrs)
+	}
+	if scan, _ := g.Get(graph.ScanID("egress_boundary", "acme/api")); scan.Attrs["inspected"] != int64(0) {
+		t.Fatalf("%+v", scan.Attrs)
+	}
+	cfg, _ := g.Get("agent:acme/api/.cursorignore")
+	if cfg.Attrs["egress"] != EgressNone {
+		t.Fatalf("%+v", cfg.Attrs)
+	}
+	for _, sec := range g.Nodes(graph.KindSecretSeen) {
+		if sec.Attrs["agent_readable"] != false {
+			t.Fatalf("the deny-read path still hides .env from agents: %+v", sec.Attrs)
+		}
+	}
+}

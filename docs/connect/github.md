@@ -60,6 +60,23 @@ firedrill export rulesets
 
 It writes `.firedrill/evidence/rulesets.json`. Commit it; CI uses it for 30 days, and records say which commit it came from. The file holds each ruleset's bypass list as GitHub returns it: actor type, actor ID and bypass mode, with team and app IDs but no logins.
 
+## Which repos deploy to production
+
+`change/prod-deploy-gated`, `change/no-solo-ship` and `paths/no-single-person-code-to-prod-data` judge repos that deploy to production. A repo does when it has a GitHub environment named `production`, `prod` or `live`, in any case. Add other names your team uses:
+
+```yaml
+github:
+  production_environments: [release, prd]
+```
+
+With several production environments, each gate is judged by the least protected of them. A repo that deploys from somewhere else, such as Vercel or Argo CD, with no production environment in GitHub, goes under the top-level `production` list as `org/repo`, next to the AWS accounts and GCP projects there:
+
+```yaml
+production: [acme/api, acme-prod]
+```
+
+Such a repo fails `change/prod-deploy-gated`, since nothing in GitHub gates its deploys, and warns on `change/no-solo-ship` while main is protected, since how its deploys are approved cannot be read. A repo with neither is N/A on all three, and the reason names both settings.
+
 ## Who can reach your repos
 
 Firedrill reads, for `github.org` and each repo in `github.repos`:

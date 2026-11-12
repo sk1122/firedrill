@@ -66,8 +66,10 @@ func writeRegisters(s connector.Scope, out graph.Writer) {
 	out.Node(graph.Node{ID: SettingsID, Kind: graph.KindConfigSettings, Source: "config", SeenAt: s.Now,
 		Attrs: map[string]any{
 			"review_days": int64(cfg.AppReviewDays()), "min_retention_days": int64(cfg.MinRetentionDays()),
-			"restore_days":       int64(cfg.RestoreDays()),
-			"production_markers": int64(len(cfg.Production)),
+			"restore_days":            int64(cfg.RestoreDays()),
+			"production_markers":      int64(cfg.ProductionMarkers()),
+			"production_repos":        toAny(cfg.ProductionRepos()),
+			"production_environments": toAny(cfg.ProductionEnvironments()),
 		}})
 	for _, a := range s.Project.Apps {
 		out.Node(graph.Node{ID: graph.ID("config-app:" + a.ClientID), Kind: graph.KindConfigApp, Source: "config", SeenAt: s.Now,
@@ -131,4 +133,12 @@ func writeOwners(s connector.Scope, out graph.Writer) {
 			out.Edge(graph.Edge{From: id, To: graph.ID(pr), Kind: graph.EdgeOwns, Source: "config"})
 		}
 	}
+}
+
+func toAny(in []string) []any {
+	out := make([]any, len(in))
+	for i, v := range in {
+		out[i] = v
+	}
+	return out
 }

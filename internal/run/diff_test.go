@@ -17,6 +17,11 @@ import (
 )
 
 // githubWriter writes one repo as the GitHub connector does.
+
+// awsKeyID1 is a made-up AWS access key ID, built by concatenation so this
+// file holds none the secret scanner would find in it.
+const awsKeyID1 = "AKIA" + "AAAAAAAAAAAAAAA1"
+
 func githubWriter(approvals int64, bypass string) func(graph.Writer) {
 	return func(w graph.Writer) {
 		w.Node(graph.Node{ID: "github:repo/acme/api", Kind: graph.KindGitHubRepo, Source: "github", SeenAt: testNow,
@@ -172,10 +177,10 @@ func TestAnnotateGroupsByPerson(t *testing.T) {
 	new := graph.Snapshot{Edges: []graph.Edge{{From: "person:aaaa1111bbbb2222", To: "google:user/x", Kind: graph.EdgeSamePerson, Source: "link"}}}
 	d := graph.DiffResult{Changes: []graph.Change{
 		{Type: graph.ChangeNewAdmin, Subject: "google:user/x", Weakening: true},
-		{Type: graph.ChangeNewKey, Subject: "aws:key/AKIAAAAAAAAAAAAAAAA1", Weakening: true},
+		{Type: graph.ChangeNewKey, Subject: "aws:key/" + awsKeyID1, Weakening: true},
 		{Type: graph.ChangeRemoved, Subject: "google:user/x", Attr: "suspended"},
 	}}
-	Annotate(&d, old, new, Caught{"aws:key/AKIAAAAAAAAAAAAAAAA1": {{Drill: "access/no-shared-prod-keys", Target: ""}}})
+	Annotate(&d, old, new, Caught{"aws:key/" + awsKeyID1: {{Drill: "access/no-shared-prod-keys", Target: ""}}})
 	if d.Changes[0].Person != "aaaa1111" || d.Changes[1].Person != "" || d.Changes[1].CaughtBy[0].Drill != "access/no-shared-prod-keys" {
 		t.Fatalf("%+v", d.Changes)
 	}

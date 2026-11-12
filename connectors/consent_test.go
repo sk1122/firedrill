@@ -212,9 +212,10 @@ func TestAmbientCredentialsAreNotConsent(t *testing.T) {
 		if strings.Contains(p, "/groups") || strings.Contains(p, "/roles/") {
 			t.Errorf("a linking call left before connect: %s", p)
 		}
-		// Nor Cloud SQL operations, read for restores.
-		if strings.Contains(p, "/operations") {
-			t.Errorf("a restore read left before connect: %s", p)
+		// Nor Cloud SQL operations, read for restores, or the Service Usage
+		// read of whether the Cloud SQL Admin API is on.
+		if strings.Contains(p, "/operations") || strings.Contains(p, "/services/sqladmin.googleapis.com") {
+			t.Errorf("a Cloud SQL read left before connect: %s", p)
 		}
 		// Nor any audit read: GitHub's audit log, Google's Reports API or
 		// Cloud Logging's entries.list.

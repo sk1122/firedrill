@@ -205,14 +205,15 @@ pass_when:
   - size(accounts.systems_read) > 0 && (accounts.group_members_known || !accounts.group_members_known)
   - accounts.production_basis == accounts.production_basis
   - accounts.unlinked.total == accounts.unlinked.github + accounts.unlinked.gcp
-  - unlinked.found.all(u, u.system != "" && u.kind != "" && u.id != "" && (u.is_admin || !u.is_admin) && u.reason != "")
+  - unlinked.found.all(u, u.system != "" && u.kind != "" && u.id != "" && (u.is_admin || !u.is_admin) && u.reason != "" && (u.human || !u.human))
   - size(unlinked.systems_read) > 0
   - >-
     admins.found.all(a, a.system != "" && a.kind != "" && a.id != "" && a.role != "" && a.project == a.project
     && (a.production || !a.production) && (a.linked || !a.linked) && a.person == a.person && size(a.people) >= 0
     && a.owner == a.owner && (a.unowned || !a.unowned) && (a.current || !a.current)
     && (a.current_known || !a.current_known) && (a.power_known || !a.power_known)
-    && (a.members_known || !a.members_known) && (a.departed || !a.departed))
+    && (a.members_known || !a.members_known) && (a.departed || !a.departed)
+    && (a.human || !a.human) && (a.unverified || !a.unverified))
   - >-
     powers.found.all(p, p.id != "" && p.email == p.email && size(p.systems) >= 0 && (p.external || !p.external)
     && (p.leaver || !p.leaver) && (p.github_present || !p.github_present) && p.github_org_role != ""
@@ -337,8 +338,12 @@ func TestEveryAdminLinksToAPersonOrShowsAsUnowned(t *testing.T) {
 	}
 	for _, a := range rows(admins) {
 		linked, owner, unowned := a["linked"] == true, a["owner"].(string), a["unowned"] == true
-		if !linked && owner == "" && (!unowned || !unlinked[a["id"].(string)]) {
-			t.Errorf("an admin neither links to a person nor shows as unowned: %+v", a)
+		unverified := a["unverified"] == true
+		if !linked && owner == "" && (unowned == unverified || !unlinked[a["id"].(string)]) && a["members_known"] == true {
+			t.Errorf("an admin neither links to a person nor shows as unowned or unverified: %+v", a)
+		}
+		if a["human"] == true && unowned {
+			t.Errorf("a human account is never unowned, only unverified: %+v", a)
 		}
 		if linked && unowned {
 			t.Errorf("a linked admin reads as unowned: %+v", a)
@@ -375,8 +380,8 @@ func TestEveryAdminLinksToAPersonOrShowsAsUnowned(t *testing.T) {
 	if anaGitHub == nil || anaGitHub["linked"] != true {
 		t.Fatalf("ana-dev links to ana through people.yaml and her alias: %+v", rows(admins))
 	}
-	if ghost == nil || ghost["unowned"] != true || !unlinked[ghost["id"].(string)] {
-		t.Fatalf("an unlinked GitHub owner shows as unowned: %+v", ghost)
+	if ghost == nil || ghost["unowned"] != false || ghost["unverified"] != true || ghost["human"] != true || !unlinked[ghost["id"].(string)] {
+		t.Fatalf("an unlinked GitHub owner is a human not mapped to a person, not unowned: %+v", ghost)
 	}
 	var owners []map[string]any
 	for _, a := range rows(admins) {
@@ -547,8 +552,9 @@ func TestTier2DrillsOverAMixedEstate(t *testing.T) {
 		"paths/no-single-person-code-to-prod-data": "first: person " + salt.Email("ana@acme.example")[:8],
 		// dee left and still has an active Google account.
 		"access/leavers-gone-everywhere": "first: person " + salt.Email("dee@acme.example")[:8],
-		// ghost-owner owns the GitHub org and maps to nobody.
-		"access/every-admin-is-someone": "no person or owner answers for it",
+		// The deployer service account holds Security Admin with no owner;
+		// ghost-owner, a human, is only not mapped to a person.
+		"access/every-admin-is-someone": "1 GCP service account has no owner; 1 GitHub admin is not mapped to a person",
 		// Ana's own token sits in a file the agent reads.
 		"agent/agent-has-own-identity": "in .claude/settings.local.json",
 	} {

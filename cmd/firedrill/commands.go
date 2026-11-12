@@ -200,7 +200,10 @@ The IAM API needs the cloud-platform scope, so the reader's roles keep it to rea
 FIREDRILL_GCP_CREDENTIALS to a credentials file's path.
 List projects under gcp.projects in config.yaml. Owner domains come from gcp.member_domains, or google.domain.
 Cloud SQL backups are read through the sqladmin API, which Viewer covers: turn on
-sqladmin.googleapis.com in the reader's own project, where calls are billed.
+sqladmin.googleapis.com in the reader's own project, where calls are billed. When a read
+says the API is off, Firedrill asks the Service Usage API (GET of that one service, which
+Viewer covers) whether it is off in the listed project too: then the project has no
+Cloud SQL to read. Otherwise the recovery drills warn and name what to turn on.
 Name production projects under production in config.yaml; with none named, every project counts.
 Reads use GET, plus POST getIamPolicy on each listed project and the token calls, each by exact URL.`,
 
@@ -283,16 +286,33 @@ func connectCmd() *cobra.Command {
 			fmt.Fprintf(out, "\nConnected. Read %d items. Recorded %s under connected in config.yaml.\n", len(g.Nodes("")), name)
 			// A collection can fail on its own, such as a missing scope, while the
 			// rest worked. Its drills will give ERROR or WARN until it is fixed.
-			for _, n := range g.Nodes(graph.KindScan) {
-				if msg, _ := n.Attrs["error"].(string); msg != "" {
-					fmt.Fprintf(out, "Not readable yet: %s\n", msg)
-				} else if msg, _ := n.Attrs["partial"].(string); msg != "" {
-					fmt.Fprintf(out, "Read only in part: %s\n", msg)
-				}
+			for _, l := range scanLines(g.Nodes(graph.KindScan)) {
+				fmt.Fprintln(out, l)
 			}
 			return nil
 		},
 	}
+}
+
+// scanLines says what each collection could not read, and what it noted. A
+// problem shared by many projects is one line naming them all.
+func scanLines(scans []graph.Node) []string {
+	var out []string
+	var rest []graph.Node
+	for _, n := range scans {
+		if msg, _ := n.Attrs["error"].(string); msg != "" {
+			out = append(out, "Not readable yet: "+msg)
+			continue
+		}
+		rest = append(rest, n)
+	}
+	for _, l := range facts.GroupScanMessages(rest, "partial") {
+		out = append(out, "Read only in part: "+l)
+	}
+	for _, l := range facts.GroupScanMessages(rest, "note") {
+		out = append(out, "Note: "+l)
+	}
+	return out
 }
 
 func verifyDomainCmd() *cobra.Command {

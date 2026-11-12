@@ -19,6 +19,10 @@ type Config struct {
 	GitHub struct {
 		Org   string   `yaml:"org"`
 		Repos []string `yaml:"repos"`
+		// ProductionEnvironments are more GitHub environment names that mean
+		// production, besides production, prod and live. Names match in any
+		// case.
+		ProductionEnvironments []string `yaml:"production_environments"`
 	} `yaml:"github"`
 	Google struct {
 		Domain     string `yaml:"domain"`
@@ -83,10 +87,12 @@ type Config struct {
 		// was last restored from its backups. Unset means 90.
 		RestoreDays *int `yaml:"restore_days"`
 	} `yaml:"recovery"`
-	// Production names what is production: AWS account IDs, AWS profile names
-	// and Google Cloud project IDs. A database tagged or labelled env or
-	// environment = prod or production is production too. With nothing named
-	// and nothing tagged, every database is judged.
+	// Production names what is production: AWS account IDs, AWS profile names,
+	// Google Cloud project IDs, and GitHub repos as org/repo, for a repo that
+	// deploys to production with no production environment in GitHub. A
+	// database tagged or labelled env or environment = prod or production is
+	// production too. With no account or project named and nothing tagged,
+	// every database is judged.
 	Production []string `yaml:"production"`
 	// Connected lists the systems someone connected on purpose with firedrill
 	// connect. Only connect writes it. A system missing here is never called,
@@ -136,6 +142,41 @@ func (c Config) IsProduction(names ...string) bool {
 		}
 	}
 	return false
+}
+
+// DefaultProductionEnvironments are the GitHub environment names that mean
+// production with nothing configured.
+var DefaultProductionEnvironments = []string{"production", "prod", "live"}
+
+// ProductionEnvironments returns the GitHub environment names that mean
+// production: the defaults and github.production_environments, lower case.
+func (c Config) ProductionEnvironments() []string {
+	out := append([]string{}, DefaultProductionEnvironments...)
+	for _, n := range c.GitHub.ProductionEnvironments {
+		if n = strings.ToLower(strings.TrimSpace(n)); n != "" && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// ProductionRepos returns the GitHub repos listed under production, as
+// org/repo in lower case: the entries holding a slash. Account and project
+// IDs never do.
+func (c Config) ProductionRepos() []string {
+	var out []string
+	for _, n := range c.Production {
+		if strings.Contains(n, "/") {
+			out = append(out, strings.ToLower(strings.TrimSpace(n)))
+		}
+	}
+	return out
+}
+
+// ProductionMarkers counts the accounts, profiles and projects listed under
+// production, leaving out repos, which mark no database or project.
+func (c Config) ProductionMarkers() int {
+	return len(c.Production) - len(c.ProductionRepos())
 }
 
 // ShadowWindow returns shadow_days, or its default when unset.

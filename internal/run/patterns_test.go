@@ -24,7 +24,7 @@ func TestCutPointsAndOrphansOverTheMixedEstate(t *testing.T) {
 		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	// acme-prod has three people through Owner, and a custom role nobody
-	// could read; the org has an owner who maps to nobody. Neither is a cut
+	// could read; the org has an owner not mapped to a person. Neither is a cut
 	// point, since nobody can say one person is alone there.
 	for _, c := range cuts {
 		if strings.Contains(c.Subject, "acme-prod") || strings.Contains(c.Subject, "GitHub org") {
@@ -43,12 +43,14 @@ func TestCutPointsAndOrphansOverTheMixedEstate(t *testing.T) {
 			t.Errorf("an orphan is named by ID only: %+v", o)
 		}
 	}
-	for _, k := range []string{"github person", "gcp service_account", "github app"} {
+	for _, k := range []string{"gcp service_account", "github app"} {
 		if !kinds[k] {
 			t.Errorf("missing orphan %s: %+v", k, orphans)
 		}
 	}
-	if len(orphans) != 3 {
-		t.Fatalf("ghost-owner, the deployer service account and the release app, got %+v", orphans)
+	// ghost-owner is a person's account Firedrill could not link: unverified,
+	// not orphaned.
+	if len(orphans) != 2 || kinds["github person"] {
+		t.Fatalf("the deployer service account and the release app, got %+v", orphans)
 	}
 }
