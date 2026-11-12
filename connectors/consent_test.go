@@ -35,14 +35,16 @@ import (
 // counter stands in for the network: it counts every request that would have
 // left the machine and answers each with an error status.
 type counter struct {
-	mu sync.Mutex
-	n  map[string]int
+	mu    sync.Mutex
+	n     map[string]int
+	paths []string
 }
 
 func (c *counter) for_(name string) http.RoundTripper {
 	return rtFunc(func(r *http.Request) (*http.Response, error) {
 		c.mu.Lock()
 		c.n[name]++
+		c.paths = append(c.paths, r.URL.Path)
 		c.mu.Unlock()
 		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader(`{}`)), Header: http.Header{}, Request: r}, nil
 	})
@@ -198,6 +200,13 @@ func TestAmbientCredentialsAreNotConsent(t *testing.T) {
 	}
 	if calls := log.Calls(); len(calls) != 0 {
 		t.Fatalf("no call may be logged before connect: %+v", calls)
+	}
+	// GitHub people are part of the github connector: no members, teams or
+	// collaborators read leaves before connect github either.
+	for _, p := range net.paths {
+		if strings.Contains(p, "/members") || strings.Contains(p, "/teams") || strings.Contains(p, "/collaborators") || strings.Contains(p, "/outside_collaborators") {
+			t.Errorf("a people call left before connect: %s", p)
+		}
 	}
 
 	// What connect records after a successful access check.

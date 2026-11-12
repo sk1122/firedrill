@@ -27,6 +27,11 @@ var nameKeys = map[string]bool{"secrets": true, "cloud_key_secrets": true}
 // alone only if it is shaped like a package name (see packageName).
 var packageKeys = map[string]bool{"package": true, "command": true, "install_scripts": true, "new_install_scripts": true}
 
+// loginKeys hold GitHub logins, which facts carry for conditions and evidence.
+// A value under one is left alone only if it is shaped like a login (see
+// githubLogin).
+var loginKeys = map[string]bool{"login": true}
+
 var (
 	// secretNameRe is a GitHub secret or variable name as the workflow parser
 	// writes it: upper-case words joined by underscores.
@@ -54,7 +59,10 @@ var (
 	packageSplit  = regexp.MustCompile(`[-._/@:~+]`)
 	// hexRun is a long hex word with a digit, as in a UUID or a token, which a
 	// package name never has.
-	hexRun   = regexp.MustCompile(`^[0-9a-fA-F]{8,}$`)
+	hexRun = regexp.MustCompile(`^[0-9a-fA-F]{8,}$`)
+	// loginRe is a GitHub login: letters, digits and single hyphens, neither
+	// first nor last, or an app's bot account, which ends in [bot].
+	loginRe  = regexp.MustCompile(`^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?:\[bot\])?$`)
 	segSplit = regexp.MustCompile(`[/:.@#=+~]`)
 )
 
@@ -120,6 +128,23 @@ func packageName(v string) bool {
 	return true
 }
 
+// githubLogin reports a login such as ana-acme or x7k2q9vz4m8w. GitHub caps a
+// login at 39 characters. A random-looking login is still a login, so only a
+// word with a known secret prefix, one with the mixed case and digits of a
+// token at secret length, or a long hex run, fails.
+func githubLogin(v string) bool {
+	name := strings.TrimSuffix(v, "[bot]")
+	if len(name) > 39 || !loginRe.MatchString(v) || secrets.HasKnownPrefix(v) {
+		return false
+	}
+	for _, part := range strings.Split(name, "-") {
+		if (secrets.LooksLikeSecret(part) && mixedClass(part)) || (len(part) >= 20 && hexRun.MatchString(part) && strings.ContainsAny(part, "0123456789")) {
+			return false
+		}
+	}
+	return true
+}
+
 // safeShape reports a string whose whole value is a known structured field:
 // a hash, a hashed secret, a variable reference, an access key ID, an AI
 // provider's object ID or a graph ID.
@@ -147,7 +172,8 @@ func scanValue(v any, h graph.Hasher, where string, notes *[]string, key string)
 	exempt := exemptKeys[key]
 	switch val := v.(type) {
 	case string:
-		if (exempt && safeShape(val)) || (nameKeys[key] && secretName(val)) || (packageKeys[key] && packageName(val)) {
+		if (exempt && safeShape(val)) || (nameKeys[key] && secretName(val)) || (packageKeys[key] && packageName(val)) ||
+			(loginKeys[key] && githubLogin(val)) {
 			return val
 		}
 		// LooksLikeSecret skips values with separators, so under an exempt key a

@@ -176,6 +176,11 @@ const (
 	KindOAuthApp     = "oauth_app"
 	KindDatabase     = "database"
 	KindAIKey        = "ai_key"
+	// GitHub people. A user's login lives only in Private, like an email.
+	KindGitHubUser = "github_user"
+	KindGitHubTeam = "github_team"
+	KindGitHubApp  = "github_app"
+	KindDeployKey  = "deploy_key"
 	// Registers the team keeps in .firedrill, and the thresholds in config.yaml.
 	KindConfigApp      = "config_app"
 	KindConfigBackup   = "config_backup"
@@ -198,6 +203,12 @@ const (
 	// EdgeGrantedTo links a third-party OAuth app to a person who granted it
 	// access. The person is a hashed ID, never an email.
 	EdgeGrantedTo = "granted_to"
+	// EdgeWritesTo links a GitHub user or team to a repo it can push to, with
+	// push or maintain permission. Admin permission is admin_of instead.
+	EdgeWritesTo = "writes_to"
+	// EdgeCanBypass links a GitHub user, app or deploy key to a repo whose
+	// default branch review it can skip. Teams and roles are expanded to users.
+	EdgeCanBypass = "can_bypass"
 )
 
 // ScanID names the record of what a scanner inspected. Scope is a repo, a

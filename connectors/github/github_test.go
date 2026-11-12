@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -13,7 +14,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +40,29 @@ func (r rewrite) RoundTrip(req *http.Request) (*http.Response, error) {
 
 type routes map[string]any
 
+// paged is a list reply split into pages, served with GitHub's Link header.
+type paged [][]any
+
+// logKey, set to a *reqLog in routes, records every request's path and query.
+const logKey = "__log"
+
+type reqLog struct {
+	mu   sync.Mutex
+	uris []string
+}
+
+func (l *reqLog) add(u string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.uris = append(l.uris, u)
+}
+
+func (l *reqLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.uris...)
+}
+
 func fakeGitHub(t *testing.T, r routes) *Connector {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -46,7 +72,16 @@ func fakeGitHub(t *testing.T, r routes) *Connector {
 		if got := req.Header.Get("Authorization"); got != "Bearer tok" {
 			t.Errorf("auth header: %q", got)
 		}
-		v, ok := r[req.URL.Path]
+		if lg, ok := r[logKey].(*reqLog); ok {
+			lg.add(req.URL.RequestURI())
+		}
+		key := req.URL.Path
+		if role := req.URL.Query().Get("role"); role != "" {
+			if _, ok := r[key+"?role="+role]; ok {
+				key += "?role=" + role
+			}
+		}
+		v, ok := r[key]
 		if !ok {
 			w.WriteHeader(404)
 			_, _ = io.WriteString(w, `{"message":"Not Found"}`)
@@ -56,6 +91,17 @@ func fakeGitHub(t *testing.T, r routes) *Connector {
 			w.WriteHeader(st.code)
 			_ = json.NewEncoder(w).Encode(obj{"message": st.msg})
 			return
+		}
+		if p, isPaged := v.(paged); isPaged {
+			page, _ := strconv.Atoi(req.URL.Query().Get("page"))
+			page = max(page, 1)
+			if page < len(p) {
+				w.Header().Set("Link", fmt.Sprintf(`<https://api.github.com%s?page=%d>; rel="next"`, req.URL.Path, page+1))
+			}
+			v = []any{}
+			if page <= len(p) {
+				v = p[page-1]
+			}
 		}
 		if code, isInt := v.(int); isInt {
 			w.WriteHeader(code)

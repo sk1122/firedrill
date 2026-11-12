@@ -166,6 +166,8 @@ Four rules keep the format small:
 
 **Bypass has three values.** Ruleset bypass lists are returned only to callers with write access to the ruleset, so a read-only CI token cannot see them. `rules.bypass` is `none`, `allowed` or `unknown`. It is read from the API when the token can see it, then from the admin export, and is `unknown` otherwise. A repo admin runs `firedrill export rulesets` and commits `.firedrill/evidence/rulesets.json`; CI uses it while it is under 30 days old, and every tag that relies on it records the commit and who made it. Drills pass on `bypass != "allowed"` and warn on `unknown`, so an unseen bypass list gives WARN, which never closes or opens a safeguard.
 
+**Who can reach a repo.** The GitHub connector's people collection reads, all with GET to `api.github.com` and 100 to a page: `/orgs/{org}/members?role=admin` and `?role=member` (owners and members), `/orgs/{org}/outside_collaborators`, `/orgs/{org}/teams` and each team's `/members?role=maintainer` and `?role=member` (GitHub includes child teams' members), and for each listed repo `/repos/{repo}/collaborators?affiliation=all` (effective permission) and `/repos/{repo}/teams`. It never fetches a user profile per member. Bypass actors come from what repo settings already read: classic protection's `bypass_pull_request_allowances` and `enforce_admins`, and each ruleset's `bypass_actors` through the same API-then-export fallback. A team resolves to its members, a repository role (built-in IDs 5 admin, 2 maintain, 4 write) to collaborators at or above it, `OrganizationAdmin` to org owners; an app or deploy key stays a non-human actor. A custom role cannot be resolved, so the list is then unknown. The collection writes a scan record for the org (`github_people`) and for each repo (`github_repo_people`): unreadable members or teams are an error there, so only `github.people` and `github.bypass_actors` give ERROR; one repo's unreadable collaborators or bypass list makes them partial. An owner that is a user account has no members or teams, which the scan record says.
+
 The `can_approve_pull_requests` condition matters because a workflow allowed to approve pull requests lets a bot satisfy a required review.
 
 ### Facts in v0
@@ -175,7 +177,9 @@ Connectors write everything they see into one graph (see Architecture), and each
 | Fact | Returns | Connector |
 | --- | --- | --- |
 | `github.repos` | The repos listed in config: `name`, `private`, `plan`, `protection_available` | GitHub |
-| `github.branch_rules(branch)` | Effective rules from branch protection and rulesets merged: `required_approvals`, `dismiss_stale`, `code_owner_review`, `bypass` (`none`, `allowed`, `unknown`), `bypass_source` (`api`, `admin_export`), `force_push_allowed`, `deletion_allowed` | GitHub |
+| `github.branch_rules(branch)` | Effective rules from branch protection and rulesets merged: `required_approvals`, `dismiss_stale`, `code_owner_review`, `bypass` (`none`, `allowed`, `unknown`), `bypass_source` (`api`, `admin_export`), `force_push_allowed`, `deletion_allowed`, `bypass_actors_known` (every bypass list was read and every actor in it can be resolved to people; false when a ruleset's list is unreadable and there is no export, or it names a custom repository role) | GitHub |
+| `github.people` | One row per human account (bots and apps left out) seen in the org's members, outside collaborators, teams or the listed repos' collaborators: `id` (the hashed node ID), `login`, `org_role` (`admin`, `member`, `outside`, or `none` for a collaborator on a user account's repos), `teams` (slugs, a child team's members counted in its parents), `repos_admin`, `repos_write` (push or maintain, not admin), `repos_bypass` (repos whose default-branch review they can skip), `is_outside`. Missing organization Members: read gives ERROR here only; a repo whose collaborators or bypass list could not be read makes it partial | GitHub |
+| `github.bypass_actors(branch)` | Who can skip review on the target repo's default branch: `known`, `people` (`id`, `login`, `via`: `classic_allowance`, `admins_not_enforced` or `ruleset:<name>`, and `through`: `team:<slug>`, `role:<role>` or `org_admin`), `teams` (slugs named as actors), `apps` (`id`, `kind`: `app` or `deploy_key`, `name`), `count` (people and apps). When `known` is false nothing is listed: an unreadable list is never "nobody" | GitHub |
 | `github.environment(name)` | `exists`, `reviewers_available`, `required_reviewers`, `prevent_self_review`, `admin_bypass`, `protected_branches_only` | GitHub |
 | `github.actions_permissions` | `can_approve_pull_requests`, `default_token_permission` | GitHub |
 | `identity.users` | `email`, `suspended`, `is_admin`, `is_delegated_admin`, `mfa_enrolled`, `mfa_enforced`, `last_login`, `days_since_login`, `days_since_created` | Google Workspace (Okta in v0.1, same fields) |
@@ -376,7 +380,7 @@ next: fix, then  firedrill verify change/no-solo-ship
 
 | Connector | Setup | Access | Time |
 | --- | --- | --- | --- |
-| GitHub | `gh auth token` on a laptop; `FIREDRILL_GITHUB_TOKEN` in CI | Metadata, Administration, Environments and Contents, read | 1 minute |
+| GitHub | `gh auth token` on a laptop; `FIREDRILL_GITHUB_TOKEN` in CI | Metadata, Administration, Environments and Contents, read; organization Members, read, for people | 1 minute |
 | Google Workspace | A service account with domain-wide delegation, approved once by a super admin | `admin.directory.user.readonly`, and `admin.directory.user.security` for third-party app grants; Google has no read-only scope for `tokens.list`, so the guard keeps it to GET | About 10 minutes |
 | Google Cloud | A reader service account with read roles only, used through gcloud's application default login with impersonation, so no key exists. Tokens ask for `cloud-platform`, the only scope the IAM API accepts, so the reader's roles and the guard keep it to reads. Or a credentials file in `FIREDRILL_GCP_CREDENTIALS`. Projects under `gcp.projects`. Cloud SQL is read with `instances.list`, with `sqladmin.googleapis.com` turned on in the reader's project | Viewer and Security Reviewer on each project; Activity Analysis Viewer for key last use, which is evidence only | About 2 minutes |
 | AWS | The default credential chain, one profile per account. Databases are read in each region under `aws.regions`, or the profile's own region | A custom read policy that `connect aws` prints: `GetAccountAuthorizationDetails`, `GetAccessKeyLastUsed`, `ListAccessKeys`, `GenerateCredentialReport`, `GetCredentialReport`, `rds:DescribeDBInstances`, `rds:DescribeDBClusters`, `backup:ListCopyJobs` | About 2 minutes per account |
@@ -461,15 +465,16 @@ The graph is the core of the engine. Every connector writes what it sees into it
 | Kind | ID example |
 | --- | --- |
 | Person | `person:<hmac of email>` |
-| Account | `github:user/ravi`, `google:user/<hmac of email>`, `aws:iam-user/111111111111/deploy` |
+| Account | `github:user/<hmac of login>`, `google:user/<hmac of email>`, `aws:iam-user/111111111111/deploy` |
+| GitHub team, app, deploy key | `github:team/acme/platform`, `github:app/123456`, `github:deploy-key/acme/api` |
 | Repo, branch rule, environment, workflow | `github:repo/acme/api`, `github:env/acme/api/production` |
 | Credential | `aws:key/AKIA...` (an access key ID is an identifier, never the secret), `secret:<hmac>` |
 | Agent, MCP server | `agent:claude-code/acme/api`, `mcp:acme/api/github` |
 | Host, bucket | `host:api.acme.com`, `tf:bucket/acme/infra/logs` |
 
-Each node holds its attributes, its source and when it was seen. IDs never contain an email: people and email-keyed accounts use an HMAC of the email, and the email itself lives only in the node's attributes during the run.
+Each node holds its attributes, its source and when it was seen. IDs never contain an email or a GitHub login: people and email-keyed accounts use an HMAC of the email, GitHub users an HMAC of the lowercased login, and the email or login itself lives only in the node's private attributes during the run.
 
-**Edges** link them: `member_of`, `admin_of`, `holds` (an account or agent holds a credential), `found_in` (a secret found in a file), `same_person` (accounts matched to one person), `owns`, `points_to` (a DNS name to its target), `deploys_to`.
+**Edges** link them: `member_of` (a GitHub user to the org or a team), `admin_of` (a GitHub user to the org it owns, or a user or team to a repo it administers), `writes_to` (a GitHub user or team to a repo it can push to, with push or maintain), `can_bypass` (a GitHub user, app or deploy key to a repo whose default-branch review it can skip, teams and roles expanded to users), `holds` (an account or agent holds a credential), `found_in` (a secret found in a file), `same_person` (accounts matched to one person), `owns`, `points_to` (a DNS name to its target), `deploys_to`, `granted_to` (an OAuth app to a person who granted it).
 
 **Two layers.**
 

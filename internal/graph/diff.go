@@ -15,24 +15,27 @@ const (
 	ChangeNewKey     = "new_key"
 	ChangeSecretSeen = "secret_new_place"
 	ChangeBypassOn   = "bypass_on"
-	ChangeDeployPath = "new_deploy_path"
-	ChangeMCPServer  = "new_mcp_server"
-	ChangeOAuthGrant = "new_oauth_grant"
-	ChangePublic     = "new_public"
-	ChangeWeakened   = "protection_weakened"
-	ChangeAdded      = "added"
-	ChangeChanged    = "changed"
-	ChangeRemoved    = "removed"
+	// ChangeBypassActor is a new can_bypass edge: someone, or an app, can now
+	// skip review on a repo.
+	ChangeBypassActor = "new_bypass_actor"
+	ChangeDeployPath  = "new_deploy_path"
+	ChangeMCPServer   = "new_mcp_server"
+	ChangeOAuthGrant  = "new_oauth_grant"
+	ChangePublic      = "new_public"
+	ChangeWeakened    = "protection_weakened"
+	ChangeAdded       = "added"
+	ChangeChanged     = "changed"
+	ChangeRemoved     = "removed"
 )
 
 var changeRank = map[string]int{
-	ChangeNewAdmin: 0, ChangeNewKey: 1, ChangeSecretSeen: 2, ChangeBypassOn: 3, ChangeDeployPath: 4,
-	ChangeMCPServer: 5, ChangePublic: 6, ChangeOAuthGrant: 7, ChangeWeakened: 8, ChangeAdded: 9, ChangeChanged: 10, ChangeRemoved: 11,
+	ChangeNewAdmin: 0, ChangeNewKey: 1, ChangeSecretSeen: 2, ChangeBypassOn: 3, ChangeBypassActor: 4, ChangeDeployPath: 5,
+	ChangeMCPServer: 6, ChangePublic: 7, ChangeOAuthGrant: 8, ChangeWeakened: 9, ChangeAdded: 10, ChangeChanged: 11, ChangeRemoved: 12,
 }
 
 var changeLabels = map[string]string{
 	ChangeNewAdmin: "New admin", ChangeNewKey: "New key held", ChangeSecretSeen: "Secret seen in a new place",
-	ChangeBypassOn: "Bypass turned on", ChangeDeployPath: "New deploy path", ChangeMCPServer: "New MCP server",
+	ChangeBypassOn: "Bypass turned on", ChangeBypassActor: "New bypass actor", ChangeDeployPath: "New deploy path", ChangeMCPServer: "New MCP server",
 	ChangeOAuthGrant: "New OAuth grant",
 	ChangePublic:     "New public thing", ChangeWeakened: "Protection weakened", ChangeAdded: "Added",
 	ChangeChanged: "Changed", ChangeRemoved: "Removed",
@@ -144,6 +147,12 @@ var stableAttrs = map[string][]string{
 	KindConfigApp:    {"owner", "reviewed"},
 	KindConfigBackup: {"copy_location", "owner"},
 	KindConfigAIKey:  {"owner", "monthly_limit_usd"},
+	// GitHub people. Who can reach a repo is in their edges: member_of,
+	// admin_of, writes_to and can_bypass.
+	KindGitHubUser: {"org_role", "site_admin", "type"},
+	KindGitHubTeam: {"privacy", "parent"},
+	KindGitHubApp:  {},
+	KindDeployKey:  {},
 }
 
 // Compared reports whether the diff compares a node kind.
@@ -217,6 +226,9 @@ func Diff(old, new Snapshot) DiffResult {
 			return // the occurrence tells it
 		case e.Kind == EdgeDeploysTo && nodes[e.To]:
 			dropNode[e.To] = true // the deploy path tells it better than a new environment
+		case isNew && e.Source == "github" && (e.Kind == EdgeAdminOf || e.Kind == EdgeWritesTo || e.Kind == EdgeCanBypass):
+			// A new account's power is worth its own row: the node only says
+			// someone appeared.
 		case nodes[e.From] || nodes[e.To]:
 			return // the node tells it
 		}
@@ -232,6 +244,7 @@ func Diff(old, new Snapshot) DiffResult {
 			edgeChange(e, false)
 		}
 	}
+	outsideWithWrite(res.Changes, new)
 	if len(dropNode) > 0 {
 		kept := res.Changes[:0]
 		for _, c := range res.Changes {
@@ -433,6 +446,8 @@ func nodeScope(n Node) scope {
 		return scope{source: n.Source, scanner: "oauth_tokens"}
 	case KindAIKey:
 		return scope{source: n.Source, scanner: "ai_keys", name: n.Source}
+	case KindGitHubUser, KindGitHubTeam, KindGitHubApp, KindDeployKey:
+		return scope{source: n.Source, scanner: "github_people", name: str(n, "org")}
 	case KindDatabase:
 		if n.Source == "gcp" {
 			return scope{source: "gcp", scanner: "gcp_backups", name: str(n, "project")}
@@ -461,6 +476,20 @@ func edgeScope(e Edge, old, new Snapshot) scope {
 	if e.Kind == EdgeGrantedTo {
 		return scope{source: e.Source, scanner: "oauth_tokens"}
 	}
+	// GitHub people edges depend on the repo's or the org's people record.
+	if e.Source == "github" && peopleEdge[e.Kind] {
+		to := string(e.To)
+		if repo, ok := strings.CutPrefix(to, "github:repo/"); ok {
+			return scope{source: "github", scanner: "github_repo_people", name: repo}
+		}
+		if org, ok := strings.CutPrefix(to, "github:org/"); ok {
+			return scope{source: "github", scanner: "github_people", name: org}
+		}
+		if rest, ok := strings.CutPrefix(to, "github:team/"); ok {
+			org, _, _ := strings.Cut(rest, "/")
+			return scope{source: "github", scanner: "github_people", name: org}
+		}
+	}
 	switch e.Source {
 	case "files":
 		repo := repoOfFile(string(e.To), old, new)
@@ -482,6 +511,9 @@ func edgeScope(e Edge, old, new Snapshot) scope {
 	}
 	return scope{source: e.Source}
 }
+
+// peopleEdge are the edges the GitHub people collection writes.
+var peopleEdge = map[string]bool{EdgeMemberOf: true, EdgeAdminOf: true, EdgeWritesTo: true, EdgeCanBypass: true}
 
 // repoOfFile finds the repo in file:<repo>/<path>. Repo names hold a slash, so
 // it matches against the repos either run scanned, longest first.
@@ -687,6 +719,13 @@ func edgeDiff(e Edge, isNew bool, new, old Snapshot) Change {
 		c.Type, c.Weakening, c.Summary = ChangeDeployPath, true, fmt.Sprintf("new deploy path: %s deploys to %s", from, to)
 	case EdgeAdminOf:
 		c.Type, c.Weakening, c.Summary = ChangeNewAdmin, true, fmt.Sprintf("%s is now an admin of %s", from, to)
+	case EdgeCanBypass:
+		c.Type, c.Weakening, c.Summary = ChangeBypassActor, true, fmt.Sprintf("%s can now bypass review on %s", from, to)
+	case EdgeWritesTo:
+		c.Type, c.Summary = ChangeAdded, fmt.Sprintf("%s can now push to %s", from, to)
+		if n, ok := nodeIn(e.From, new); ok && str(n, "org_role") == "outside" {
+			c.Type, c.Weakening, c.Summary = ChangeWeakened, true, fmt.Sprintf("outside collaborator %s can now push to %s", from, to)
+		}
 	case EdgeGrantedTo:
 		c.Type, c.Weakening, c.Summary = ChangeOAuthGrant, true, fmt.Sprintf("new OAuth grant: %s granted %s access", to, from)
 	default:
@@ -715,6 +754,10 @@ func edgeWords(kind string) string {
 		return "is an admin of"
 	case EdgeGrantedTo:
 		return "was granted access by"
+	case EdgeWritesTo:
+		return "can push to"
+	case EdgeCanBypass:
+		return "can bypass review on"
 	}
 	return kind
 }
@@ -746,6 +789,16 @@ func idLabel(id ID) string {
 		return "repo " + strings.TrimPrefix(s, "github:repo/")
 	case strings.HasPrefix(s, "github:env/"):
 		return "environment " + strings.TrimPrefix(s, "github:env/")
+	case strings.HasPrefix(s, "github:user/"):
+		return "GitHub user " + short(strings.TrimPrefix(s, "github:user/"))
+	case strings.HasPrefix(s, "github:org/"):
+		return "org " + strings.TrimPrefix(s, "github:org/")
+	case strings.HasPrefix(s, "github:team/"):
+		return "team " + strings.TrimPrefix(s, "github:team/")
+	case strings.HasPrefix(s, "github:app/"):
+		return "GitHub app " + strings.TrimPrefix(s, "github:app/")
+	case strings.HasPrefix(s, "github:deploy-key/"):
+		return "deploy keys of " + strings.TrimPrefix(s, "github:deploy-key/")
 	}
 	return s
 }
@@ -836,6 +889,17 @@ func label(n Node) string {
 		return "declared copy of database " + str(n, "database")
 	case KindConfigAIKey:
 		return "ai-keys.yaml entry " + strings.TrimPrefix(id, "config-ai-key:")
+	case KindGitHubUser:
+		// Never the login: it names a person.
+		return "GitHub user " + short(strings.TrimPrefix(id, "github:user/"))
+	case KindGitHubTeam:
+		return "team " + str(n, "org") + "/" + str(n, "slug")
+	case KindGitHubApp:
+		if name := str(n, "name"); name != "" {
+			return "GitHub app " + name
+		}
+	case KindDeployKey:
+		return "deploy keys of " + strings.TrimPrefix(id, "github:deploy-key/")
 	}
 	return idLabel(n.ID)
 }
@@ -852,6 +916,15 @@ func classifyAttr(attr string, before, after any) (string, bool, string) {
 			return ChangeNewAdmin, true, "is now an admin"
 		}
 		return ChangeChanged, false, "is no longer an admin"
+	case "org_role":
+		// A new org admin is told by its admin_of edge, and an outside
+		// collaborator with write by outsideWithWrite.
+		return ChangeChanged, false, fmt.Sprintf("org role changed from %s to %s", show(before), show(after))
+	case "site_admin":
+		if on {
+			return ChangeNewAdmin, true, "is now a site admin"
+		}
+		return ChangeChanged, false, "is no longer a site admin"
 	case "is_delegated_admin":
 		if on {
 			return ChangeNewAdmin, true, "is now a delegated admin"
@@ -1300,4 +1373,43 @@ func show(v any) string {
 		return strings.Join(listOf(val), ", ")
 	}
 	return canon(v)
+}
+
+// nodeIn finds a node in a snapshot by ID.
+func nodeIn(id ID, s Snapshot) (Node, bool) {
+	for _, n := range s.Nodes {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return Node{}, false
+}
+
+// outsideWithWrite turns a GitHub user who became an outside collaborator, or
+// appeared as one, into a weakening when they can push to or administer a repo.
+func outsideWithWrite(cs []Change, new Snapshot) {
+	repos := map[ID][]string{}
+	for _, e := range new.Edges {
+		if e.Kind == EdgeWritesTo || (e.Kind == EdgeAdminOf && strings.HasPrefix(string(e.To), "github:repo/")) {
+			repos[e.From] = append(repos[e.From], strings.TrimPrefix(string(e.To), "github:repo/"))
+		}
+	}
+	for i := range cs {
+		c := &cs[i]
+		if c.Kind != KindGitHubUser || len(repos[c.Subject]) == 0 {
+			continue
+		}
+		became := c.Attr == "org_role" && c.After == "outside"
+		if c.Type == ChangeAdded && c.Attr == "" && c.Edge == nil {
+			n, _ := nodeIn(c.Subject, new)
+			became = str(n, "org_role") == "outside"
+		}
+		if !became {
+			continue
+		}
+		sort.Strings(repos[c.Subject])
+		c.Type, c.Weakening = ChangeWeakened, true
+		c.Summary = fmt.Sprintf("GitHub user %s is now an outside collaborator who can push to %s",
+			short(strings.TrimPrefix(string(c.Subject), "github:user/")), strings.Join(repos[c.Subject], ", "))
+	}
 }

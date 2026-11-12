@@ -191,14 +191,16 @@ Every worry in this doc is a path that runs left to right through these four zon
 | `owns` | GCP project → its resources; config host → host | GCP connector, config | Yes |
 | `points_to` | host → CNAME target | DNS connector | Yes |
 | `deploys_to` | repo → environment | GitHub connector | Yes |
-| `admin_of`, `member_of` | account → org or group | GitHub, Google | Defined, never written |
+| `admin_of`, `member_of` | account → org or group | GitHub, Google | GitHub: yes, users to the org and teams, and `admin_of` from users and teams to repos. Google: not yet |
+| `writes_to` | GitHub user or team → repo | GitHub connector | Yes, push or maintain permission |
+| `can_bypass` | GitHub user, app or deploy key → repo | GitHub connector | Yes, teams and roles expanded to users |
 
 ### New facts this needs
 
 **`people.powers`**: one row per person, summing what every account they hold can do: GitHub repos and bypass, AWS destructive actions in production accounts and active keys, GCP roles, Google admin and whether the account is active. Four Tier 2 drills read it. It can't be built until these exist:
 
-- **GitHub people.** The GitHub connector collects no people today. It needs org members, repo collaborators and teams, and must write `member_of` and `admin_of`.
-- **Bypass actors.** Branch rules store bypass as allowed, none or unknown. `people.powers` needs the list of actors, with teams expanded to members. GitHub returns that list only to a repo admin, so it comes through the existing admin export.
+- **GitHub people.** Built. The GitHub connector's people collection reads org members by role, outside collaborators, teams with their members, and each repo's collaborators and teams, and writes `member_of`, `admin_of` and `writes_to`. The login stays out of snapshots; `github.people` gives one row per human.
+- **Bypass actors.** Built. Branch rules keep bypass as allowed, none or unknown, and add `bypass_actors_known` and the resolved list; `github.bypass_actors` lists the people, teams and apps per repo, and each writes a `can_bypass` edge. Classic protection's allowances and `enforce_admins` are read by any token with Administration: read. Ruleset bypass lists come from the API, or from the existing admin export, which already carried each ruleset's actor list as GitHub returns it (type, ID, mode) and needed no change. Unreadable, the list is unknown, never empty.
 - **AWS people.** The AWS connector reads IAM users and roles. People who sign in through IAM Identity Center are invisible; reading them means new actions on the AWS allowlist.
 - **Principal linking.** AWS and GCP principals joined to a person by email, tag or an owners file. Today only Google users are linked.
 - **Production accounts.** Config names which AWS accounts and GCP projects are production.
@@ -233,7 +235,7 @@ What it reports, newest first:
 | New admin | `is_admin` turned true | Power grew | Yes |
 | New key held | `holds` from a principal to a key | A credential exists that didn't | Yes |
 | Secret seen in a new place | `found_in` | A secret spread | Yes |
-| Bypass turned on | branch rule `bypass` changed to allowed | Review can be skipped | Yes; naming the actor needs bypass actors |
+| Bypass turned on | branch rule `bypass` changed to allowed | Review can be skipped | Yes; each new actor is also its own "new bypass actor" row, from a new `can_bypass` edge |
 | New deploy path | `deploys_to` | Code reaches production another way | Yes |
 | New MCP server | `agent_config.mcp_servers` | An agent talks to something new | By name; host needs the parser change |
 | New public thing | bucket public grant, host resolving, source map served | Exposure grew | Yes |
@@ -383,7 +385,7 @@ Trust first, then the cheap incident-proven drills, then the diff, then the rule
 3. **Snapshot diff** on the CLI and the Changes screen, with the four noise rules, and previous-snapshot facts. Done when two runs a week apart produce a diff you'd actually read, and a run with a failed connector reports no false removals. Built: `graph.Diff` with the four noise rules (a fixed attribute list per node kind; coverage recorded in each snapshot and worked out for older ones, per repo, project and domain; runs compared only within one stream; secret occurrences keyed by fingerprint and file), `firedrill diff`, the count after `firedrill run`, `diffs/<time>.json` with the SHA-256 of both snapshots, links to drills that also caught a change, grouping by person, the Changes page, and `Args.Previous` for facts. Not built: naming the actor from audit logs, the weekly issue, covering the diff by the hash chain or an attestation, and any fact that reads `Args.Previous`.
 4. **The planned rules:** shadow mode for new drills, the 30-day review flag, evidence tiers with the inferred-means-WARN rule, and an attestation on every CI tag. Done when each rule in Behaviour rules loses its "planned" mark. Built: shadow mode (`shadow_days`, default 14), the review flag (`review_after_days`, default 30), and evidence tiers recorded per fact in each tag with the inferred-means-WARN rule, though no shipped fact field is marked inferred yet. Not built: the attestation on every CI tag.
 5. **Tier 1, the rest**, starting with `mcp-servers-known`, then the Anthropic and OpenAI admin connectors for `keys/ai-keys-capped`, then OAuth apps, manifests, OIDC and backups. Done per drill as in step 2. Built: `agent/mcp-servers-known`, `supply/installs-from-lockfile` and `change/ci-uses-oidc-not-keys`, each with fixtures from its incident, reading repo files only. Also built: `keys/ai-keys-capped`, `access/third-party-apps-reviewed` and `recovery/backups-separate-and-retained`, with their new read calls on the allowlist and fixtures from their incidents. All Tier 1 drills are built. Each new connector call was checked only against the providers' documentation and fake servers; live verification against real Google Workspace, AWS, Google Cloud, Anthropic and OpenAI accounts is still needed.
-6. **GitHub people:** org members, collaborators, teams and bypass actors, writing `member_of` and `admin_of`. Done when the graph shows who can bypass review on each repo.
+6. **GitHub people:** org members, collaborators, teams and bypass actors, writing `member_of` and `admin_of`. Done when the graph shows who can bypass review on each repo. Built: the people collection, `writes_to` and `can_bypass` edges, `github.people`, `github.bypass_actors` and `bypass_actors_known` on `github.branch_rules`, with diff rows for new admins, new bypass actors and outside collaborators with write. Verified against fake servers only, not a live org.
 7. **Principal linking:** AWS and GCP principals joined to a person, AWS Identity Center read, production accounts named in config. Done when every admin principal either links to a person or shows as unowned.
 8. **`people.powers`**, then the four Tier 2 drills, then the People and Graph screens. Done when one person's power across GitHub, AWS, GCP and Google shows on one row.
 9. **Tier 3** as connectors allow.

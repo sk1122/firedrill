@@ -21,6 +21,7 @@ func init() {
 	registerOAuthApps()
 	registerBackups()
 	registerAIKeys()
+	registerGitHubPeople()
 }
 
 func registerTargets() {
@@ -81,6 +82,7 @@ func registerGitHub() {
 		Shape: Obj(map[string]*Shape{
 			"required_approvals": Int, "dismiss_stale": Bool, "code_owner_review": Bool,
 			"bypass": Str, "bypass_source": Str, "force_push_allowed": Bool, "deletion_allowed": Bool,
+			"bypass_actors_known": Bool,
 		}),
 		Fn: func(g graph.Reader, a Args) (Result, error) {
 			branch := a.String("branch")
@@ -99,7 +101,7 @@ func registerGitHub() {
 			}
 			return Result{Read: []graph.ID{n.ID}, Source: src, Data: attrsOf(n,
 				"required_approvals", "dismiss_stale", "code_owner_review", "bypass", "bypass_source",
-				"force_push_allowed", "deletion_allowed")}, nil
+				"force_push_allowed", "deletion_allowed", "bypass_actors_known")}, nil
 		},
 	})
 	Register(Def{

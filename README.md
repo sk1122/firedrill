@@ -113,7 +113,7 @@ maps_to: [SOC2:CC8.1]
 
 | System | How it connects | Access |
 | --- | --- | --- |
-| GitHub | Your `gh` login, or a fine-grained token in CI | Read: Metadata, Administration, Environments, Contents |
+| GitHub | Your `gh` login, or a fine-grained token in CI | Read: Metadata, Administration, Environments, Contents on the repos; Members on the org, for who can reach each repo |
 | Google Workspace | A service account with domain-wide delegation | `admin.directory.user.readonly`, `admin.directory.user.security` (GET only) |
 | Google Cloud | A keyless reader service account, through gcloud | Viewer, Security Reviewer |
 | AWS | Your credential profiles | A read policy `connect aws` prints |

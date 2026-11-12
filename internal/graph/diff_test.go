@@ -495,6 +495,14 @@ func TestDiffWeakeningRules(t *testing.T) {
 		{KindConfigApp, "reviewed", "2026-01-01", "2026-11-01", ChangeChanged, false},
 		{KindConfigBackup, "copy_location", "vault in 444455556666", "vault in 555566667777", ChangeChanged, false},
 		{KindConfigBackup, "owner", "@platform", "@sre", ChangeChanged, false},
+		// A new org admin is told by its admin_of edge, so the role alone is not.
+		{KindGitHubUser, "org_role", "member", "admin", ChangeChanged, false},
+		{KindGitHubUser, "org_role", "member", "outside", ChangeChanged, false},
+		{KindGitHubUser, "site_admin", false, true, ChangeNewAdmin, true},
+		{KindGitHubUser, "site_admin", true, false, ChangeChanged, false},
+		{KindGitHubUser, "type", "user", "bot", ChangeChanged, false},
+		{KindGitHubTeam, "privacy", "secret", "closed", ChangeChanged, false},
+		{KindGitHubTeam, "parent", "", "platform", ChangeChanged, false},
 		{KindAgentConfig, "mcp_servers",
 			[]any{map[string]any{"name": "docs", "credentials": []any{}, "transport": "http", "host": "mcp.acme.com", "host_known": true, "pinned": true}},
 			[]any{map[string]any{"name": "docs", "credentials": []any{}, "transport": "http", "host": "mcp.unknown.example", "host_known": false, "pinned": true}},
@@ -633,6 +641,124 @@ func TestDiffSkipsATier1CollectionThatFailed(t *testing.T) {
 	d := Diff(run(true), run(false))
 	if len(d.Changes) != 0 {
 		t.Fatalf("a collection that failed while its connector worked is not everything gone: %+v", d.Changes)
+	}
+	if len(d.Skipped) != 2 {
+		t.Fatalf("%v", d.Skipped)
+	}
+}
+
+func TestDiffGitHubPeople(t *testing.T) {
+	at := time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC)
+	ana, bo, dee, eve := ID("github:user/"+hashA), ID("github:user/"+hashB), ID("github:user/"+secret), ID("github:user/eeee5555ffff6666aaaa7777bbbb8888")
+	repo, org := ID("github:repo/acme/api"), ID("github:org/acme")
+	run := func(second bool) Snapshot {
+		e := &estate{at: at, g: New()}
+		e.scan("github", "github_people", "acme", 3)
+		e.scan("github", "github_repo_people", "acme/api", 3)
+		user := func(id ID, role string) {
+			e.node(id, KindGitHubUser, "github", map[string]any{"org": "acme", "org_role": role, "type": "user"})
+		}
+		user(ana, "admin")
+		e.edge(ana, org, EdgeAdminOf, "github")
+		e.edge(ana, repo, EdgeAdminOf, "github")
+		e.edge(bo, repo, EdgeWritesTo, "github")
+		e.node("github:team/acme/core", KindGitHubTeam, "github", map[string]any{"org": "acme", "slug": "core", "privacy": "closed", "parent": ""})
+		if !second {
+			user(bo, "member")
+			user(dee, "member")
+			return TakeSnapshot(e.g, at)
+		}
+		user(bo, "admin") // promoted to owner
+		e.edge(bo, org, EdgeAdminOf, "github")
+		e.edge(bo, repo, EdgeCanBypass, "github") // a new bypass actor
+		user(dee, "outside")                      // left the org, kept write
+		e.edge(dee, repo, EdgeWritesTo, "github")
+		user(eve, "member") // a new account that is a repo admin
+		e.edge(eve, repo, EdgeAdminOf, "github")
+		e.node("github:app/77", KindGitHubApp, "github", map[string]any{"org": "acme", "name": "acme-deployer"})
+		e.edge("github:app/77", repo, EdgeCanBypass, "github")
+		return TakeSnapshot(e.g, at.Add(time.Hour))
+	}
+	d := Diff(run(false), run(true))
+	byType := map[string][]Change{}
+	for _, c := range d.Changes {
+		byType[c.Type] = append(byType[c.Type], c)
+		for _, login := range []string{"ana-acme", "bo-acme"} {
+			if strings.Contains(c.Summary, login) {
+				t.Fatalf("a summary holds a login: %s", c.Summary)
+			}
+		}
+	}
+	admins := map[string]bool{}
+	for _, c := range byType[ChangeNewAdmin] {
+		admins[c.Summary] = c.Weakening
+	}
+	for _, want := range []string{"GitHub user bbbb2222 is now an admin of org acme", "GitHub user eeee5555 is now an admin of repo acme/api"} {
+		if !admins[want] {
+			t.Errorf("missing new admin %q in %+v", want, byType[ChangeNewAdmin])
+		}
+	}
+	bypass := map[string]bool{}
+	for _, c := range byType[ChangeBypassActor] {
+		bypass[c.Summary] = c.Weakening
+	}
+	for _, want := range []string{"GitHub user bbbb2222 can now bypass review on repo acme/api", "GitHub app acme-deployer can now bypass review on repo acme/api"} {
+		if !bypass[want] {
+			t.Errorf("missing new bypass actor %q in %+v", want, byType[ChangeBypassActor])
+		}
+	}
+	outside := false
+	for _, c := range byType[ChangeWeakened] {
+		if c.Subject == dee && c.Weakening && strings.Contains(c.Summary, "outside collaborator who can push to acme/api") {
+			outside = true
+		}
+	}
+	if !outside {
+		t.Errorf("a member who became an outside collaborator with write is a weakening: %+v", d.Changes)
+	}
+	if ChangeLabel(ChangeBypassActor) != "New bypass actor" {
+		t.Fatal(ChangeLabel(ChangeBypassActor))
+	}
+
+	// A new writes_to edge from an outside collaborator is a weakening; from a
+	// member it is not.
+	snap := run(true)
+	c := edgeDiff(Edge{From: dee, To: repo, Kind: EdgeWritesTo, Source: "github"}, true, snap, run(false))
+	if c.Type != ChangeWeakened || !c.Weakening {
+		t.Fatalf("%+v", c)
+	}
+	c = edgeDiff(Edge{From: ana, To: repo, Kind: EdgeWritesTo, Source: "github"}, true, snap, run(false))
+	if c.Type != ChangeAdded || c.Weakening {
+		t.Fatalf("%+v", c)
+	}
+	c = edgeDiff(Edge{From: ana, To: "github:team/acme/core", Kind: EdgeMemberOf, Source: "github"}, true, snap, run(false))
+	if c.Weakening || !strings.Contains(c.Summary, "is a member of team acme/core") {
+		t.Fatalf("%+v", c)
+	}
+}
+
+func TestDiffSkipsGitHubPeopleNotRead(t *testing.T) {
+	at := time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC)
+	bo, repo := ID("github:user/"+hashB), ID("github:repo/acme/api")
+	run := func(read bool) Snapshot {
+		e := &estate{at: at, g: New()}
+		if read {
+			e.scan("github", "github_people", "acme", 1)
+			e.scan("github", "github_repo_people", "acme/api", 1)
+			e.node(bo, KindGitHubUser, "github", map[string]any{"org": "acme", "org_role": "member", "type": "user"})
+			e.edge(bo, repo, EdgeCanBypass, "github")
+		} else {
+			// Members could not be read, and acme/api's bypass list could not be.
+			e.g.Node(Node{ID: ScanID("github_people", "acme"), Kind: KindScan, Source: "github", SeenAt: at,
+				Attrs: map[string]any{"scanner": "github_people", "scope": "acme", "inspected": int64(0), "partial": "denied", "error": "denied"}})
+		}
+		snap := TakeSnapshot(e.g, at)
+		snap.Coverage = &Coverage{Read: []string{"github"}}
+		return snap
+	}
+	d := Diff(run(true), run(false))
+	if len(d.Changes) != 0 {
+		t.Fatalf("people not read are not people gone: %+v", d.Changes)
 	}
 	if len(d.Skipped) != 2 {
 		t.Fatalf("%v", d.Skipped)

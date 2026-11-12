@@ -164,10 +164,12 @@ var guides = map[string]string{
 }
 
 var setupNotes = map[string]string{
-	"github": `GitHub needs read access: Metadata, Administration, Environments and Contents.
+	"github": `GitHub needs read access: Metadata, Administration, Environments and Contents on the repos,
+and organization Members to read who can reach them: members, teams and outside collaborators.
 On a laptop the GitHub CLI's login is reused. A gh token acts as whoever is logged in.
 In CI use a fine-grained token as FIREDRILL_GITHUB_TOKEN, limited to the listed repos.
-With a read-only token, ruleset bypass lists come from firedrill export rulesets, or read as unknown.`,
+With a read-only token, ruleset bypass lists come from firedrill export rulesets, or read as unknown.
+Without Members, repo settings are still read and only the people facts give ERROR.`,
 	"google": `Google needs a service account with domain-wide delegation, approved once by a super admin.
 1. Create a service account and a JSON key in Google Cloud.
 2. In the Admin console, grant it the scopes

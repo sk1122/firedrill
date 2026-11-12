@@ -235,3 +235,36 @@ func TestTier1FieldsSurviveAndSecretsDoNot(t *testing.T) {
 		}
 	}
 }
+
+func TestGitHubLoginsSurviveAndSecretsDoNot(t *testing.T) {
+	h := graph.NewHasher("salt")
+	logins := []string{"ana-acme", "bo-acme", "x7k2q9vz4m8w", "q8z3m7x2k9v4w6p1r5t0", "dependabot[bot]", "Ana-Acme-2"}
+	for _, l := range logins {
+		var notes []string
+		got := ScanValue(map[string]any{"people": []any{map[string]any{"login": l}}}, h, "w", &notes)
+		b, _ := json.Marshal(got)
+		if !strings.Contains(string(b), `"`+l+`"`) || len(notes) != 0 {
+			t.Errorf("login %q was changed: %s %v", l, b, notes)
+		}
+	}
+	secretsUnderLogin := []string{
+		"ghp_" + "Zx8mQ2pL9vT4rW7yB1nC6dF3Zx8mQ2pL9vT4",
+		"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+		fakeSecret,
+	}
+	for _, v := range secretsUnderLogin {
+		var notes []string
+		got := ScanValue(map[string]any{"login": v}, h, "w", &notes)
+		b, _ := json.Marshal(got)
+		if strings.Contains(string(b), v) || len(notes) != 1 {
+			t.Errorf("a secret under login passed: %s %v", b, notes)
+		}
+	}
+	// The people collection's graph IDs survive under id.
+	for _, id := range []string{"github:user/0123456789abcdef0123456789abcdef", "github:team/acme/platform",
+		"github:org/acme", "github:app/123", "github:deploy-key/acme/api", "scan:github_repo_people/acme/api"} {
+		if !safeShape(id) {
+			t.Errorf("%s is a safe ID", id)
+		}
+	}
+}

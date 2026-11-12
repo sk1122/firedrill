@@ -36,10 +36,17 @@ func New() *Connector {
 
 func init() { connector.Register(New()) }
 
-// Collections lists what it reads.
+// Collection names.
+const (
+	CollectionSettings = "repo settings"
+	CollectionPeople   = "people"
+)
+
+// Collections lists what it reads. Repo settings come first: the people
+// collection resolves the bypass actors those reads found.
 func (c *Connector) Collections() []connector.Collection {
 	return []connector.Collection{{
-		Name:       "repo settings",
+		Name:       CollectionSettings,
 		Nodes:      []string{graph.KindGitHubRepo, graph.KindBranchRule, graph.KindEnvironment, graph.KindActionsPerms},
 		Permission: "Metadata, Administration, Environments and Contents, read",
 		Calls: []string{
@@ -50,6 +57,20 @@ func (c *Connector) Collections() []connector.Collection {
 			"GET https://api.github.com/repos/{repo}/rulesets/{id}",
 			"GET https://api.github.com/repos/{repo}/environments",
 			"GET https://api.github.com/repos/{repo}/actions/permissions/workflow",
+		},
+	}, {
+		Name:       CollectionPeople,
+		Nodes:      []string{graph.KindGitHubUser, graph.KindGitHubTeam, graph.KindGitHubApp, graph.KindDeployKey},
+		Permission: "organization Members: read; repository Metadata and Administration: read",
+		Calls: []string{
+			"GET https://api.github.com/orgs/{org}/members?role=admin",
+			"GET https://api.github.com/orgs/{org}/members?role=member",
+			"GET https://api.github.com/orgs/{org}/outside_collaborators",
+			"GET https://api.github.com/orgs/{org}/teams",
+			"GET https://api.github.com/orgs/{org}/teams/{team}/members?role=maintainer, once per team",
+			"GET https://api.github.com/orgs/{org}/teams/{team}/members?role=member, once per team",
+			"GET https://api.github.com/repos/{repo}/collaborators?affiliation=all",
+			"GET https://api.github.com/repos/{repo}/teams",
 		},
 	}}
 }
@@ -113,8 +134,11 @@ func normalizePlan(p string) string {
 	return p
 }
 
-// Collect reads settings for every listed repo.
-func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s connector.Scope, out graph.Writer) error {
+// Collect reads settings for every listed repo, or the people who can reach them.
+func (c *Connector) Collect(ctx context.Context, col connector.Collection, s connector.Scope, out graph.Writer) error {
+	if col.Name == CollectionPeople {
+		return c.collectPeople(ctx, s, out)
+	}
 	cl, err := c.client(s)
 	if err != nil {
 		return err
@@ -129,7 +153,7 @@ func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s conne
 			return fmt.Errorf("read %s: %w", full, err)
 		}
 		private := repo.GetPrivate()
-		rule, planBlocked, err := branchRule(ctx, cl, owner, name, repo.GetDefaultBranch(), exp, expDetail, s.Now)
+		rule, actors, planBlocked, err := branchRule(ctx, cl, owner, name, repo.GetDefaultBranch(), exp, expDetail, s.Now)
 		if err != nil {
 			return fmt.Errorf("read rules of %s: %w", full, err)
 		}
@@ -142,7 +166,10 @@ func (c *Connector) Collect(ctx context.Context, _ connector.Collection, s conne
 		out.Node(graph.Node{ID: repoID, Kind: graph.KindGitHubRepo, Source: "github", SeenAt: s.Now, Attrs: map[string]any{
 			"name": full, "private": private, "plan": p, "protection_available": available,
 		}})
-		out.Node(graph.Node{ID: graph.ID("github:branch-rule/" + full + "/default"), Kind: graph.KindBranchRule, Source: "github", SeenAt: s.Now, Attrs: rule})
+		// The raw actors hold logins, so they stay private; the people
+		// collection resolves them and adds the hashed list.
+		out.Node(graph.Node{ID: graph.ID("github:branch-rule/" + full + "/default"), Kind: graph.KindBranchRule, Source: "github", SeenAt: s.Now,
+			Attrs: rule, Private: map[string]any{privateActors: actors}})
 		if err := environments(ctx, cl, owner, name, full, s, out); err != nil {
 			return fmt.Errorf("read environments of %s: %w", full, err)
 		}
@@ -176,13 +203,18 @@ func planBlocks(err error) bool {
 }
 
 // branchRule merges branch protection and rulesets into the effective rules. It
-// also reports whether GitHub said the plan offers no protection on the repo.
-func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, exp *Export, expDetail string, now time.Time) (map[string]any, bool, error) {
+// also returns who may bypass review as read, before any is resolved to people,
+// and whether GitHub said the plan offers no protection on the repo. The rules
+// carry bypass_actors_known: false when any bypass list could not be read, or
+// names a role that cannot be resolved, so nothing about who is listed then.
+func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, exp *Export, expDetail string, now time.Time) (map[string]any, []bypassActor, bool, error) {
 	planBlocked := false
 	approvals, dismiss, codeOwner := 0, false, false
 	force, deletion := true, true
 	bypass := "none"
 	source := "api"
+	actors := []bypassActor{}
+	known := true
 
 	prot, resp, err := cl.Repositories.GetBranchProtection(ctx, owner, repo, branch)
 	switch {
@@ -193,10 +225,12 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 			approvals, dismiss, codeOwner = r.RequiredApprovingReviewCount, r.DismissStaleReviews, r.RequireCodeOwnerReviews
 			if a := r.BypassPullRequestAllowances; a != nil && (len(a.Users)+len(a.Teams)+len(a.Apps)) > 0 {
 				bypass = "allowed"
+				actors = append(actors, classicAllowances(a)...)
 			}
 		}
 		if e := prot.GetEnforceAdmins(); e == nil || !e.Enabled {
 			bypass = "allowed"
+			actors = append(actors, bypassActor{Kind: actorRole, Name: "admin", Via: viaAdminsNotEnforced})
 		}
 	case errors.Is(err, gh.ErrBranchNotProtected), notFound(resp):
 		// No classic protection. Rulesets may still apply.
@@ -205,14 +239,14 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 		planBlocked = true
 	case forbidden(resp):
 		// The token cannot read the protection, so nothing here is known.
-		return nil, false, fmt.Errorf("the token cannot read branch protection of %s/%s: give it Administration: read", owner, repo)
+		return nil, nil, false, fmt.Errorf("the token cannot read branch protection of %s/%s: give it Administration: read", owner, repo)
 	default:
-		return nil, false, err
+		return nil, nil, false, err
 	}
 
 	req, err := cl.NewRequest(ctx, http.MethodGet, fmt.Sprintf("repos/%s/%s/rules/branches/%s", owner, repo, branch), nil)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	var rules []branchRuleEntry
 	if resp, err := cl.Do(req, &rules); err != nil && !notFound(resp) {
@@ -220,15 +254,17 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 		case forbidden(resp) && planBlocks(err):
 			// The plan offers no rulesets on this repo, so none apply.
 		case forbidden(resp):
-			return nil, false, fmt.Errorf("the token cannot read the rulesets of %s/%s: give it Administration: read", owner, repo)
+			return nil, nil, false, fmt.Errorf("the token cannot read the rulesets of %s/%s: give it Administration: read", owner, repo)
 		default:
-			return nil, false, err
+			return nil, nil, false, err
 		}
 	}
 	ids := map[int64]bool{}
+	var order []int64
 	for _, r := range rules {
-		if r.RulesetID != 0 {
+		if r.RulesetID != 0 && !ids[r.RulesetID] {
 			ids[r.RulesetID] = true
+			order = append(order, r.RulesetID)
 		}
 		switch r.Type {
 		case "pull_request":
@@ -243,18 +279,25 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 			deletion = false
 		}
 	}
-	for id := range ids {
-		state, src, err := rulesetBypass(ctx, cl, owner, repo, id, exp, now)
+	for _, id := range order {
+		list, src, err := rulesetActors(ctx, cl, owner, repo, id, exp, now)
 		if err != nil {
-			return nil, false, err
+			return nil, nil, false, err
 		}
-		switch state {
-		case "allowed":
-			bypass = "allowed"
-		case "unknown":
+		switch {
+		case list == nil:
+			known = false
 			if bypass != "allowed" {
 				bypass = "unknown"
 			}
+		case len(list) > 0:
+			bypass = "allowed"
+		}
+		for _, a := range list {
+			if a.Kind == actorRole && a.Name == "" {
+				known = false // a custom role: who holds it is not read
+			}
+			actors = append(actors, a)
 		}
 		if src != "api" {
 			source = src
@@ -263,42 +306,51 @@ func branchRule(ctx context.Context, cl *gh.Client, owner, repo, branch string, 
 			}
 		}
 	}
+	if !known {
+		actors = []bypassActor{}
+	}
 	return map[string]any{
 		"required_approvals": int64(approvals), "dismiss_stale": dismiss, "code_owner_review": codeOwner,
 		"bypass": bypass, "bypass_source": strings.SplitN(source, ":", 2)[0], "bypass_detail": source,
-		"force_push_allowed": force, "deletion_allowed": deletion,
-	}, planBlocked, nil
+		"force_push_allowed": force, "deletion_allowed": deletion, "bypass_actors_known": known,
+	}, actors, planBlocked, nil
 }
 
-// rulesetBypass reads one ruleset's bypass list. GitHub returns it only to
-// callers with write access, so it falls back to the admin export, then unknown.
-func rulesetBypass(ctx context.Context, cl *gh.Client, owner, repo string, id int64, exp *Export, now time.Time) (state, source string, err error) {
+// rulesetDoc is the part of a ruleset read for its bypass list.
+type rulesetDoc struct {
+	Name         string             `json:"name"`
+	BypassActors *[]json.RawMessage `json:"bypass_actors"`
+}
+
+// rulesetActors reads one ruleset's bypass list. GitHub returns it only to
+// callers with write access, so it falls back to the admin export. A nil list
+// means it could not be read; an empty one means nobody may bypass.
+func rulesetActors(ctx context.Context, cl *gh.Client, owner, repo string, id int64, exp *Export, now time.Time) ([]bypassActor, string, error) {
 	req, err := cl.NewRequest(ctx, http.MethodGet, fmt.Sprintf("repos/%s/%s/rulesets/%d?includes_parents=true", owner, repo, id), nil)
 	if err != nil {
-		return "", "", err
+		return nil, "", err
 	}
-	var doc struct {
-		BypassActors *[]json.RawMessage `json:"bypass_actors"`
-	}
+	var doc rulesetDoc
 	resp, err := cl.Do(req, &doc)
 	if err != nil && !notFound(resp) && !forbidden(resp) {
-		return "", "", err
+		return nil, "", err
 	}
 	if err == nil && doc.BypassActors != nil {
-		if len(*doc.BypassActors) > 0 {
-			return "allowed", "api", nil
-		}
-		return "none", "api", nil
+		return parseActors(*doc.BypassActors, rulesetVia(doc.Name, id)), "api", nil
 	}
 	if exp != nil && now.Sub(exp.GeneratedAt) < ExportMaxAge {
 		if rs, ok := exp.Repos[owner+"/"+repo][fmt.Sprint(id)]; ok {
-			if len(rs.BypassActors) > 0 {
-				return "allowed", "admin_export", nil
-			}
-			return "none", "admin_export", nil
+			return parseActors(rs.BypassActors, rulesetVia(rs.Name, id)), "admin_export", nil
 		}
 	}
-	return "unknown", "api", nil
+	return nil, "api", nil
+}
+
+func rulesetVia(name string, id int64) string {
+	if name == "" {
+		name = fmt.Sprint(id)
+	}
+	return "ruleset:" + name
 }
 
 func environments(ctx context.Context, cl *gh.Client, owner, name, full string, s connector.Scope, out graph.Writer) error {

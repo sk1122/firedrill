@@ -274,3 +274,20 @@ func TestTier1KindsAreCovered(t *testing.T) {
 		}
 	}
 }
+
+func TestDisplayNameOfGitHubPeople(t *testing.T) {
+	u := &graph.EstateItem{ID: "github:user/aaaa1111bbbb2222cccc3333dddd4444", Kind: graph.KindGitHubUser,
+		Attrs: map[string]any{"org": "acme", "org_role": "admin", "type": "user"}}
+	if got := displayName(u); got != "GitHub user aaaa1111" {
+		t.Fatalf("a GitHub user shows by a short hashed ID: %q", got)
+	}
+	team := &graph.EstateItem{ID: "github:team/acme/core", Kind: graph.KindGitHubTeam, Attrs: map[string]any{"slug": "core"}}
+	if got := displayName(team); got != "team core" {
+		t.Fatal(got)
+	}
+	for _, k := range []string{graph.KindGitHubUser, graph.KindGitHubTeam, graph.KindGitHubApp, graph.KindDeployKey} {
+		if !coverageKinds[k] {
+			t.Errorf("%s is listed in coverage", k)
+		}
+	}
+}

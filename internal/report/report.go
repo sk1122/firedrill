@@ -226,6 +226,7 @@ var coverageKinds = map[string]bool{
 	graph.KindGitHubRepo: true, graph.KindTargetRepo: true, graph.KindEnvironment: true, graph.KindHost: true,
 	graph.KindIdentityUser: true, graph.KindAWSPrincipal: true, graph.KindAgentConfig: true, graph.KindWorkflow: true,
 	graph.KindTFBucket: true, graph.KindManifest: true, graph.KindOAuthApp: true, graph.KindDatabase: true, graph.KindAIKey: true,
+	graph.KindGitHubUser: true, graph.KindGitHubTeam: true, graph.KindGitHubApp: true, graph.KindDeployKey: true,
 }
 
 // Build assembles the board from tags and the estate. Shadow is judged at each
@@ -477,12 +478,22 @@ func ownersOf(est *graph.Estate) map[graph.ID]bool {
 // displayName names an item. Items known only from history show their kind and
 // a short ID, since their emails are stored as HMACs.
 func displayName(it *graph.EstateItem) string {
+	id := string(it.ID)
+	// A GitHub user shows by a short hashed ID: the login never reaches the
+	// estate.
+	if h, ok := strings.CutPrefix(id, "github:user/"); ok {
+		return "GitHub user " + h[:min(8, len(h))]
+	}
+	if it.Kind == graph.KindGitHubTeam {
+		if s, ok := it.Attrs["slug"].(string); ok && s != "" {
+			return "team " + s
+		}
+	}
 	for _, k := range []string{"name", "host", "file"} {
 		if s, ok := it.Attrs[k].(string); ok && s != "" {
 			return s
 		}
 	}
-	id := string(it.ID)
 	if len(id) > 28 {
 		return it.Kind + " " + id[:28] + "…"
 	}
