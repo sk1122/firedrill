@@ -68,16 +68,21 @@ ul.notes{margin:0;padding-left:18px;font:400 13px/1.6 "IBM Plex Mono",monospace;
 {{if $.All}}
 <h2>Cut points ({{len .Cuts}})</h2>
 {{if .Cuts}}<ul class="notes">{{range .Cuts}}<li><a href="{{.Href}}">person {{.Short}}</a>: {{.Why}}</li>{{end}}</ul>
-<p class="meta"><a href="graph/production.html">Who can reach production data alone?</a></p>
+<p class="meta"><a href="graph/production.html">Who can reach production data alone?</a> · <a href="graph/outside.html">What's reachable from outside?</a></p>
 {{else}}<p class="empty">No one person alone can get code to production, or is the only admin of a project, the org or Workspace.</p>{{end}}
 <h2>Admin or delete power nobody owns ({{len .Orphans}})</h2>
 {{if .Orphans}}<div class="box"><table><thead><tr><th>Principal</th><th>System</th><th>Kind</th><th>Power</th><th>Why</th></tr></thead><tbody>
 {{range .Orphans}}<tr><td>{{if .Href}}<a href="{{.Href}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</td><td>{{.System}}</td><td>{{.Kind}}</td><td>{{.Role}}</td><td>{{.Reason}}</td></tr>{{end}}
 </tbody></table></div>{{else}}<p class="empty">Every admin or delete-capable principal has a person or an owner.</p>{{end}}
-<h2>Accounts no person answers for ({{len .Unlinked}})</h2>
+<h2>Accounts no person or owner answers for ({{len .Unlinked}})</h2>
 {{if .Unlinked}}<div class="box"><table><thead><tr><th>Account</th><th>System</th><th>Kind</th><th>Admin</th><th>Why</th></tr></thead><tbody>
 {{range .Unlinked}}<tr><td>{{if .Href}}<a href="{{.Href}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</td><td>{{.System}}</td><td>{{.Kind}}</td><td>{{if .Admin}}<span class="fail">yes</span>{{else}}no{{end}}</td><td>{{.Reason}}</td></tr>{{end}}
-</tbody></table></div>{{else}}<p class="empty">Every account links to a person or an owner.</p>{{end}}
+</tbody></table></div>{{else}}<p class="empty">Every account that is not a person's own links to a person or an owner.</p>{{end}}
+<h2>People's accounts not mapped to a person ({{len .Unmapped}})</h2>
+{{if .Unmapped}}<p class="meta">Someone may answer for these; Firedrill could not tell who. Map GitHub logins in .firedrill/people.yaml, or connect Google Workspace.</p>
+<div class="box"><table><thead><tr><th>Account</th><th>System</th><th>Kind</th><th>Admin</th><th>Why</th></tr></thead><tbody>
+{{range .Unmapped}}<tr><td>{{if .Href}}<a href="{{.Href}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</td><td>{{.System}}</td><td>{{.Kind}}</td><td>{{if .Admin}}<span class="warn">yes</span>{{else}}no{{end}}</td><td>{{.Reason}}</td></tr>{{end}}
+</tbody></table></div>{{else}}<p class="empty">Every person's account links to a person.</p>{{end}}
 {{end}}
 {{end}}
 </main>

@@ -7,17 +7,18 @@ fetch:
   rules: { fact: github.branch_rules, args: { branch: default } }
   env:   { fact: github.environment, args: { name: production } }
   bots:  { fact: github.actions_permissions }
-applies_when: target.protection_available && env.exists
-na_reason: "no production environment in GitHub, or the plan has no branch protection on private repos"
+applies_when: target.protection_available && target.production
+na_reason: "the plan has no branch protection on private repos, or the repo is not marked production: it has no GitHub environment named production, prod or live (add other names under github.production_environments) and is not listed under production in .firedrill/config.yaml"
 pass_when:
   - rules.required_approvals >= 1
   - rules.bypass != "allowed"
   - bots.can_approve_pull_requests == false
   - >-
-    env.reviewers_available
+    !env.exists || (env.reviewers_available
     ? (env.required_reviewers.size() >= 1 && env.prevent_self_review && !env.admin_bypass)
-    : env.protected_branches_only
+    : env.protected_branches_only)
 warn_when:
   - rules.bypass == "unknown"
-fix: "Turn off bypass on main, then add a production reviewer with Prevent self-review, or limit production deploys to protected branches."
+  - "!env.exists"
+fix: "Turn off bypass on main, then add a production reviewer with Prevent self-review, or limit production deploys to protected branches. A repo listed under production with no production environment warns while main is protected, since how its deploys are approved cannot be read; deploy through a GitHub environment so it can be."
 maps_to: [SOC2:CC8.1, ISO27001:A.8.32]

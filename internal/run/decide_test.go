@@ -258,7 +258,7 @@ var allConnectors = map[string]bool{"github": true, "google": true, "aws": true,
 // drillCases are a passing, a failing and a not-applicable setup for every
 // starter drill. They also generate the drills' fixture files.
 func drillCases() []drillCase {
-	return append(append(baseCases(), tier2Cases()...), tier3Cases()...)
+	return append(append(append(append(baseCases(), tier2Cases()...), tier3Cases()...), productionCases()...), cloudSQLCases()...)
 }
 
 func baseCases() []drillCase {

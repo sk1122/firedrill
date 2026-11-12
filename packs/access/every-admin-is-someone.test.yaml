@@ -9,6 +9,7 @@ cases:
                 - current: true
                   current_known: true
                   departed: false
+                  human: true
                   id: google:user/ana
                   kind: person
                   linked: true
@@ -23,9 +24,11 @@ cases:
                   role: super admin
                   system: google
                   unowned: false
+                  unverified: false
                 - current: false
                   current_known: true
                   departed: false
+                  human: false
                   id: gcp:binding/acme-prod/roles/editor/service_account
                   kind: service_account
                   linked: false
@@ -39,6 +42,7 @@ cases:
                   role: roles/editor
                   system: gcp
                   unowned: true
+                  unverified: false
             production_basis: ""
             systems_read:
                 - google
@@ -51,6 +55,7 @@ cases:
                 - current: false
                   current_known: true
                   departed: true
+                  human: true
                   id: github:user/dee
                   kind: person
                   linked: true
@@ -65,6 +70,7 @@ cases:
                   role: org owner of acme
                   system: github
                   unowned: false
+                  unverified: false
             production_basis: ""
             systems_read:
                 - google
@@ -77,6 +83,7 @@ cases:
                 - current: true
                   current_known: true
                   departed: false
+                  human: true
                   id: google:user/ana
                   kind: person
                   linked: true
@@ -91,9 +98,11 @@ cases:
                   role: super admin
                   system: google
                   unowned: false
+                  unverified: false
                 - current: false
                   current_known: true
                   departed: false
+                  human: false
                   id: gcp:binding/acme-prod/roles/editor/service_account
                   kind: service_account
                   linked: false
@@ -107,9 +116,11 @@ cases:
                   role: roles/editor
                   system: gcp
                   unowned: false
+                  unverified: false
                 - current: true
                   current_known: true
                   departed: false
+                  human: true
                   id: gcp:binding/acme-prod/roles/owner/user-ana
                   kind: person
                   linked: true
@@ -124,6 +135,7 @@ cases:
                   role: roles/owner
                   system: gcp
                   unowned: false
+                  unverified: false
             production_basis: ""
             systems_read:
                 - google
@@ -136,6 +148,7 @@ cases:
                 - current: true
                   current_known: true
                   departed: false
+                  human: true
                   id: google:user/ana
                   kind: person
                   linked: true
@@ -150,9 +163,11 @@ cases:
                   role: super admin
                   system: google
                   unowned: false
+                  unverified: false
                 - current: false
                   current_known: true
                   departed: false
+                  human: false
                   id: gcp:binding/acme-prod/roles/owner/group
                   kind: group
                   linked: false
@@ -165,7 +180,8 @@ cases:
                   project: acme-prod
                   role: roles/owner
                   system: gcp
-                  unowned: true
+                  unowned: false
+                  unverified: false
             production_basis: ""
             systems_read:
                 - google
@@ -180,6 +196,7 @@ cases:
                 - current: false
                   current_known: false
                   departed: false
+                  human: true
                   id: github:user/ana
                   kind: person
                   linked: true
@@ -194,6 +211,95 @@ cases:
                   role: org owner of acme
                   system: github
                   unowned: false
+                  unverified: false
+            production_basis: ""
+            systems_read:
+                - github
+    - name: GitHub owners not mapped to a person
+      expect: WARN
+      facts:
+        admins:
+            found:
+                - current: false
+                  current_known: false
+                  departed: false
+                  human: true
+                  id: github:user/ghost
+                  kind: person
+                  linked: false
+                  members_known: true
+                  owner: ""
+                  people: []
+                  person: ""
+                  power_known: true
+                  production: false
+                  project: ""
+                  role: org owner of acme
+                  system: github
+                  unowned: false
+                  unverified: true
+                - current: false
+                  current_known: false
+                  departed: false
+                  human: true
+                  id: github:user/ivy
+                  kind: person
+                  linked: false
+                  members_known: true
+                  owner: ""
+                  people: []
+                  person: ""
+                  power_known: true
+                  production: false
+                  project: ""
+                  role: org owner of acme
+                  system: github
+                  unowned: false
+                  unverified: true
+            production_basis: ""
+            systems_read:
+                - github
+    - name: a bot owns the org with no owner
+      expect: FAIL
+      facts:
+        admins:
+            found:
+                - current: false
+                  current_known: false
+                  departed: false
+                  human: false
+                  id: github:user/deploy-bot
+                  kind: app
+                  linked: false
+                  members_known: true
+                  owner: ""
+                  people: []
+                  person: ""
+                  power_known: true
+                  production: false
+                  project: ""
+                  role: org owner of acme
+                  system: github
+                  unowned: true
+                  unverified: false
+                - current: false
+                  current_known: false
+                  departed: false
+                  human: true
+                  id: github:user/ghost
+                  kind: person
+                  linked: false
+                  members_known: true
+                  owner: ""
+                  people: []
+                  person: ""
+                  power_known: true
+                  production: false
+                  project: ""
+                  role: org owner of acme
+                  system: github
+                  unowned: false
+                  unverified: true
             production_basis: ""
             systems_read:
                 - github

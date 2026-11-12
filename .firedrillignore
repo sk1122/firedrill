@@ -1,0 +1,7 @@
+# Files Firedrill's own drills do not scan in this repo.
+#
+# The AWS connector's test answers a fake ListAccessKeys call with a made-up
+# access key ID, AKIA followed by IOSFODNN7ABCDEFG. Other tests build their fake
+# credentials by concatenation so the scanner never meets one; this one is left
+# as it is because the AWS connector is not being changed.
+connectors/aws/aws_test.go

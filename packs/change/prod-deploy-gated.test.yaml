@@ -7,11 +7,14 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: true
         protection_available: true
       facts:
         env:
             admin_bypass: false
             exists: true
+            names:
+                - production
             prevent_self_review: false
             protected_branches_only: true
             required_reviewers: []
@@ -22,11 +25,14 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: true
         protection_available: true
       facts:
         env:
             admin_bypass: false
             exists: true
+            names:
+                - production
             prevent_self_review: false
             protected_branches_only: false
             required_reviewers: []
@@ -37,11 +43,14 @@ cases:
         name: acme/api
         plan: enterprise
         private: true
+        production: true
         protection_available: true
       facts:
         env:
             admin_bypass: false
             exists: true
+            names:
+                - production
             prevent_self_review: false
             protected_branches_only: true
             required_reviewers: []
@@ -52,11 +61,67 @@ cases:
         name: acme/api
         plan: team
         private: true
+        production: false
         protection_available: true
       facts:
         env:
             admin_bypass: false
             exists: false
+            names: []
+            prevent_self_review: false
+            protected_branches_only: false
+            required_reviewers: []
+            reviewers_available: false
+    - name: environment named Prod
+      expect: PASS
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        production: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: true
+            names:
+                - Prod
+            prevent_self_review: false
+            protected_branches_only: true
+            required_reviewers: []
+            reviewers_available: false
+    - name: marked production with no environment
+      expect: FAIL
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        production: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: false
+            names: []
+            prevent_self_review: false
+            protected_branches_only: false
+            required_reviewers: []
+            reviewers_available: false
+    - name: the least protected of two production environments
+      expect: FAIL
+      target:
+        name: acme/api
+        plan: team
+        private: true
+        production: true
+        protection_available: true
+      facts:
+        env:
+            admin_bypass: false
+            exists: true
+            names:
+                - live
+                - production
             prevent_self_review: false
             protected_branches_only: false
             required_reviewers: []

@@ -10,7 +10,8 @@ pass_when:
   - admins.found.filter(a, a.power_known && a.members_known && a.unowned).size() == 0
   - admins.found.filter(a, a.power_known && a.departed).size() == 0
 warn_when:
+  - admins.found.exists(a, a.power_known && a.members_known && a.unverified)
   - admins.found.exists(a, !a.power_known || !a.members_known)
   - admins.found.exists(a, a.linked && !a.current_known)
-fix: "Map each admin to a person (people.yaml for GitHub logins) or name an owner in .firedrill/owners.yaml. Remove admin from anyone who has left or is suspended, and replace Owner or Editor on a service account with the narrow roles its workload needs."
+fix: "Name an owner in .firedrill/owners.yaml for each service account, app, deploy key or empty group with admin. A person's own account that Firedrill cannot link to a person warns rather than fails: map GitHub logins in .firedrill/people.yaml, and connect Google Workspace so GCP members and Workspace admins link to people. Remove admin from anyone who has left or is suspended, and replace Owner or Editor on a service account with the narrow roles its workload needs."
 maps_to: [SOC2:CC6.2, SOC2:CC6.3, ISO27001:A.5.18]

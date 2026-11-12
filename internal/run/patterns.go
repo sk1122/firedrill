@@ -125,7 +125,7 @@ func CutPoints(g graph.Reader, now time.Time) []CutPoint {
 				order = append(order, name)
 			}
 			known := a["power_known"] == true && a["members_known"] == true
-			if !known || a["unowned"] == true {
+			if !known || a["unowned"] == true || a["unverified"] == true {
 				s.unclear = true
 			}
 			if a["linked"] != true {
@@ -162,7 +162,8 @@ var orphanKinds = map[string]bool{"service_account": true, "app": true, "deploy_
 
 // Orphans lists principals with admin or destructive power that no person and
 // no owner answers for. A group whose members could not be read is unknown,
-// not orphaned, and is left out.
+// not orphaned, and is left out, and so is a person's own account that is
+// only not linked to a person record.
 func Orphans(g graph.Reader, now time.Time) []OrphanedPower {
 	seen := map[string]int{}
 	var out []OrphanedPower
@@ -195,7 +196,7 @@ func Orphans(g graph.Reader, now time.Time) []OrphanedPower {
 			if !orphanKinds[kind] && u["is_admin"] != true {
 				continue
 			}
-			if kind == "group" {
+			if kind == "group" || u["human"] == true {
 				continue
 			}
 			add(OrphanedPower{System: fmt.Sprint(u["system"]), Kind: kind, ID: fmt.Sprint(u["id"]), Reason: fmt.Sprint(u["reason"])})

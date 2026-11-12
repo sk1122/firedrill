@@ -64,7 +64,7 @@ func registerPeople() {
 		Name: "people.unlinked", AnyConnector: peopleSystems,
 		Shape: Obj(map[string]*Shape{
 			"found": List(Obj(map[string]*Shape{
-				"system": Str, "kind": Str, "id": Str, "is_admin": Bool, "reason": Str,
+				"system": Str, "kind": Str, "id": Str, "is_admin": Bool, "reason": Str, "human": Bool,
 			})),
 			"systems_read": List(Str),
 		}),
@@ -76,6 +76,7 @@ func registerPeople() {
 			"found": List(Obj(map[string]*Shape{
 				"system": Str, "kind": Str, "id": Str, "role": Str, "project": Str, "production": Bool,
 				"linked": Bool, "person": Str, "people": List(Str), "owner": Str, "unowned": Bool,
+				"human": Bool, "unverified": Bool,
 				"current": Bool, "current_known": Bool, "power_known": Bool, "members_known": Bool, "departed": Bool,
 			})),
 			"systems_read":     List(Str),
@@ -550,8 +551,12 @@ func bindingKind(b graph.Node) string {
 func (x *peopleIndex) unlinkedRows() []map[string]any {
 	g := x.g
 	var out []map[string]any
+	// human marks a person's own account: a GitHub user or a GCP user:
+	// member. Firedrill not linking one to a person record is not the same as
+	// nobody answering for it.
 	add := func(system, kind string, id graph.ID, admin bool, reason string) {
-		out = append(out, map[string]any{"system": system, "kind": kind, "id": string(id), "is_admin": admin, "reason": reason})
+		human := kind == "person" && !strings.HasPrefix(reason, "the member was deleted")
+		out = append(out, map[string]any{"system": system, "kind": kind, "id": string(id), "is_admin": admin, "reason": reason, "human": human})
 		x.r.Read = append(x.r.Read, id)
 	}
 	if x.read["github"] {
@@ -627,14 +632,19 @@ func peopleUnlinked(g graph.Reader, a Args) (Result, error) {
 }
 
 // peopleAdmins lists every admin principal and who answers for it: the person
-// it links to, or its owner in owners.yaml. One that has neither is unowned.
+// it links to, or its owner in owners.yaml. A human account, a GitHub user or
+// a GCP user: member, that links to no person is unverified: someone may
+// answer for it, but Firedrill could not tell who. A principal that is not a
+// person's account, such as a service account, an app, a deploy key or a group
+// whose members are known and empty, with neither a person nor an owner is
+// unowned. A group whose known members are not all linked is unverified too.
 func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 	x, err := newPeopleIndex(g, a, "people.admins")
 	if err != nil {
 		return Result{}, err
 	}
 	rows := []any{}
-	add := func(system, kind string, id graph.ID, role, project string, production bool, people []graph.ID, linked, powerKnown, membersKnown bool) {
+	add := func(system, kind string, id graph.ID, role, project string, production bool, people []graph.ID, linked, powerKnown, membersKnown, human bool, members int) {
 		owner := x.owners[id]
 		ids := []any{}
 		cur := len(people) > 0
@@ -648,9 +658,12 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 		if len(people) == 1 {
 			person = string(people[0])
 		}
+		nobody := !linked && owner == ""
+		unowned := nobody && !human && (kind != "group" || (membersKnown && members == 0))
 		rows = append(rows, map[string]any{
 			"system": system, "kind": kind, "id": string(id), "role": role, "project": project, "production": production,
-			"linked": linked, "person": person, "people": ids, "owner": owner, "unowned": !linked && owner == "",
+			"linked": linked, "person": person, "people": ids, "owner": owner, "unowned": unowned,
+			"human": human, "unverified": nobody && !unowned && membersKnown,
 			"current": cur, "current_known": x.read["google"], "power_known": powerKnown,
 			"members_known": membersKnown, "departed": departed,
 		})
@@ -674,7 +687,7 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 				continue
 			}
 			p := single(n.ID)
-			add("google", "person", n.ID, role, "", false, p, len(p) > 0, true, true)
+			add("google", "person", n.ID, role, "", false, p, len(p) > 0, true, true, true, 0)
 		}
 	}
 	if x.read["github"] {
@@ -684,11 +697,12 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 				kind = "app"
 			}
 			p := single(n.ID)
+			human := kind == "person"
 			if strAttr(n, "org_role") == "admin" {
-				add("github", kind, n.ID, "org owner of "+strAttr(n, "org"), "", false, p, len(p) > 0, true, true)
+				add("github", kind, n.ID, "org owner of "+strAttr(n, "org"), "", false, p, len(p) > 0, true, true, human, 0)
 			}
 			for _, repo := range sortedKeys(x.repo[graph.EdgeAdminOf][n.ID]) {
-				add("github", kind, n.ID, "admin of "+repo.(string), "", false, p, len(p) > 0, true, true)
+				add("github", kind, n.ID, "admin of "+repo.(string), "", false, p, len(p) > 0, true, true, human, 0)
 			}
 		}
 		for _, n := range g.Nodes(graph.KindGitHubTeam) {
@@ -698,7 +712,8 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 			}
 			var people []graph.ID
 			all := true
-			for _, m := range x.inGroupGitHub(n.ID) {
+			members := x.inGroupGitHub(n.ID)
+			for _, m := range members {
 				if p, ok := x.personOf[m]; ok {
 					people = append(people, p)
 				} else {
@@ -706,7 +721,7 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 				}
 			}
 			for _, repo := range repos {
-				add("github", "group", n.ID, "admin of "+repo.(string)+" through the team", "", false, uniq(people), all && len(people) > 0, true, true)
+				add("github", "group", n.ID, "admin of "+repo.(string)+" through the team", "", false, uniq(people), all && len(people) > 0, true, true, false, len(members))
 			}
 		}
 	}
@@ -718,7 +733,8 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 			}
 			kind := bindingKind(b)
 			var people []graph.ID
-			linked, members := false, true
+			linked, members, count := false, true, 0
+			human := kind == "person" && !strings.HasPrefix(strAttr(b, "member_type"), "deleted_")
 			switch kind {
 			case "person":
 				people = single(b.ID)
@@ -727,6 +743,7 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 				if gid, ok := x.groupOf[b.ID]; ok && x.groupKnown(gid) {
 					people = uniq(x.members[b.ID])
 					linked = len(people) > 0
+					count = len(x.inGroup[gid])
 				} else {
 					members = false
 				}
@@ -735,7 +752,7 @@ func peopleAdmins(g graph.Reader, a Args) (Result, error) {
 			if kind == "service_account" && isTrue(b.Attrs["google_managed"]) && x.owners[b.ID] == "" {
 				x.owners[b.ID] = "google-managed"
 			}
-			add("gcp", kind, b.ID, strAttr(b, "role"), strAttr(b, "project"), x.production(b), people, linked, known, members)
+			add("gcp", kind, b.ID, strAttr(b, "role"), strAttr(b, "project"), x.production(b), people, linked, known, members, human, count)
 		}
 	}
 	return x.result(map[string]any{"found": rows, "systems_read": x.readList, "production_basis": x.productionBasis()})

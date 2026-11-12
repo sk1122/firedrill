@@ -29,6 +29,7 @@ cases:
             restore_days: 90
             systems:
                 - aws
+            unread: []
     - name: no automated backups
       expect: FAIL
       facts:
@@ -57,6 +58,7 @@ cases:
             restore_days: 90
             systems:
                 - aws
+            unread: []
     - name: retention too short
       expect: FAIL
       facts:
@@ -85,6 +87,7 @@ cases:
             restore_days: 90
             systems:
                 - aws
+            unread: []
     - name: backups only in the same account
       expect: FAIL
       facts:
@@ -113,6 +116,7 @@ cases:
             restore_days: 90
             systems:
                 - aws
+            unread: []
     - name: separate copy unknown
       expect: WARN
       facts:
@@ -141,6 +145,7 @@ cases:
             restore_days: 90
             systems:
                 - gcp
+            unread: []
     - name: declared copy
       expect: PASS
       facts:
@@ -169,6 +174,7 @@ cases:
             restore_days: 90
             systems:
                 - gcp
+            unread: []
     - name: no production database
       expect: N/A
       facts:
@@ -197,3 +203,60 @@ cases:
             restore_days: 90
             systems:
                 - aws
+            unread: []
+    - name: Cloud SQL off in every project
+      expect: N/A
+      facts:
+        dbs:
+            found: []
+            min_retention_days: 7
+            restore_days: 90
+            systems:
+                - gcp
+            unread: []
+    - name: Cloud SQL could not be read in two projects
+      expect: WARN
+      facts:
+        dbs:
+            found: []
+            min_retention_days: 7
+            restore_days: 90
+            systems:
+                - gcp
+            unread:
+                - acme-dev
+                - acme-prod
+      partial:
+        dbs: 'Cloud SQL could not be read in acme-dev, acme-prod, where the Cloud SQL Admin API is on: turn on sqladmin.googleapis.com in projects/999, the project Firedrill''s calls are billed to'
+    - name: one project read clean, another unreadable
+      expect: WARN
+      facts:
+        dbs:
+            found:
+                - account: ""
+                  automated_backups: true
+                  copy_detail: ""
+                  deletion_protection: true
+                  engine: postgres
+                  last_restore_days: -1
+                  name: ledger
+                  production: true
+                  production_basis: named under production in config
+                  project: acme-prod
+                  region: europe-west1
+                  restore_current: false
+                  restore_detail: ""
+                  restore_known: false
+                  restore_source: none
+                  retention_days: 14
+                  retention_ok: true
+                  separate_copy: "yes"
+                  system: gcp
+            min_retention_days: 7
+            restore_days: 90
+            systems:
+                - gcp
+            unread:
+                - acme-dev
+      partial:
+        dbs: 'Cloud SQL could not be read in acme-dev, where the Cloud SQL Admin API is on: turn on sqladmin.googleapis.com in projects/999, the project Firedrill''s calls are billed to'

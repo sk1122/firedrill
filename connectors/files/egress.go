@@ -17,11 +17,15 @@ import (
 //     another way does not meet; or a sandbox with a way out.
 //   - unsupported: the tool has no committed setting that limits hosts.
 //   - open: the tool has one and nothing committed uses it.
+//   - none: the file holds no setting that could open or limit outbound
+//     access, such as a .cursorignore, which only lists what Cursor may not
+//     read. It is not judged, and on its own it configures no agent.
 const (
 	EgressAllowlist   = "allowlist"
 	EgressPartial     = "partial"
 	EgressUnsupported = "unsupported"
 	EgressOpen        = "open"
+	EgressNone        = "none"
 )
 
 var egressRank = map[string]int{EgressAllowlist: 0, EgressPartial: 1, EgressUnsupported: 2, EgressOpen: 3}
@@ -250,6 +254,10 @@ func JudgeEgress(configs []*AgentConfig) map[*AgentConfig]Egress {
 	cursor := cursorEgress(configs)
 	out := map[*AgentConfig]Egress{}
 	for _, c := range configs {
+		if c.NoEgress {
+			out[c] = Egress{Egress: EgressNone, Hosts: []string{}}
+			continue
+		}
 		var agent Egress
 		hasAgent := true
 		switch c.Tool {

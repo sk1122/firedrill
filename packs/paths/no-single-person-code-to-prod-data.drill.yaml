@@ -4,12 +4,11 @@ safeguard: "No one person can bypass review on a repo that deploys to production
 severity: critical
 for_each: github.repos
 fetch:
-  env:      { fact: github.environment, args: { name: production } }
   rules:    { fact: github.branch_rules, args: { branch: default } }
   projects: { fact: gcp.projects }
   people:   { fact: people.powers }
-applies_when: env.exists && projects.size() > 0
-na_reason: "the repo has no production environment in GitHub, or no GCP project was read to hold production data"
+applies_when: target.production && projects.size() > 0
+na_reason: "no GCP project was read to hold production data, or the repo is not marked production: it has no GitHub environment named production, prod or live (add other names under github.production_environments) and is not listed under production in .firedrill/config.yaml"
 pass_when:
   - people.found.filter(p, target.name in p.github_bypass && p.prod_destructive.size() > 0).size() == 0
 warn_when:

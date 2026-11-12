@@ -69,7 +69,30 @@ A pinned package that isn't on `mcp_packages` gives WARN, not FAIL. Firedrill ke
 - **VS Code**: in `.vscode/mcp.json`, run each local server with `"sandboxEnabled": true` and `"sandbox": {"network": {"allowedDomains": [...]}}`. VS Code's agent terminal settings are not read.
 - **Gemini CLI** has no setting that lists hosts, and local MCP servers under Claude Code and Cursor have none either, so those warn.
 
+A `.cursorignore` only lists what Cursor may not read. Its paths still keep secrets out of agent reach, but it opens and limits no outbound access, so it is not judged here: a repo whose only agent file is a `.cursorignore` gives N/A, unless a CI job there runs an agent.
+
 `*` or `0.0.0.0/0` in an allowlist fails. The Agents page shows each config's outbound access and its hosts. Only committed settings are read: whether a sandbox actually enforces them on each machine is not checked.
+
+### A boundary outside the agent
+
+Settings an agent reads are settings an agent can change. The same drill also looks for a boundary outside it, from repo files only, and records it per repo as `files.egress_boundary`:
+
+- **CI jobs that run a coding agent** (`anthropics/claude-code-action`, `anthropics/claude-code-base-action`, `openai/codex-action`, `google-github-actions/run-gemini-cli`, or a `run:` step starting `claude`, `codex`, `gemini`, `cursor-agent` or `aider`). Make [`step-security/harden-runner`](https://github.com/step-security/harden-runner) the job's first step:
+
+  ```yaml
+  - uses: step-security/harden-runner@<full commit SHA> # pin it
+    with:
+      egress-policy: block
+      allowed-endpoints: >
+        api.anthropic.com:443
+        github.com:443
+  ```
+
+  `audit` only logs, so it does not count. harden-runner does not work when the whole job runs in a container on a GitHub-hosted runner, and is a no-op on self-hosted runners without its Enterprise tier, so neither counts. A job container with `options: --network none` counts.
+- **Dev containers** (`.devcontainer/devcontainer.json`, `.devcontainer/*/devcontainer.json`). A firewall counts when a lifecycle command runs an `init-firewall` script and `runArgs` grant `--cap-add=NET_ADMIN`, as in [Claude Code's reference container](https://code.claude.com/docs/en/devcontainer); so do `"runArgs": ["--network=none"]` and a compose service with `network_mode: none` or only `internal: true` networks.
+- **Managed settings**, with `--include-home`: Claude Code's `managed-settings.json` (macOS `/Library/Application Support/ClaudeCode/`, Linux `/etc/claude-code/`, Windows `C:\Program Files\ClaudeCode\`) and `managed-settings.d/*.json`, with `sandbox.enabled`, `sandbox.network.allowManagedDomainsOnly` and a host list.
+
+`boundary` is `enforced` when every place an agent is configured to run has one, `partial` when some do, `none` when none do, and `unknown` when there is no agent or nothing could be judged (agent configs with no dev container, read in CI without your machine's managed settings). The drill warns on `none` or `partial`, and fails only when a CI job runs a coding agent with no egress control at all while its workflow references a secret or its token can write. This shows that a boundary is configured, not that it is working on a given machine or run.
 
 ## JavaScript lockfiles
 

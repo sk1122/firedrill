@@ -497,7 +497,7 @@ func TestHubInstallUpdateAndRefusals(t *testing.T) {
 	e.vars = append(e.vars, "FIREDRILL_SALT="+strings.Repeat("a", 64))
 	h := e.hubCopy()
 	e.mustRun("init", "--yes", "--owner", "@me")
-	if out := e.mustRun("hub", "--from", h, "index", h, "--out", filepath.Join(e.work, "index.json")); !strings.Contains(out, "38 drills, 175 test cases, 0 with problems") {
+	if out := e.mustRun("hub", "--from", h, "index", h, "--out", filepath.Join(e.work, "index.json")); !strings.Contains(out, "38 drills, 194 test cases, 0 with problems") {
 		t.Fatal(out)
 	}
 	if out := e.mustRun("test", filepath.Join(h, "drills")); !strings.Contains(out, "0 failing, 0 drills with problems") {
@@ -716,5 +716,207 @@ func TestDiffShowsWhatChangedBetweenTwoRuns(t *testing.T) {
 	out = e.mustRun("diff", "--from", stamp(snaps[0]), "--to", stamp(snaps[1]))
 	if !strings.Contains(out, "Weakenings (2)") {
 		t.Fatalf("diff by timestamp:\n%s", out)
+	}
+}
+
+// A CI run writes the checksums file the workflow attests and hands its path
+// to later steps; verify reports tags unattested until the record step ran,
+// attested after, and a mismatch once a tag is edited. A laptop run writes no
+// checksums, so its tags stay unattested.
+func TestVerifyReportsAttestation(t *testing.T) {
+	e := newEnv(t)
+	e.vars = append(e.vars, "FIREDRILL_SALT=abc")
+	e.mustRun("init", "--yes")
+	api := e.repo("api", map[string]string{"s.sh": "RAILWAY_TOKEN=" + token + "\n"})
+	payload := filepath.Join(e.work, "event.json")
+	if err := os.WriteFile(payload, []byte(`{"repository":{"private":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ghOut := filepath.Join(e.work, "gh-output")
+	ci := append(append([]string{}, e.vars...), "GITHUB_ACTIONS=true", "GITHUB_EVENT_PATH="+payload, "GITHUB_OUTPUT="+ghOut,
+		"GITHUB_REPOSITORY=acme/firedrill", "GITHUB_RUN_ID=7")
+	local := e.vars
+	e.vars = ci
+	e.run("run", "--path", api, "--records", "records")
+	b, err := os.ReadFile(ghOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksums, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "checksums=")
+	if !ok || !strings.HasPrefix(checksums, filepath.Join("records", "attest")) || !strings.HasSuffix(checksums, ".sha256") {
+		t.Fatalf("GITHUB_OUTPUT: %q", b)
+	}
+	out := e.mustRun("verify", "--records", "records")
+	if !strings.Contains(out, "0 attested") || !strings.Contains(out, "unattested") || !strings.Contains(out, "has no attestation record") {
+		t.Fatalf("before the record step:\n%s", out)
+	}
+	e.mustRun("attest", "record", "--records", "records", "--checksums", checksums, "--attestation-id", "99",
+		"--attestation-url", "https://github.com/acme/firedrill/attestations/99")
+	out = e.mustRun("verify", "--records", "records", "--online")
+	if strings.Contains(out, " 0 attested") || !strings.Contains(out, "attested ") || !strings.Contains(out, "gh attestation verify") ||
+		!strings.Contains(out, "-R acme/firedrill") || !strings.Contains(out, "every chain intact") {
+		t.Fatalf("after the record step:\n%s", out)
+	}
+	var j struct {
+		OK       bool `json:"ok"`
+		Attested int  `json:"tags_attested"`
+		PerTag   []struct {
+			Attestation string `json:"attestation"`
+		} `json:"per_tag"`
+	}
+	if err := json.Unmarshal([]byte(e.mustRun("verify", "--records", "records", "--json")), &j); err != nil || !j.OK || j.Attested == 0 || j.Attested != len(j.PerTag) {
+		t.Fatalf("%v %+v", err, j)
+	}
+	// An attested tag edited afterwards.
+	list, _ := os.ReadFile(filepath.Join(e.work, checksums))
+	first := strings.Fields(strings.Split(string(list), "\n")[0])[1]
+	editFile(t, filepath.Join(e.work, "records", first), `"drill_id"`, `"drill_id" `)
+	out, code := e.run("verify", "--records", "records")
+	if code != 1 || !strings.Contains(out, "checksums mismatch") || !strings.Contains(out, "changed since it was attested") {
+		t.Fatalf("%d\n%s", code, out)
+	}
+
+	// A laptop run writes no checksums, and its tags are unattested.
+	e.vars = local
+	e.run("run", "--path", api)
+	if _, err := os.Stat(filepath.Join(e.work, ".firedrill/local/attest")); err == nil {
+		t.Fatal("a laptop run writes nothing to attest")
+	}
+	out = e.mustRun("verify")
+	if !strings.Contains(out, "0 attested") || !strings.Contains(out, "Local runs are never attested") {
+		t.Fatalf("%s", out)
+	}
+}
+
+// workflowSteps parses the shipped workflow, which also lints its YAML.
+func workflowSteps(t *testing.T) (map[string]any, []map[string]any) {
+	t.Helper()
+	data, err := os.ReadFile("../../docs/firedrill-workflow.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wf struct {
+		Permissions map[string]string `yaml:"permissions"`
+		Jobs        map[string]struct {
+			Permissions map[string]string `yaml:"permissions"`
+			Steps       []map[string]any  `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatalf("the workflow is not valid YAML: %v", err)
+	}
+	job := wf.Jobs["drill"]
+	perms := map[string]any{"workflow": wf.Permissions, "job": job.Permissions}
+	return perms, job.Steps
+}
+
+func TestWorkflowPinsEveryActionAndAttests(t *testing.T) {
+	perms, steps := workflowSteps(t)
+	if fmt.Sprint(perms["workflow"]) != "map[contents:read]" {
+		t.Fatalf("workflow permissions: %v", perms["workflow"])
+	}
+	want := "map[attestations:write contents:write id-token:write issues:write]"
+	if fmt.Sprint(perms["job"]) != want {
+		t.Fatalf("job permissions %v, want %s", perms["job"], want)
+	}
+	pinned := regexp.MustCompile(`^[a-z0-9-]+/[a-z0-9-]+@[0-9a-f]{40}$`)
+	var names []string
+	for _, s := range steps {
+		if u, ok := s["uses"].(string); ok && !pinned.MatchString(u) {
+			t.Errorf("%s is not pinned by a full commit SHA", u)
+		}
+		name, _ := s["name"].(string)
+		if u, _ := s["uses"].(string); name == "" {
+			name = u
+		}
+		names = append(names, name)
+		// Untrusted text never reaches a run script through ${{ }}.
+		if r, ok := s["run"].(string); ok && strings.Contains(r, "${{") {
+			t.Errorf("step %q interpolates an expression into shell: use env", name)
+		}
+	}
+	order := strings.Join(names, " | ")
+	for _, seq := range [][2]string{{"Run drills", "Attest this run's tags"}, {"Attest this run's tags", "Record the attestation"},
+		{"Record the attestation", "Push the records"}, {"Write the step summary", "Open or update the weekly issue"}} {
+		if a, b := strings.Index(order, seq[0]), strings.Index(order, seq[1]); a < 0 || b < 0 || a > b {
+			t.Errorf("%q must come before %q: %s", seq[0], seq[1], order)
+		}
+	}
+	for _, s := range steps {
+		if s["name"] == "Attest this run's tags" {
+			with, _ := s["with"].(map[string]any)
+			if !strings.HasPrefix(s["uses"].(string), "actions/attest-build-provenance@") || with["subject-checksums"] != "${{ steps.drills.outputs.checksums }}" {
+				t.Errorf("%v", s)
+			}
+		}
+	}
+}
+
+func stepRun(t *testing.T, name string) string {
+	t.Helper()
+	_, steps := workflowSteps(t)
+	for _, s := range steps {
+		if s["name"] == name {
+			return s["run"].(string)
+		}
+	}
+	t.Fatalf("no step %q", name)
+	return ""
+}
+
+// The weekly issue is one standing issue: created when absent, its body
+// replaced when present, always from a file.
+func TestWeeklyIssueStepCreatesThenEdits(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not installed")
+	}
+	dir := t.TempDir()
+	log := filepath.Join(dir, "gh.log")
+	state := filepath.Join(dir, "open")
+	fake := `#!/bin/bash
+echo "$*" >> "` + log + `"
+if [ "$1 $2" = "issue list" ] && [ -f "` + state + `" ]; then echo 7; fi
+if [ "$1 $2" = "issue create" ]; then touch "` + state + `"; fi
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A reason that tries to break out of the shell, as an outsider could
+	// steer a drill's reason.
+	result := `{"time":"2026-11-09T09:00:00Z","stream":"ci","results":[{"drill":"change/no-solo-ship","target":"acme/api","severity":"high","verdict":"FAIL","state":"OPEN","reason":"$(touch pwned) ` + "`touch pwned2`" + `"}],
+"newly_open":[],"newly_closed":[],"open_unverified":[],"closed_unverified":[],"needs_review":[],"retired":[],"waiting":[],"exit_code":0,
+"diff":{"from":"2026-11-02T09:00:00Z","to":"2026-11-09T09:00:00Z","weakening":1,"other":0,"skipped":[],
+"changes":[{"type":"bypass_on","label":"Bypass turned on","summary":"acme/api default branch: bypass none → allowed $(touch pwned3)","system":"github","weakening":true,
+"caught_by":[{"drill":"change/no-solo-ship","target":"acme/api","issue_title":"Firedrill: change/no-solo-ship on acme/api"}]}]}}`
+	if err := os.WriteFile(filepath.Join(dir, "result.json"), []byte(result), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := stepRun(t, "Open or update the weekly issue")
+	for range 2 {
+		cmd := exec.Command("bash", "-e", "-c", script)
+		cmd.Dir = dir
+		cmd.Env = []string{"PATH=" + dir + ":" + filepath.Dir(binary) + ":/usr/bin:/bin", "ISSUES_URL=https://github.com/acme/firedrill/issues", "HOME=" + dir}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+	}
+	logged, _ := os.ReadFile(log)
+	s := string(logged)
+	if strings.Count(s, "issue create --title Firedrill weekly: what changed --label firedrill-weekly --body-file weekly.md") != 1 ||
+		strings.Count(s, "issue edit 7 --body-file weekly.md") != 1 || !strings.Contains(s, "label create firedrill-weekly") {
+		t.Fatalf("one create, then one edit:\n%s", s)
+	}
+	for _, f := range []string{"pwned", "pwned2", "pwned3"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			t.Fatalf("text from the result ran as shell: %s", f)
+		}
+	}
+	body, _ := os.ReadFile(filepath.Join(dir, "weekly.md"))
+	for _, want := range []string{"### What changed since the last run", "**1 weakening**", "Bypass turned on", "caught by `change/no-solo-ship` on `acme/api`",
+		"https://github.com/acme/firedrill/issues?q=", "### Open safeguards (1)"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("body lacks %q:\n%s", want, body)
+		}
 	}
 }

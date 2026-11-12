@@ -146,6 +146,19 @@ func tier3Cases() []drillCase {
 			targetRepo(g)
 			scan(g, "agent_configs", "acme/api", 0)
 		}},
+		{"agent/egress-allowlisted", tag.NA, "only a .cursorignore", func(g *graph.Graph) {
+			// It only lists what Cursor may not read: it opens and limits nothing.
+			targetRepo(g)
+			scan(g, "agent_configs", "acme/api", 1)
+			scan(g, "egress_boundary", "acme/api", 0)
+			node(g, "agent:acme/api/.cursorignore", graph.KindAgentConfig, map[string]any{"repo": "acme/api", "tool": "cursor",
+				"scope": "repo", "file": ".cursorignore", "allowed_commands": []any{}, "denied_commands": []any{}, "deny_read_paths": []any{".env"},
+				"unguarded_destructive": []any{}, "mcp_servers": []any{}, "gitignored": false, "local_override": false,
+				"egress": "none", "egress_hosts": []any{}, "egress_unbounded": false})
+			node(g, "egress-boundary:acme/api", graph.KindEgressBoundary, map[string]any{"repo": "acme/api", "ci_agent_jobs": []any{},
+				"ci_agent_jobs_bounded": []any{}, "ci_agent_jobs_exposed": []any{}, "devcontainer": "none", "managed": "not_read",
+				"agents_configured": false, "boundary": "unknown"})
+		}},
 
 		// The recurring audit finding: backups nobody has ever restored.
 		{"recovery/restore-exercised", tag.Pass, "API restore 20 days ago", func(g *graph.Graph) {

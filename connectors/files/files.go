@@ -33,7 +33,7 @@ func init() { connector.Register(New()) }
 func (c *Connector) Collections() []connector.Collection {
 	return []connector.Collection{{
 		Name:       "repo files",
-		Nodes:      []string{graph.KindSecretSeen, graph.KindAgentConfig, graph.KindWorkflow, graph.KindTFBucket, graph.KindCodeowners, graph.KindManifest},
+		Nodes:      []string{graph.KindSecretSeen, graph.KindAgentConfig, graph.KindWorkflow, graph.KindTFBucket, graph.KindCodeowners, graph.KindManifest, graph.KindEgressBoundary},
 		Permission: "Contents read, for remote repos",
 		Calls:      []string{"GET https://api.github.com/repos/{repo}/tarball, one per listed repo with no local checkout", "read local checkouts passed with --path"},
 	}}
@@ -143,10 +143,16 @@ func scanRepo(t connector.RepoTarget, all []File, s connector.Scope, out graph.W
 		cfgs[i] = p.cfg
 	}
 	egress := JudgeEgress(cfgs)
-	configs := 0
+	// configs counts every agent file; agents counts those that configure an
+	// agent whose egress can be judged, so a .cursorignore alone counts as
+	// no agent for the egress boundary.
+	configs, agents := 0, 0
 	for _, p := range parsedConfigs {
 		cfg := p.cfg
 		configs++
+		if !cfg.NoEgress {
+			agents++
+		}
 		servers := []any{}
 		for _, srv := range cfg.Servers {
 			servers = append(servers, map[string]any{
@@ -171,6 +177,7 @@ func scanRepo(t connector.RepoTarget, all []File, s connector.Scope, out graph.W
 
 	inspected, workflows := 0, 0
 	var tfFiles []File
+	var agentJobs []AgentJob
 	for _, f := range all {
 		if f.Unscanned {
 			continue
@@ -196,6 +203,7 @@ func scanRepo(t connector.RepoTarget, all []File, s connector.Scope, out graph.W
 				return err
 			}
 			workflows++
+			agentJobs = append(agentJobs, AgentJobs(f.Path, f.Data, w)...)
 			node("github:workflow/"+repo+"/"+f.Path, graph.KindWorkflow, map[string]any{
 				"file": w.File, "permissions": w.Permissions, "unpinned_actions": toAny(w.Unpinned),
 				"pull_request_target_checkout": w.PRTarget, "triggers": toAny(w.Triggers), "secrets": toAny(w.Secrets),
@@ -209,6 +217,12 @@ func scanRepo(t connector.RepoTarget, all []File, s connector.Scope, out graph.W
 	}
 	graph.WriteScan(out, "files", "secrets", repo, inspected, "", s.Now)
 	graph.WriteScan(out, "files", "workflows", repo, workflows, "", s.Now)
+	writeBoundary(repo, all, agentJobs, agents > 0, s.IncludeHome && t.Path != "", node)
+	places := len(agentJobs)
+	if agents > 0 {
+		places++
+	}
+	graph.WriteScan(out, "files", "egress_boundary", repo, places, "", s.Now)
 
 	// new_install_scripts is filled in by the run, against the previous run.
 	manifests := ScanManifests(all)
@@ -327,4 +341,29 @@ func toAny(in []string) []any {
 		out[i] = v
 	}
 	return out
+}
+
+// writeBoundary records whether the places agents run in this repo have an
+// egress boundary outside the agent.
+func writeBoundary(repo string, all []File, jobs []AgentJob, localAgents, home bool, node func(id, kind string, attrs map[string]any)) {
+	managed := ManagedNotRead
+	if home && localAgents {
+		managed = Managed(ManagedSettingsPaths())
+	}
+	dev := Devcontainer(all)
+	ids, bounded, exposed := []any{}, []any{}, []any{}
+	for _, j := range jobs {
+		ids = append(ids, j.ID)
+		if j.Bounded {
+			bounded = append(bounded, j.ID)
+		}
+		if j.Exposed {
+			exposed = append(exposed, j.ID)
+		}
+	}
+	node("egress-boundary:"+repo, graph.KindEgressBoundary, map[string]any{
+		"ci_agent_jobs": ids, "ci_agent_jobs_bounded": bounded, "ci_agent_jobs_exposed": exposed,
+		"devcontainer": dev, "managed": managed, "agents_configured": localAgents || len(jobs) > 0,
+		"boundary": Boundary(jobs, localAgents, dev, managed),
+	})
 }

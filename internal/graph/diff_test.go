@@ -21,6 +21,13 @@ type estate struct {
 	g  *Graph
 }
 
+// Made-up AWS access key IDs, built by concatenation so this file holds none
+// the secret scanner would find in it.
+const (
+	awsKeyID1 = "AKIA" + "AAAAAAAAAAAAAAA1"
+	awsKeyID2 = "AKIA" + "AAAAAAAAAAAAAAA2"
+)
+
 func (e *estate) node(id ID, kind, source string, attrs map[string]any) {
 	e.g.Node(Node{ID: id, Kind: kind, Source: source, Attrs: attrs, SeenAt: e.at})
 }
@@ -71,9 +78,9 @@ func weekRun(t *testing.T, second bool) Snapshot {
 	e.node("github:actions/acme/api", KindActionsPerms, "github", map[string]any{"can_approve_pull_requests": false, "default_token_permission": "read"})
 
 	// aws
-	keys := []any{"AKIAAAAAAAAAAAAAAAA1"}
+	keys := []any{awsKeyID1}
 	if second {
-		keys = append(keys, "AKIAAAAAAAAAAAAAAAA2")
+		keys = append(keys, awsKeyID2)
 	}
 	e.node("aws:iam-user/111122223333/deploy-bot", KindAWSPrincipal, "aws", map[string]any{
 		"account": "111122223333", "principal_kind": "user", "name": "deploy-bot",
@@ -208,7 +215,7 @@ func TestDiffWeekApartFindsEachWeakeningAndNoNoise(t *testing.T) {
 	if c := byType[ChangeNewAdmin]; c.Subject != ID("google:user/"+hashA) || c.Attr != "is_admin" || c.Before != false || c.After != true {
 		t.Errorf("new admin: %+v", c)
 	}
-	if c := byType[ChangeNewKey]; c.Subject != "aws:key/AKIAAAAAAAAAAAAAAAA2" || !strings.Contains(c.Summary, "deploy-bot") {
+	if c := byType[ChangeNewKey]; c.Subject != "aws:key/"+awsKeyID2 || !strings.Contains(c.Summary, "deploy-bot") {
 		t.Errorf("new key: %+v", c)
 	}
 	if c := byType[ChangeSecretSeen]; !strings.Contains(c.Summary, "scripts/deploy.sh") || strings.Contains(c.Summary, secret) {
@@ -511,6 +518,16 @@ func TestDiffWeakeningRules(t *testing.T) {
 		{KindAgentConfig, "egress_hosts", []any{"github.com", "pypi.org"}, []any{"github.com"}, ChangeChanged, false},
 		{KindAgentConfig, "egress_unbounded", false, true, ChangeWeakened, true},
 		{KindAgentConfig, "egress_unbounded", true, false, ChangeChanged, false},
+		{KindEgressBoundary, "boundary", "enforced", "partial", ChangeWeakened, true},
+		{KindEgressBoundary, "boundary", "partial", "none", ChangeWeakened, true},
+		{KindEgressBoundary, "boundary", "none", "enforced", ChangeChanged, false},
+		{KindEgressBoundary, "boundary", "unknown", "none", ChangeChanged, false},
+		{KindEgressBoundary, "devcontainer", "firewall", "open", ChangeWeakened, true},
+		{KindEgressBoundary, "devcontainer", "none", "firewall", ChangeChanged, false},
+		{KindEgressBoundary, "managed", "allowlist", "partial", ChangeWeakened, true},
+		{KindEgressBoundary, "ci_agent_jobs_bounded", []any{"a.yml#x"}, []any{}, ChangeWeakened, true},
+		{KindEgressBoundary, "ci_agent_jobs_exposed", []any{}, []any{"a.yml#x"}, ChangeWeakened, true},
+		{KindEgressBoundary, "ci_agent_jobs", []any{}, []any{"a.yml#x"}, ChangeChanged, false},
 		{KindPageScript, "has_integrity", true, false, ChangeWeakened, true},
 		{KindPageScript, "has_integrity", false, true, ChangeChanged, false},
 		{KindPageScript, "owned", true, false, ChangeChanged, false},
@@ -830,6 +847,85 @@ func TestDiffTier3(t *testing.T) {
 		}
 		if strings.Contains(c.Summary, "0123456789abcdef0123456789abcdef01234567") {
 			t.Errorf("a summary names a key ID: %s", c.Summary)
+		}
+	}
+}
+
+// A snapshot whose repo name the record scanner replaced still diffs to
+// nothing against itself and against one that kept the name, and no skip
+// names a raw ID.
+func TestDiffRestoresScannedRepoNames(t *testing.T) {
+	at := time.Date(2026, 11, 7, 9, 0, 0, 0, time.UTC)
+	snap := func(repo string) Snapshot {
+		return Snapshot{Time: at, Coverage: &Coverage{Read: []string{"files"}}, Nodes: []Node{
+			{ID: "scan:secrets/acme-payments-api-2026", Kind: KindScan, Source: "files",
+				Attrs: map[string]any{"scanner": "secrets", "scope": repo, "inspected": int64(2)}},
+			{ID: "secret:abc@acme-payments-api-2026/.env:1", Kind: KindSecretSeen, Source: "files",
+				Attrs: map[string]any{"repo": repo, "file": ".env", "hash": "abc", "agent_readable": true}},
+			{ID: "secret:abc", Kind: KindSecret, Source: "files"},
+		}, Edges: []Edge{{From: "secret:abc", To: "file:acme-payments-api-2026/.env", Kind: EdgeFoundIn, Source: "files"}}}
+	}
+	mangled := snap("secret:0123456789abcdef0123456789abcdef")
+	for _, pair := range [][2]Snapshot{{mangled, mangled}, {mangled, snap("acme-payments-api-2026")}, {snap("acme-payments-api-2026"), mangled}} {
+		d := Diff(pair[0], pair[1])
+		if len(d.Changes) != 0 || len(d.Skipped) != 0 {
+			t.Errorf("changes %+v, skipped %v", d.Changes, d.Skipped)
+		}
+	}
+	if mangled.Nodes[1].Attrs["repo"] != "secret:0123456789abcdef0123456789abcdef" {
+		t.Fatal("the diff must not change the snapshot it was given")
+	}
+}
+
+// What neither run read is not reported as not compared.
+func TestDiffSaysNothingOfWhatNeitherRunRead(t *testing.T) {
+	at := time.Date(2026, 11, 7, 9, 0, 0, 0, time.UTC)
+	s := Snapshot{Time: at, Coverage: &Coverage{Read: []string{"files"}}, Nodes: []Node{
+		{ID: "secret:abc@acme/api/a.sh:1", Kind: KindSecretSeen, Source: "files",
+			Attrs: map[string]any{"repo": "acme/api", "file": "a.sh", "hash": "abc", "agent_readable": true}},
+	}}
+	if d := Diff(s, s); len(d.Skipped) != 0 || len(d.Changes) != 0 {
+		t.Fatalf("%+v", d)
+	}
+	// Read in one run and not the other is still said.
+	read := s
+	read.Nodes = append([]Node{{ID: "scan:secrets/acme/api", Kind: KindScan, Source: "files",
+		Attrs: map[string]any{"scanner": "secrets", "scope": "acme/api", "inspected": int64(1)}}}, s.Nodes...)
+	if d := Diff(read, s); len(d.Skipped) != 1 || !strings.Contains(d.Skipped[0], "files acme/api: not scanned in the later run") {
+		t.Fatalf("%v", d.Skipped)
+	}
+}
+
+// A new production environment that gates its deploys is a new deploy path,
+// not a weakening by itself; one that gates nothing still weakens.
+func TestNewGatedEnvironmentIsNotAWeakening(t *testing.T) {
+	old := weekRun(t, false)
+	for _, c := range []struct {
+		name  string
+		attrs map[string]any
+		weak  bool
+	}{
+		{"Prod", map[string]any{"required_reviewers": []any{"acme/release"}, "prevent_self_review": true, "admin_bypass": false, "protected_branches_only": false}, false},
+		{"live", map[string]any{"required_reviewers": []any{}, "prevent_self_review": false, "admin_bypass": true, "protected_branches_only": true}, false},
+		{"preview", map[string]any{"required_reviewers": []any{}, "prevent_self_review": false, "admin_bypass": true, "protected_branches_only": false}, true},
+	} {
+		g := FromSnapshot(old)
+		id := ID("github:env/acme/api/" + c.name)
+		g.Node(Node{ID: id, Kind: KindEnvironment, Source: "github", Attrs: c.attrs})
+		g.Edge(Edge{From: "github:repo/acme/api", To: id, Kind: EdgeDeploysTo, Source: "github"})
+		s := TakeSnapshot(g, old.Time.Add(time.Hour))
+		s.Coverage = old.Coverage
+		found := false
+		for _, ch := range Diff(old, s).Changes {
+			if ch.Type == ChangeDeployPath {
+				found = true
+				if ch.Weakening != c.weak {
+					t.Errorf("%s: weakening %v, want %v: %+v", c.name, ch.Weakening, c.weak, ch)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: no deploy path change", c.name)
 		}
 	}
 }

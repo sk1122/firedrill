@@ -79,6 +79,7 @@ func (c *Connector) Collections() []connector.Collection {
 			"POST https://oauth2.googleapis.com/token",
 			"GET https://admin.googleapis.com/admin/directory/v1/groups?customer=my_customer, only when a GCP binding names a group",
 			"GET https://admin.googleapis.com/admin/directory/v1/groups/{group ID}/members, once per group a GCP binding names and each group nested in one",
+			"GET https://admin.googleapis.com/admin/reports/v1/activity/users/all/applications/{admin, token or groups}?eventName=..., only after a diff: who made a change between the two runs (" + ReportsScope + ")",
 		},
 	}}
 }

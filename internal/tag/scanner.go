@@ -27,6 +27,13 @@ var nameKeys = map[string]bool{"secrets": true, "cloud_key_secrets": true}
 // alone only if it is shaped like a package name (see packageName).
 var packageKeys = map[string]bool{"package": true, "command": true, "install_scripts": true, "new_install_scripts": true}
 
+// repoKeys hold the name of a repo or of a scan's scope: a repo, project,
+// domain or provider name, as config or a checkout's folder gives it. A value
+// under one is left alone only if it is shaped like a name (see packageName),
+// so a long checkout folder name stays readable in a snapshot and the diff
+// can match it to its scan record.
+var repoKeys = map[string]bool{"repo": true, "scope": true}
+
 // loginKeys hold GitHub logins, which facts carry for conditions and evidence.
 // A value under one is left alone only if it is shaped like a login (see
 // githubLogin).
@@ -172,7 +179,7 @@ func scanValue(v any, h graph.Hasher, where string, notes *[]string, key string)
 	exempt := exemptKeys[key]
 	switch val := v.(type) {
 	case string:
-		if (exempt && safeShape(val)) || (nameKeys[key] && secretName(val)) || (packageKeys[key] && packageName(val)) ||
+		if (exempt && safeShape(val)) || (nameKeys[key] && secretName(val)) || ((packageKeys[key] || repoKeys[key]) && packageName(val)) ||
 			(loginKeys[key] && githubLogin(val)) {
 			return val
 		}

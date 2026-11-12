@@ -422,7 +422,7 @@ func TestTarballThroughGuardedRedirect(t *testing.T) {
 	var buf bytes.Buffer
 	z := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(z)
-	content := []byte("RAILWAY_TOKEN=6f1b9d2e-7c44-4a10-9e3b-2d5ac81f0e77\n")
+	content := []byte("RAILWAY_TOKEN=" + "6f1b9d2e-7c44-4a10-9e3b-2d5ac81f0e77\n")
 	_ = tw.WriteHeader(&tar.Header{Name: "acme-api-abc/scripts/x.sh", Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg})
 	_, _ = tw.Write(content)
 	_ = tw.Close()

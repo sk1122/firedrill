@@ -1,6 +1,7 @@
 package run
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,12 +18,22 @@ import (
 // DiffRecord is a diff as stored under records/diffs, with the SHA-256 of the
 // two snapshot files it compared, so it can be checked again later. It reads
 // on its own: compacting the snapshots it names does not break it.
+//
+// Stored records form a hash chain: Previous is the content hash of the
+// record before it in the diffs folder, and SHA256 is this record's own
+// content hash (see DiffRecordHash). A record written before the chain has
+// neither, and verifies as the start of a chain.
 type DiffRecord struct {
 	graph.DiffResult
 	FromSnapshot string `json:"from_snapshot"`
 	ToSnapshot   string `json:"to_snapshot"`
 	FromSHA256   string `json:"from_sha256"`
 	ToSHA256     string `json:"to_sha256,omitempty"`
+	// Audit says which audit sources were asked who made each change, and
+	// which could not be read. Nil when no audit source was connected.
+	Audit    *AuditNote `json:"audit,omitempty"`
+	Previous string     `json:"previous_sha256,omitempty"`
+	SHA256   string     `json:"sha256,omitempty"`
 }
 
 // RunSnapshots lists the snapshot files of single runs, oldest first. The
@@ -84,10 +95,28 @@ func DiffName(snapshot string) string {
 	return strings.TrimSuffix(filepath.Base(snapshot), ".json.gz") + ".json"
 }
 
-// WriteDiff stores a diff under records/diffs.
+// WriteDiff stores a diff under records/diffs, linked to the record before it.
 func WriteDiff(records string, rec *DiffRecord) (string, error) {
 	dir := filepath.Join(records, "diffs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	name := DiffName(rec.ToSnapshot)
+	rec.Previous, rec.SHA256 = "", ""
+	prev, err := diffBefore(dir, name)
+	if err != nil {
+		return "", err
+	}
+	if prev != "" {
+		raw, err := os.ReadFile(prev)
+		if err != nil {
+			return "", err
+		}
+		if rec.Previous, err = canonicalHash(raw); err != nil {
+			return "", fmt.Errorf("%s: %w", prev, err)
+		}
+	}
+	if rec.SHA256, err = DiffRecordHash(rec); err != nil {
 		return "", err
 	}
 	b, err := json.MarshalIndent(rec, "", "  ")
@@ -255,6 +284,19 @@ func PersonShortID(id graph.ID) string {
 	return s
 }
 
+// groupKey is who a change is grouped under: the actor an audit source named,
+// or else the person its node belongs to, or "" for neither. A person named as
+// the actor groups with that person's own changes, by short ID.
+func groupKey(c graph.Change) string {
+	if c.Actor != "" {
+		if rest, ok := strings.CutPrefix(c.Actor, "person:"); ok {
+			return PersonShortID(graph.ID("person:" + rest))
+		}
+		return c.Actor
+	}
+	return c.Person
+}
+
 // ChangeGroup is a run of changes shown under one heading.
 type ChangeGroup struct {
 	Title     string
@@ -275,8 +317,8 @@ func GroupChanges(changes []graph.Change) []ChangeGroup {
 			if c.Weakening != weak {
 				continue
 			}
-			if c.Person != "" {
-				byPerson[c.Person] = append(byPerson[c.Person], c)
+			if who := groupKey(c); who != "" {
+				byPerson[who] = append(byPerson[who], c)
 			} else {
 				byType[c.Type] = append(byType[c.Type], c)
 			}
@@ -287,7 +329,11 @@ func GroupChanges(changes []graph.Change) []ChangeGroup {
 		}
 		sort.Strings(people)
 		for _, p := range people {
-			out = append(out, ChangeGroup{Title: "Person " + p, Person: p, Weakening: weak, Changes: byPerson[p]})
+			title := "Person " + p
+			if strings.Contains(p, " ") || strings.Contains(p, ":") {
+				title = "Changed by " + graph.ActorLabel(p)
+			}
+			out = append(out, ChangeGroup{Title: title, Person: p, Weakening: weak, Changes: byPerson[p]})
 		}
 		kinds := make([]string, 0, len(byType))
 		for t := range byType {
@@ -326,11 +372,12 @@ func CompareFiles(fromPath, toPath string, caught Caught) (*DiffRecord, error) {
 
 // diffAgainst works out what changed since the previous run and, when records
 // are written, stores it next to the snapshot.
-func diffAgainst(prevPath string, prev *graph.Snapshot, snap graph.Snapshot, snapPath string, c Config, res *Result, h graph.Hasher) error {
+func diffAgainst(ctx context.Context, prevPath string, prev *graph.Snapshot, snap graph.Snapshot, snapPath string, c Config, res *Result, h graph.Hasher) error {
 	d := graph.Diff(*prev, snap)
 	Annotate(&d, *prev, snap, CaughtByOutcomes(res.Outcomes))
+	note := auditDiff(ctx, c, res, &d)
 	tag.ScanDiff(&d, h)
-	rec := &DiffRecord{DiffResult: d, FromSnapshot: filepath.Base(prevPath), ToSnapshot: graph.SnapshotName(snap.Time)}
+	rec := &DiffRecord{DiffResult: d, FromSnapshot: filepath.Base(prevPath), ToSnapshot: graph.SnapshotName(snap.Time), Audit: note}
 	var err error
 	if rec.FromSHA256, err = FileSHA256(prevPath); err != nil {
 		return err

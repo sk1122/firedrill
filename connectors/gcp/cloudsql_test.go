@@ -3,9 +3,11 @@ package gcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -55,12 +57,26 @@ func (f *sqlFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = io.WriteString(w, `{"error":{"code":403,"message":"denied","status":"PERMISSION_DENIED"}}`)
 		}
-	case host == sqlHost && r.URL.Path == "/v1/projects/acme-dev/instances":
+	case host == sqlHost && strings.HasSuffix(r.URL.Path, "/instances") && slices.Contains([]string{"acme-dev", "acme-ml", "acme-ops"}, strings.Split(r.URL.Path, "/")[3]):
+		// The API is off in the project calls are billed to, acme-quota
+		// (project number 999), whichever project is listed.
 		w.WriteHeader(http.StatusForbidden)
-		_, _ = io.WriteString(w, `{"error":{"code":403,"message":"Cloud SQL Admin API has not been used","status":"PERMISSION_DENIED","details":[{"reason":"SERVICE_DISABLED"}]}}`)
+		_, _ = io.WriteString(w, `{"error":{"code":403,"message":"Cloud SQL Admin API has not been used in project 999 before or it is disabled.","status":"PERMISSION_DENIED",
+			"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED","domain":"googleapis.com",
+			"metadata":{"consumer":"projects/999","service":"sqladmin.googleapis.com"}}]}}`)
 	case host == sqlHost && r.URL.Path == "/v1/projects/acme-data/instances":
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = io.WriteString(w, `{"error":{"code":403,"message":"The client is not authorized to make this request.","status":"PERMISSION_DENIED"}}`)
+	case host == sqlHost && r.URL.Path == "/v1/projects/acme-broken/instances":
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":{"code":500,"message":"internal error","status":"INTERNAL"}}`)
+	case host == usageHost && r.Method == http.MethodGet && r.URL.Path == "/v1/projects/acme-dev/services/sqladmin.googleapis.com":
+		_, _ = io.WriteString(w, `{"name":"projects/111/services/sqladmin.googleapis.com","parent":"projects/111","state":"DISABLED"}`)
+	case host == usageHost && r.Method == http.MethodGet && r.URL.Path == "/v1/projects/acme-ml/services/sqladmin.googleapis.com":
+		_, _ = io.WriteString(w, `{"name":"projects/222/services/sqladmin.googleapis.com","parent":"projects/222","state":"ENABLED"}`)
+	case host == usageHost && r.Method == http.MethodGet && r.URL.Path == "/v1/projects/acme-ops/services/sqladmin.googleapis.com":
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"error":{"code":403,"message":"Permission denied to get service [sqladmin.googleapis.com]","status":"PERMISSION_DENIED"}}`)
 	default:
 		f.t.Errorf("unexpected call %s %s%s", r.Method, host, r.URL.Path)
 		w.WriteHeader(http.StatusNotFound)
@@ -81,7 +97,7 @@ func TestCollectCloudSQL(t *testing.T) {
 	srv := httptest.NewServer(f)
 	defer srv.Close()
 	c := newConn(srv)
-	s := scope("acme-prod", "acme-dev", "acme-data")
+	s := scope("acme-prod", "acme-dev", "acme-data", "acme-ml", "acme-ops")
 	s.Project.Config.Production = []string{"acme-prod"}
 	g := graph.New()
 	if err := c.Collect(context.Background(), sqlCollection(c), s, g); err != nil {
@@ -119,13 +135,77 @@ func TestCollectCloudSQL(t *testing.T) {
 	if prod.Attrs["inspected"] != int64(2) || prod.Attrs["partial"] != nil {
 		t.Fatalf("%+v", prod.Attrs)
 	}
+	// Service Usage says the API is off in acme-dev itself: it holds no Cloud
+	// SQL instance, which is a clean read, not an error.
 	dev, _ := g.Get(graph.ScanID(BackupScanner, "acme-dev"))
-	if e, _ := dev.Attrs["error"].(string); !strings.Contains(e, "sqladmin.googleapis.com") || !strings.Contains(e, "billed to") {
-		t.Fatalf("an API not turned on is an error that says where to turn it on: %+v", dev.Attrs)
+	if dev.Attrs["error"] != nil || dev.Attrs["partial"] != nil || dev.Attrs["inspected"] != int64(0) ||
+		!strings.Contains(fmt.Sprint(dev.Attrs["note"]), "not turned on in acme-dev") {
+		t.Fatalf("an API off in the listed project means no Cloud SQL there: %+v", dev.Attrs)
 	}
-	data, _ := g.Get(graph.ScanID(BackupScanner, "acme-data"))
-	if e, _ := data.Attrs["error"].(string); !strings.Contains(e, "403") {
-		t.Fatalf("a denied read is an error: %+v", data.Attrs)
+	// A denied read, an API on in the project but off where calls are
+	// billed, and an API state nobody could read are partial, each saying
+	// what to turn on or grant and where.
+	for project, want := range map[string]string{
+		"acme-data": "grant the reader Cloud SQL Viewer (roles/cloudsql.viewer)",
+		"acme-ml":   "turn on sqladmin.googleapis.com in projects/999, the project Firedrill's calls are billed to",
+		"acme-ops":  "turn on sqladmin.googleapis.com in projects/999, the project Firedrill's calls are billed to, or grant the reader Viewer",
+	} {
+		n, _ := g.Get(graph.ScanID(BackupScanner, project))
+		if n.Attrs["error"] != nil || n.Attrs["unread"] != true || !strings.Contains(fmt.Sprint(n.Attrs["partial_group"]), want) ||
+			!strings.Contains(fmt.Sprint(n.Attrs["partial"]), project) {
+			t.Errorf("%s: %+v", project, n.Attrs)
+		}
+	}
+	for _, call := range s.Log.Calls() {
+		if strings.Contains(call.Endpoint, usageHost) && (call.Method != http.MethodGet || strings.Contains(call.Endpoint, "acme-prod") || strings.Contains(call.Endpoint, "acme-data")) {
+			t.Errorf("Service Usage is asked only where the API was reported off: %+v", call)
+		}
+	}
+}
+
+// A server error is a genuine failure and stays an error.
+func TestCloudSQLServerErrorIsAnError(t *testing.T) {
+	f := &sqlFake{t: t}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	c := newConn(srv)
+	s := scope("acme-broken")
+	g := graph.New()
+	if err := c.Collect(context.Background(), sqlCollection(c), s, g); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := g.Get(graph.ScanID(BackupScanner, "acme-broken"))
+	if e, _ := n.Attrs["error"].(string); !strings.Contains(e, "500") {
+		t.Fatalf("%+v", n.Attrs)
+	}
+}
+
+// Service Usage is read only at one path: the Cloud SQL Admin API's state in
+// a project. Any other path, and any other method, is refused.
+func TestServiceUsageIsLimitedToOnePath(t *testing.T) {
+	// Nothing leaves: an allowed call reaches this stub.
+	stub := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: http.Header{}, Request: r}, nil
+	})
+	tr := &connector.Transport{Next: stub, Policy: Policy([]string{"acme-prod"}, ""), Log: &connector.CallLog{}, Connector: "gcp"}
+	ok, _ := http.NewRequest(http.MethodGet, "https://"+usageHost+"/v1/projects/acme-prod/services/sqladmin.googleapis.com", nil)
+	if _, err := tr.RoundTrip(ok); err != nil {
+		t.Fatalf("the one allowed read: %v", err)
+	}
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/v1/projects/acme-prod/services/compute.googleapis.com"},
+		{http.MethodGet, "/v1/projects/acme-prod/services"},
+		{http.MethodGet, "/v1/projects/acme-prod/services/sqladmin.googleapis.com/extra"},
+		{http.MethodGet, "/v1/operations"},
+		{http.MethodPost, "/v1/projects/acme-prod/services/sqladmin.googleapis.com:enable"},
+		{http.MethodPost, "/v1/projects/acme-prod/services/sqladmin.googleapis.com:disable"},
+		{http.MethodPost, "/v1/projects/acme-prod/services:batchEnable"},
+		{http.MethodDelete, "/v1/projects/acme-prod/services/sqladmin.googleapis.com"},
+	} {
+		req, _ := http.NewRequest(c.method, "https://"+usageHost+c.path, nil)
+		if _, err := tr.RoundTrip(req); !errors.Is(err, connector.ErrBlocked) {
+			t.Errorf("%s %s must be refused: %v", c.method, c.path, err)
+		}
 	}
 }
 
@@ -191,7 +271,7 @@ func TestCloudSQLOperationsWritesAreRefused(t *testing.T) {
 		hosts = append(hosts, h)
 	}
 	sort.Strings(hosts)
-	if strings.Join(hosts, " ") != "cloudresourcemanager.googleapis.com iam.googleapis.com policyanalyzer.googleapis.com sqladmin.googleapis.com storage.googleapis.com" {
+	if strings.Join(hosts, " ") != "cloudresourcemanager.googleapis.com iam.googleapis.com policyanalyzer.googleapis.com serviceusage.googleapis.com sqladmin.googleapis.com storage.googleapis.com" {
 		t.Fatalf("hosts: %v", hosts)
 	}
 	tr := &connector.Transport{Policy: Policy([]string{"acme-prod"}, ""), Log: &connector.CallLog{}, Connector: "gcp"}

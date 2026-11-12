@@ -60,6 +60,23 @@ firedrill export rulesets
 
 It writes `.firedrill/evidence/rulesets.json`. Commit it; CI uses it for 30 days, and records say which commit it came from. The file holds each ruleset's bypass list as GitHub returns it: actor type, actor ID and bypass mode, with team and app IDs but no logins.
 
+## Which repos deploy to production
+
+`change/prod-deploy-gated`, `change/no-solo-ship` and `paths/no-single-person-code-to-prod-data` judge repos that deploy to production. A repo does when it has a GitHub environment named `production`, `prod` or `live`, in any case. Add other names your team uses:
+
+```yaml
+github:
+  production_environments: [release, prd]
+```
+
+With several production environments, each gate is judged by the least protected of them. A repo that deploys from somewhere else, such as Vercel or Argo CD, with no production environment in GitHub, goes under the top-level `production` list as `org/repo`, next to the AWS accounts and GCP projects there:
+
+```yaml
+production: [acme/api, acme-prod]
+```
+
+Such a repo fails `change/prod-deploy-gated`, since nothing in GitHub gates its deploys, and warns on `change/no-solo-ship` while main is protected, since how its deploys are approved cannot be read. A repo with neither is N/A on all three, and the reason names both settings.
+
 ## Who can reach your repos
 
 Firedrill reads, for `github.org` and each repo in `github.repos`:
@@ -81,6 +98,12 @@ Who can bypass review on each repo's default branch comes from branch protection
 Without Members: read, `firedrill connect github` prints `Not readable yet:` with what to add. Repo settings are still read, and only the facts about people give ERROR. A repo whose collaborators can't be read prints `Read only in part:`, and drills reading people there give WARN.
 
 If `github.org` is a user account rather than an org, there are no members or teams; repo collaborators are still read.
+
+## Who made a change (optional)
+
+After each run's diff, Firedrill asks GitHub's [organization audit log](https://docs.github.com/en/enterprise-cloud@latest/rest/orgs/orgs#get-the-audit-log-for-an-organization) who changed a ruleset, branch protection, repo access or an org role, for the window between the two runs only: `GET /orgs/{org}/audit-log` with a search phrase of one action or category, the repo and `created:<from>..<to>`, one page of 100, at most 50 audit calls a run across every source. The login it returns is hashed at once and never stored; a change shows the person's short ID, or the account's.
+
+The audit log needs GitHub Enterprise Cloud and a token of an organization owner with `read:audit_log` (a classic token or OAuth app; GitHub's reference names no fine-grained permission for it). With any other plan or token the call returns 403 or 404, the diff says `github_audit: not readable`, and each change keeps the window. Nothing else is affected.
 
 ## What your plan allows
 

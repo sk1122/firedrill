@@ -4,8 +4,8 @@ safeguard: "A restore of each production database has succeeded within the allow
 severity: medium
 fetch:
   dbs: { fact: recovery.databases }
-applies_when: dbs.found.exists(d, d.production)
-na_reason: "no production database was found in the connected accounts and projects"
+applies_when: dbs.found.exists(d, d.production) || dbs.unread.size() > 0
+na_reason: "no production database was found in the connected accounts and projects, and every one of them was looked at"
 pass_when:
   - dbs.found.filter(d, d.production && d.restore_known && !d.restore_current).size() == 0
 warn_when:

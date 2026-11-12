@@ -4,8 +4,8 @@ safeguard: "Every production database has automated backups kept for a minimum n
 severity: critical
 fetch:
   dbs: { fact: recovery.databases }
-applies_when: dbs.found.exists(d, d.production)
-na_reason: "no production database was found in the connected accounts and projects"
+applies_when: dbs.found.exists(d, d.production) || dbs.unread.size() > 0
+na_reason: "no production database was found in the connected accounts and projects, and every one of them was looked at"
 pass_when:
   - dbs.found.filter(d, d.production && !d.automated_backups).size() == 0
   - dbs.found.filter(d, d.production && !d.retention_ok).size() == 0

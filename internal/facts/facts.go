@@ -118,6 +118,12 @@ type Def struct {
 	// so found.env_class is the env_class of every found row. A FAIL that rests
 	// only on these fields is a WARN. No shipped fact marks any field yet.
 	Inferred []string
+	// Identity lists the field paths that say which thing a row is, spelled as
+	// Inferred is. They are kept in a tag's evidence beside the fields the
+	// conditions read, so a reader can tell which file, key or database a
+	// verdict is about. They locate a thing and are never personal data or a
+	// secret: a person is named by their hashed id, never an address or login.
+	Identity []string
 }
 
 var registry = map[string]Def{}

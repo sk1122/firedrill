@@ -255,7 +255,7 @@ func decideTarget(d *drill.Drill, g graph.Reader, o Options, target string, attr
 				return out
 			}
 			if hit {
-				out.Verdict, out.Reason = tag.Warn, "warn_when matched: "+c.Expr
+				out.Verdict, out.Reason = tag.Warn, warnReason(d, c.Expr, raw)
 				break
 			}
 		}
@@ -352,53 +352,133 @@ func evalAll(d *drill.Drill, ev *drill.Evaluator, vars map[string]any, record *[
 	return failed, failing, ""
 }
 
-// failReason names what actually failed. A row is to blame when the drill still
-// fails with only that row in its list, so a harmless finding beside a real one
-// is never the one reported.
+// failReason names what actually failed. Only a list the failing conditions
+// read can be to blame, and only when emptying it makes them pass, so a fact
+// fetched beside the real one is never named. Within that list a row is to
+// blame when a failing condition still fails with only that row in it, so a
+// harmless finding beside a real one is never the one reported. Of several
+// such lists, the one the first failing condition reads wins, then the one
+// with the fewest rows to blame, then the first by name.
 func failReason(d *drill.Drill, ev *drill.Evaluator, vars map[string]any, failing []string, raw map[string]facts.Result) string {
-	aliases := make([]string, 0, len(raw))
-	for a := range raw {
-		aliases = append(aliases, a)
-	}
-	sort.Strings(aliases)
-	for _, alias := range aliases {
-		// A fact is either an object with a found list, or a plain list.
-		m, isObj := raw[alias].Data.(map[string]any)
-		var found []any
-		if isObj {
-			found, _ = m["found"].([]any)
-		} else {
-			found, _ = raw[alias].Data.([]any)
+	readBy := map[string][]string{} // alias to the failing conditions reading it
+	first := map[string]bool{}
+	for i, expr := range failing {
+		for alias := range drill.ConditionPaths(d, expr) {
+			if _, ok := raw[alias]; !ok {
+				continue
+			}
+			readBy[alias] = append(readBy[alias], expr)
+			if i == 0 {
+				first[alias] = true
+			}
 		}
+	}
+	type candidate struct {
+		alias  string
+		blamed []map[string]any
+	}
+	var best *candidate
+	better := func(c candidate) bool {
+		switch {
+		case best == nil:
+			return true
+		case first[c.alias] != first[best.alias]:
+			return first[c.alias]
+		case len(c.blamed) != len(best.blamed):
+			return len(c.blamed) < len(best.blamed)
+		}
+		return c.alias < best.alias
+	}
+	for alias, exprs := range readBy {
+		found, with := listOf(raw[alias].Data)
 		if len(found) == 0 {
 			continue
 		}
-		var blamed []map[string]any
-		for _, item := range found {
-			if len(blamed) >= maxBlameRows {
-				break
-			}
-			trial := map[string]any{}
-			maps.Copy(trial, vars)
-			if isObj {
-				cp := map[string]any{}
-				maps.Copy(cp, m)
-				cp["found"] = []any{item}
-				trial[alias] = cp
-			} else {
-				trial[alias] = []any{item}
-			}
-			if stillFails, _, errMsg := evalAll(d, ev, trial, nil); errMsg == "" && stillFails {
-				row, _ := item.(map[string]any)
-				blamed = append(blamed, row)
-			}
-		}
-		if len(blamed) == 0 {
+		// Causal: with the list empty, every failing condition reading it passes.
+		trial := map[string]any{}
+		maps.Copy(trial, vars)
+		trial[alias] = with([]any{})
+		if anyFails(ev, exprs, trial) != 0 {
 			continue
 		}
-		return describeRow(blamed[0], len(blamed))
+		c := candidate{alias: alias}
+		for _, item := range found {
+			if len(c.blamed) >= maxBlameRows {
+				break
+			}
+			trial[alias] = with([]any{item})
+			if anyFails(ev, exprs, trial) == 1 {
+				row, _ := item.(map[string]any)
+				c.blamed = append(c.blamed, row)
+			}
+		}
+		if len(c.blamed) > 0 && better(c) {
+			best = &c
+		}
+	}
+	if best != nil {
+		if s := summarizeRows(found(raw[best.alias].Data)); s != "" {
+			return s
+		}
+		return describeRow(best.blamed[0], len(best.blamed))
 	}
 	return "failed: " + strings.Join(strings.Fields(failing[0]), " ")
+}
+
+// warnReason names what a warn_when condition matched: a count of the rows of
+// a list it reads, where the list has a summary (see summarizeRows), or else
+// the condition itself.
+func warnReason(d *drill.Drill, expr string, raw map[string]facts.Result) string {
+	aliases := []string{}
+	for alias := range drill.ConditionPaths(d, expr) {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	for _, alias := range aliases {
+		if r, ok := raw[alias]; ok {
+			if s := summarizeRows(found(r.Data)); s != "" {
+				return s
+			}
+		}
+	}
+	return "warn_when matched: " + expr
+}
+
+// listOf returns a fact's rows, from an object with a found list or a plain
+// list, and a function that puts other rows in their place.
+func listOf(data any) ([]any, func([]any) any) {
+	if m, ok := data.(map[string]any); ok {
+		rows, _ := m["found"].([]any)
+		return rows, func(l []any) any {
+			cp := map[string]any{}
+			maps.Copy(cp, m)
+			cp["found"] = l
+			return cp
+		}
+	}
+	rows, _ := data.([]any)
+	return rows, func(l []any) any { return l }
+}
+
+func found(data any) []any {
+	rows, _ := listOf(data)
+	return rows
+}
+
+// anyFails evaluates conditions: 1 when one fails, 0 when all pass, -1 on an
+// error.
+func anyFails(ev *drill.Evaluator, exprs []string, vars map[string]any) int {
+	out := 0
+	for _, expr := range exprs {
+		ok, err := ev.Eval(expr, vars)
+		if err != nil {
+			return -1
+		}
+		if !ok {
+			out = 1
+		}
+	}
+	return out
 }
 
 func shortID(id string) string {
@@ -596,19 +676,30 @@ func matchesFinding(row map[string]any, ws []config.Waiver) bool {
 	return false
 }
 
-// trimEvidence keeps only the fields conditions used. A value used only through
-// its size is recorded as a count.
+// trimEvidence keeps only the fields conditions used, and beside them each
+// fact's identity fields, so a reader can tell which row is which. A value
+// used only through its size is recorded as a count, and a fact no condition
+// reads as its number of fields, with no identity added to either.
 func trimEvidence(d *drill.Drill, raw map[string]facts.Result) map[string]any {
 	used := drill.UsedPaths(d)
+	ident := map[string][]string{}
+	for _, f := range d.Fetches {
+		if def, ok := facts.Lookup(f.Fact); ok {
+			ident[f.Alias] = def.Identity
+		}
+	}
 	out := map[string]any{}
 	for alias, r := range raw {
-		paths := used[alias]
-		out[alias] = trimValue(r.Data, paths)
+		out[alias] = trimValue(r.Data, used[alias], ident[alias])
 	}
 	return out
 }
 
-func trimValue(v any, paths []string) any {
+// maxIdentityRows caps how many rows of one list get identity fields, so a
+// huge list cannot swell a tag: rows past it keep only the fields read.
+const maxIdentityRows = 200
+
+func trimValue(v any, paths, ident []string) any {
 	children := map[string][]string{}
 	leaf := false
 	for _, p := range paths {
@@ -618,6 +709,15 @@ func trimValue(v any, paths []string) any {
 		}
 		head, rest, _ := strings.Cut(p, ".")
 		children[head] = append(children[head], rest)
+	}
+	identChildren := map[string][]string{}
+	var identFields []string
+	for _, p := range ident {
+		if head, rest, nested := strings.Cut(p, "."); nested {
+			identChildren[head] = append(identChildren[head], rest)
+		} else {
+			identFields = append(identFields, head)
+		}
 	}
 	switch val := v.(type) {
 	case map[string]any:
@@ -630,7 +730,14 @@ func trimValue(v any, paths []string) any {
 		out := map[string]any{}
 		for k, sub := range children {
 			if x, ok := val[k]; ok {
-				out[k] = trimValue(x, sub)
+				out[k] = trimValue(x, sub, identChildren[k])
+			}
+		}
+		for _, k := range identFields {
+			if x, ok := val[k]; ok {
+				if _, kept := out[k]; !kept {
+					out[k] = x
+				}
 			}
 		}
 		return out
@@ -642,8 +749,11 @@ func trimValue(v any, paths []string) any {
 			return map[string]any{"count": len(val)}
 		}
 		out := make([]any, 0, len(val))
-		for _, x := range val {
-			out = append(out, trimValue(x, paths))
+		for i, x := range val {
+			if i >= maxIdentityRows {
+				ident = nil
+			}
+			out = append(out, trimValue(x, paths, ident))
 		}
 		return out
 	}

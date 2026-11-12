@@ -22,7 +22,7 @@ var zoneNames = [4]string{"Outside", "People and agents", "Credentials", "Produc
 // credential's place, so it is drawn with credentials.
 func zoneOf(n graph.Node) int {
 	switch n.Kind {
-	case graph.KindHost, graph.KindWebResponse, graph.KindSourceMap, graph.KindAPIDoc, graph.KindPageScript, graph.KindOAuthApp, graph.KindCNAME,
+	case "outside", graph.KindHost, graph.KindWebResponse, graph.KindSourceMap, graph.KindAPIDoc, graph.KindPageScript, graph.KindOAuthApp, graph.KindCNAME,
 		graph.KindDNSRecord, graph.KindConfigHost, graph.KindConfigDomain:
 		return 0
 	case graph.KindPerson, graph.KindLeaver, graph.KindAgentConfig, "mcp_server", graph.KindConfigOwner:
@@ -257,6 +257,9 @@ func (c *viewCtx) nodeLabel(n graph.Node) string {
 		}
 		return "secret " + h[:min(12, len(h))]
 	}
+	if n.Kind == graph.KindPublicSecret {
+		return "public secret " + fp(str(n, "hash")) + " on " + str(n, "host")
+	}
 	if n.Kind == graph.KindEnvironment {
 		rest := strings.TrimPrefix(string(n.ID), "github:env/")
 		i := strings.LastIndex(rest, "/")
@@ -285,6 +288,7 @@ var cutMark = "a cut point: " // prefix of a cut-point outline's words
 // graphs builds the drawn questions, in priority order.
 func (c *viewCtx) graphs(diff *run.DiffRecord) {
 	c.productionGraph()
+	c.outsideGraph()
 	for _, p := range c.v.People {
 		if p.GraphHref != "" {
 			c.personGraph(p)
@@ -294,6 +298,14 @@ func (c *viewCtx) graphs(diff *run.DiffRecord) {
 		if a.GraphHref != "" {
 			c.agentGraph(a)
 		}
+	}
+	hashes := make([]string, 0, len(c.secretHref))
+	for h := range c.secretHref {
+		hashes = append(hashes, h)
+	}
+	sort.Strings(hashes)
+	for _, h := range hashes {
+		c.secretGraph(h)
 	}
 	c.changesGraph(diff)
 }

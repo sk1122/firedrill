@@ -34,6 +34,10 @@ type AgentConfig struct {
 	// Net is what the file says about outbound network access, for a Claude
 	// Code settings file or Cursor's sandbox.json; nil otherwise.
 	Net *NetSettings
+	// NoEgress marks a file that holds no setting that could open or limit
+	// outbound access, such as .cursorignore. It is not judged for egress and
+	// does not count as an agent being configured.
+	NoEgress bool
 }
 
 // MCPServer is one MCP server and the raw values passed to it. Values are held
@@ -58,7 +62,7 @@ func ParseAgentFile(rel string, data []byte, scope string) (*AgentConfig, error)
 	base := path.Base(rel)
 	switch base {
 	case ".cursorignore":
-		c := &AgentConfig{Tool: "cursor", Scope: scope, File: rel}
+		c := &AgentConfig{Tool: "cursor", Scope: scope, File: rel, NoEgress: true}
 		for line := range strings.SplitSeq(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line != "" && !strings.HasPrefix(line, "#") {

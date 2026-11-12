@@ -85,7 +85,7 @@ The backups drill judges production databases. Name production accounts (by ID o
 production: ["111111111111", firedrill-prod, acme-prod]
 ```
 
-A database tagged `env` or `environment` = `prod` or `production` is production too. With nothing named and nothing tagged, every database is judged, and the drill's reason says so.
+A database tagged `env` or `environment` = `prod` or `production` is production too. With nothing named and nothing tagged, every database is judged, and the drill's reason says so. A repo listed there as `org/repo` (see [github.md](github.md#which-repos-deploy-to-production)) names no account or project, so it does not count here.
 
 Automated backups must be kept at least 7 days; set `recovery.min_retention_days` to change it.
 

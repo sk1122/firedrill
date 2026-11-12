@@ -114,9 +114,9 @@ maps_to: [SOC2:CC8.1]
 
 | System | How it connects | Access |
 | --- | --- | --- |
-| GitHub | Your `gh` login, or a fine-grained token in CI | Read: Metadata, Administration, Environments, Contents on the repos; Members on the org, for who can reach each repo |
-| Google Workspace | A service account with domain-wide delegation | `admin.directory.user.readonly`, `admin.directory.user.security` (GET only) |
-| Google Cloud | A keyless reader service account, through gcloud | Viewer, Security Reviewer |
+| GitHub | Your `gh` login, or a fine-grained token in CI | Read: Metadata, Administration, Environments, Contents on the repos; Members on the org, for who can reach each repo. Optional: the org audit log (Enterprise Cloud, `read:audit_log`), to name who made a change |
+| Google Workspace | A service account with domain-wide delegation | `admin.directory.user.readonly`, `admin.directory.user.security` (GET only). Optional: `admin.reports.audit.readonly`, to name who made a change |
+| Google Cloud | A keyless reader service account, through gcloud | Viewer, Security Reviewer. Optional: `logging.logEntries.list`, to name who changed IAM |
 | AWS | Your credential profiles | A read policy `connect aws` prints |
 | Anthropic, OpenAI | An admin key in `FIREDRILL_ANTHROPIC_ADMIN_KEY` or `FIREDRILL_OPENAI_ADMIN_KEY` | Admin keys have no read-only scope; the guard sends them only with GET, to the admin read paths it names |
 | Repo files | Local checkouts, or tarballs through GitHub | None beyond GitHub's |
@@ -142,9 +142,9 @@ Nothing calls GitHub, Google, AWS, Google Cloud, Anthropic or OpenAI until `fire
 
 Exit codes: `0` by default. `1` when an unwaived critical or high safeguard turned open in this run. `2` on any ERROR, which wins over 1. `--fail-on open` also exits 1 while a critical or high safeguard stays open, and `--fail-on any` while any does.
 
-`firedrill report` writes a static HTML board: every open safeguard first, then each pack with its run history. A People page shows what each person can do across GitHub, GCP and Google Workspace, by short hashed ID and never ranked; an Agents page shows what each agent config can reach, including the outbound hosts its settings allow; and graph pages each draw one question, such as who can reach production data alone. `access/leavers-gone-everywhere` supersedes `access/leavers-locked-out`, and `access/every-admin-is-someone` supersedes `gcp/no-editor-service-accounts`; an existing install keeps its own copies until it removes them.
+`firedrill report` writes a static HTML board: every open safeguard first, then each pack with its run history. A People page shows what each person can do across GitHub, GCP and Google Workspace, by short hashed ID and never ranked; an Agents page shows what each agent config can reach, including the outbound hosts its settings allow and the keys behind the secrets it can read; and graph pages each draw one question: who can reach production data alone, what is reachable from outside, what one person, agent config or secret can reach, and what changed. `access/leavers-gone-everywhere` supersedes `access/leavers-locked-out`, and `access/every-admin-is-someone` supersedes `gcp/no-editor-service-accounts`; an existing install keeps its own copies until it removes them.
 
-Each run also compares itself with the previous run and stores the result in `diffs/` next to its snapshot. `firedrill run` ends with a count of what changed; `firedrill diff` shows each change, weakenings first, and the board has a Changes page. Only settings are compared, never timestamps, and a system not read in both runs is left out and named, so an outage never reads as everything removed.
+Each run also compares itself with the previous run and stores the result in `diffs/` next to its snapshot. `firedrill run` ends with a count of what changed; `firedrill diff` shows each change, weakenings first, and the board has a Changes page. Only settings are compared, never timestamps, and a system not read in both runs is left out and named, so an outage never reads as everything removed. Each change names who made it when an audit source says so (GitHub's org audit log, Google Workspace's Reports API, Cloud Audit Logs; each optional, at most 50 calls a run, only the window between the two runs), by hashed ID; otherwise the window. The stored diffs are hash-chained like tags, and `firedrill verify` checks them.
 
 ## The drill hub
 
@@ -167,7 +167,7 @@ Copy [docs/firedrill-workflow.yml](docs/firedrill-workflow.yml) to `.github/work
 - `FIREDRILL_GITHUB_TOKEN`: a fine-grained read token for the listed repos, with Metadata, Administration, Environments and Contents.
 - `FIREDRILL_SALT`: the value `init` generated. Keep it in your password manager too.
 
-Each Monday it runs the drills, pushes records to the `firedrill-tags` branch, writes a step summary, and opens one issue per newly open safeguard, assigned to its owner. It closes the issue when a run passes. Protect `firedrill-tags` against force pushes and deletion, and require a reviewer on `main`, so changes to drills and waivers get reviewed.
+Each Monday it runs the drills, attests the tags it wrote with a GitHub artifact attestation, pushes records to the `firedrill-tags` branch, writes a step summary, opens one issue per newly open safeguard, assigned to its owner, and keeps one standing "Firedrill weekly: what changed" issue whose body is the diff (weakenings first) and the open safeguards. It closes a safeguard's issue when a run passes. Attestation needs a public repo or GitHub Enterprise Cloud; elsewhere the step fails softly and tags stay unattested. The attestation steps follow GitHub's documentation and have not yet been exercised in a real Actions run. Protect `firedrill-tags` against force pushes and deletion, and require a reviewer on `main`, so changes to drills and waivers get reviewed.
 
 CI sees committed files only, and its results say so. Run on a laptop with `--path` and `--include-home` to also read `.env*` files and user-level agent settings.
 
@@ -179,6 +179,8 @@ CI sees committed files only, and its results say so. Run on a laptop with `--pa
 | `firedrill connect <system>` | Checks access and prints the exact permissions |
 | `firedrill run` | Runs every drill |
 | `firedrill verify <drill>` | Reruns one drill and reports whether it closed |
+| `firedrill verify` | Checks the records offline: tag chains, the diff chain and snapshot hashes, and which tags are attested |
+| `firedrill attest record` | In CI: records the attestation over the run's checksums file |
 | `firedrill verify-domain <domain>` | Proves you own a domain, so web checks may reach it |
 | `firedrill export rulesets` | Run by a repo admin: saves bypass lists for CI |
 | `firedrill list` | Every drill with owner, state, last verdict and waiver |
@@ -207,7 +209,7 @@ A waived FAIL still prints as FAIL, stays out of the exit code and issues, and r
 ## Safety model
 
 - **Read scopes are the real control.** Every connector asks for read access only, and `connect` prints the permissions first.
-- **A guard backs it up.** GitHub, Google and Google Cloud calls may only GET and HEAD, plus a few read calls allowed by exact URL: Google's token exchange, GitHub's tarball redirect, and Google Cloud's `getIamPolicy` on each listed project. AWS calls are checked by action against a fixed list. Anything else stops the run with ERROR.
+- **A guard backs it up.** GitHub, Google and Google Cloud calls may only GET and HEAD, plus a few read calls allowed by exact URL: Google's token exchange, GitHub's tarball redirect, Google Cloud's `getIamPolicy` on each listed project, and Cloud Logging's `entries:list`. AWS calls are checked by action against a fixed list. Anything else stops the run with ERROR.
 - **Every call is logged** to `.firedrill/local/calls.jsonl`, with no query strings. `--dry-run` prints the calls and makes none.
 - **Secrets are never stored.** A found secret becomes an HMAC keyed by your org's salt. Every record is scanned before it's written, and anything that looks like a secret is replaced with its hash.
 - **Records stay private.** In a public repo Firedrill writes no record files and prints only counts, unless you pass `--public-ok`.

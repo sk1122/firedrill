@@ -48,28 +48,32 @@ type Condition struct {
 // inferred field a condition read. Tags written before tiers have none, and
 // omitempty keeps their header hashes as they were, so their chains verify.
 type Header struct {
-	DrillID      string            `json:"drill_id"`
-	DrillHash    string            `json:"drill_sha256"`
-	Version      string            `json:"firedrill_version"`
-	Target       string            `json:"target"`
-	Stream       string            `json:"stream"`
-	Verdict      string            `json:"verdict"`
-	Reason       string            `json:"reason,omitempty"`
-	State        string            `json:"state"`
-	Waived       bool              `json:"waived,omitempty"`
-	WaivedParts  int               `json:"waived_findings,omitempty"`
-	Severity     string            `json:"severity"`
-	Owner        string            `json:"owner,omitempty"`
-	Conditions   []Condition       `json:"conditions,omitempty"`
-	FactSources  map[string]string `json:"fact_sources,omitempty"`
-	FactTiers    map[string]string `json:"fact_tiers,omitempty"`
-	Time         time.Time         `json:"time"`
-	RanBy        string            `json:"ran_by"`
-	Attested     bool              `json:"attested"`
-	SaltPrint    string            `json:"salt_fingerprint,omitempty"`
-	EvidenceHash string            `json:"evidence_sha256"`
-	Previous     string            `json:"previous_sha256,omitempty"`
-	ScannerNotes []string          `json:"scanner_notes,omitempty"`
+	DrillID     string            `json:"drill_id"`
+	DrillHash   string            `json:"drill_sha256"`
+	Version     string            `json:"firedrill_version"`
+	Target      string            `json:"target"`
+	Stream      string            `json:"stream"`
+	Verdict     string            `json:"verdict"`
+	Reason      string            `json:"reason,omitempty"`
+	State       string            `json:"state"`
+	Waived      bool              `json:"waived,omitempty"`
+	WaivedParts int               `json:"waived_findings,omitempty"`
+	Severity    string            `json:"severity"`
+	Owner       string            `json:"owner,omitempty"`
+	Conditions  []Condition       `json:"conditions,omitempty"`
+	FactSources map[string]string `json:"fact_sources,omitempty"`
+	FactTiers   map[string]string `json:"fact_tiers,omitempty"`
+	Time        time.Time         `json:"time"`
+	RanBy       string            `json:"ran_by"`
+	// Attested is never set: the header is written, and hash-chained, before
+	// any attestation exists. Kept so older tags hash as they were. Whether a
+	// tag is attested comes from the sidecar under records/attest; see the
+	// attest package.
+	Attested     bool     `json:"attested"`
+	SaltPrint    string   `json:"salt_fingerprint,omitempty"`
+	EvidenceHash string   `json:"evidence_sha256"`
+	Previous     string   `json:"previous_sha256,omitempty"`
+	ScannerNotes []string `json:"scanner_notes,omitempty"`
 }
 
 // Evidence is what the verdict was decided on.
@@ -149,6 +153,11 @@ func (s Store) Write(t *Tag) (string, error) {
 		return "", err
 	}
 	return path, os.WriteFile(path, b, 0o644)
+}
+
+// PathOf is the file a tag with this header was written to.
+func (s Store) PathOf(h Header) string {
+	return filepath.Join(s.dir(h.DrillID, h.Target), h.Time.UTC().Format(tagTime)+".json")
 }
 
 // History returns the tags of one drill and target, oldest first.

@@ -59,7 +59,7 @@ func rootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVar(&projectDir, "dir", ".firedrill", "the Firedrill folder")
-	root.AddCommand(initCmd(), connectCmd(), runCmd(), verifyCmd(), verifyDomainCmd(), exportCmd(), listCmd(), explainCmd(), reportCmd(), diffCmd(), validateCmd(), testCmd(), hubCmd())
+	root.AddCommand(initCmd(), connectCmd(), runCmd(), verifyCmd(), verifyDomainCmd(), exportCmd(), listCmd(), explainCmd(), reportCmd(), diffCmd(), validateCmd(), testCmd(), hubCmd(), attestCmd())
 	return root
 }
 

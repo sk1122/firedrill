@@ -45,22 +45,58 @@ type sqlInstance struct {
 	} `json:"settings"`
 }
 
-// collectCloudSQL reads every listed project's Cloud SQL instances. A project
-// that cannot be read, or an API that is not turned on, is recorded on its scan
-// record, so only the backup drills give ERROR and the other GCP drills run.
+// collectCloudSQL reads every listed project's Cloud SQL instances, and
+// records what it learned on each project's scan record, so only the backup
+// drills are affected and the other GCP drills run.
+//
+// Google checks whether the Cloud SQL Admin API is on in the project a call is
+// billed to (the quota project), not the project it is about, so "not turned
+// on" may be about the reader's own project. When a read says so, Service
+// Usage is asked whether the API is on in the listed project itself:
+//   - off there: the project holds no Cloud SQL instance Firedrill can be
+//     missing, a clean read with a note;
+//   - on there, or its state cannot be read: partial, naming what to turn on
+//     or grant and where.
+//
+// A read the reader's roles refuse is partial too. Anything else, such as a
+// network failure, a server error or a response that cannot be read, is an
+// error.
 func (c *Connector) collectCloudSQL(ctx context.Context, a *api, s connector.Scope, out graph.Writer) error {
 	for _, project := range s.Project.Config.GCP.Projects {
 		insts, err := listInstances(ctx, a, project)
 		attrs := map[string]any{"scanner": BackupScanner, "scope": project, "inspected": int64(0)}
 		var ae *apiError
+		partial := func(group string) {
+			attrs["partial"] = strings.ReplaceAll(group, "{projects}", project)
+			attrs["partial_group"], attrs["unread"] = group, true
+		}
 		switch {
 		case errors.Is(err, connector.ErrBlocked):
 			return err
 		case err != nil && errors.As(err, &ae) && (ae.Reason == "SERVICE_DISABLED" || ae.Reason == "accessNotConfigured"):
-			// Calls are billed to the reader's own project, so this is that
-			// project's setup, not the drilled one's.
-			msg := "could not read Cloud SQL in " + project + ": the Cloud SQL Admin API (sqladmin.googleapis.com) is not turned on in the project Firedrill's calls are billed to; turn it on there"
-			attrs["error"], attrs["partial"] = msg, msg
+			billed := ae.Consumer
+			if billed == "" {
+				billed = a.quota
+			}
+			if billed == "" {
+				billed = "the reader's own project"
+			}
+			state, uerr := sqlAdminState(ctx, a, project)
+			switch {
+			case errors.Is(uerr, connector.ErrBlocked):
+				return uerr
+			case uerr == nil && state == "DISABLED":
+				group := "the Cloud SQL Admin API is not turned on in {projects}, so there is no Cloud SQL instance there to read"
+				attrs["note"], attrs["note_group"] = strings.ReplaceAll(group, "{projects}", project), group
+			case uerr == nil && state == "ENABLED":
+				partial("Cloud SQL could not be read in {projects}, where the Cloud SQL Admin API is on: turn on sqladmin.googleapis.com in " +
+					billed + ", the project Firedrill's calls are billed to")
+			default:
+				partial("Cloud SQL could not be read in {projects}, and whether it is used there could not be told: turn on sqladmin.googleapis.com in " +
+					billed + ", the project Firedrill's calls are billed to, or grant the reader Viewer (serviceusage.services.get) on each project, so Firedrill can tell whether the API is off there")
+			}
+		case err != nil && errors.As(err, &ae) && ae.Status == http.StatusForbidden:
+			partial("Cloud SQL could not be read in {projects}: the reader may not list its instances; grant the reader Cloud SQL Viewer (roles/cloudsql.viewer), which Viewer includes, on each project")
 		case err != nil:
 			msg := fmt.Sprintf("could not read Cloud SQL in %s: %v", project, err)
 			attrs["error"], attrs["partial"] = msg, msg
@@ -84,6 +120,23 @@ func (c *Connector) collectCloudSQL(ctx context.Context, a *api, s connector.Sco
 		out.Node(graph.Node{ID: graph.ScanID(BackupScanner, project), Kind: graph.KindScan, Source: "gcp", SeenAt: s.Now, Attrs: attrs})
 	}
 	return nil
+}
+
+// sqlAdminState asks Service Usage whether the Cloud SQL Admin API is turned
+// on in a project: ENABLED or DISABLED, the latter also when it never was.
+// https://docs.cloud.google.com/service-usage/docs/reference/rest/v1/services
+func sqlAdminState(ctx context.Context, a *api, project string) (string, error) {
+	var svc struct {
+		State string `json:"state"`
+	}
+	u := "https://" + usageHost + "/v1/projects/" + url.PathEscape(project) + "/services/sqladmin.googleapis.com"
+	if err := a.do(ctx, http.MethodGet, u, nil, &svc); err != nil {
+		return "", err
+	}
+	if svc.State != "ENABLED" && svc.State != "DISABLED" {
+		return "", fmt.Errorf("the Service Usage API gave the state %q", svc.State)
+	}
+	return svc.State, nil
 }
 
 func listInstances(ctx context.Context, a *api, project string) ([]sqlInstance, error) {

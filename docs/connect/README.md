@@ -33,6 +33,10 @@ firedrill run --dry-run
 
 It lists every call a run would make, without making any.
 
+## Who made a change (optional)
+
+After each run, Firedrill compares it with the last one. For GitHub, Google Workspace and Google Cloud it can also ask the system's own audit log who made each change, in the window between the two runs only: the organization audit log ([github.md](github.md#who-made-a-change-optional)), the Reports API ([google-workspace.md](google-workspace.md)) and Cloud Audit Logs ([gcp.md](gcp.md)). Each is optional and only adds a name, as a hashed ID: without its access, a change shows the window instead and the diff says which source was not readable. At most 50 audit calls a run. AWS CloudTrail is not built (out of scope for now).
+
 ## Where credentials live
 
 Never in `config.yaml`, and never in the repo. Firedrill reads them from your environment, your `gh` and `gcloud` logins, or your AWS profiles, and keeps them in memory only. Anthropic and OpenAI admin keys come from `FIREDRILL_ANTHROPIC_ADMIN_KEY` and `FIREDRILL_OPENAI_ADMIN_KEY` and are only ever sent with GET.
@@ -48,6 +52,6 @@ Some evidence no API shows. Files under `.firedrill/` hold it. Each entry names 
 | `restores.yaml` | A restore of a database the API cannot show: `database`, `restored` (YYYY-MM-DD), `by` (a team or role) and an optional `note` | `recovery/restore-exercised` |
 | `ai-keys.yaml` | Owner and monthly spend limit of an AI key, workspace or project | `keys/ai-keys-capped` |
 | `owners.yaml` | The team that owns a principal no person holds: a GCP service account's address, or a graph ID such as `github:app/123456` or `github:deploy-key/acme/api`, with `principal`, `owner` and an optional `note` | `people.admins`, `people.unlinked` |
-| `people.yaml` | A flat map of GitHub login to the email of the person who holds it, such as `ana-acme: ana@acme.example`. Logins match case-insensitively, and several may name one person. A login with no entry stays unlinked; it is never guessed. This file holds emails and never reaches a record | `people.accounts`, `people.admins`, `people.unlinked` |
+| `people.yaml` | A flat map of GitHub login to the email of the person who holds it, such as `ana-acme: ana@acme.example`. Logins match case-insensitively, and several may name one person. A login with no entry stays unlinked; it is never guessed, and an admin login with no entry warns on `access/every-admin-is-someone` as not mapped to a person, rather than failing. This file holds emails and never reaches a record | `people.accounts`, `people.admins`, `people.unlinked` |
 
 Declared evidence is shown as declared in each result.
