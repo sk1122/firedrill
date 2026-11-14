@@ -1,0 +1,17 @@
+{
+  // The landing page in site/, served as static files by a Cloudflare Worker.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "firedrill",
+  "compatibility_date": "2026-11-13",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "site",
+    "not_found_handling": "404-page"
+  },
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "firedrill.satyam.fyi", "custom_domain": true }
+  ]
+}
