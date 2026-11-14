@@ -6,6 +6,8 @@
 
 <p align="center"><strong>Your rules, drilled weekly, with proof.</strong></p>
 
+<p align="center"><a href="https://firedrill.satyam.fyi/">firedrill.satyam.fyi</a></p>
+
 <p align="center">
   <a href="https://github.com/sk1122/firedrill/actions/workflows/ci.yml"><img src="https://github.com/sk1122/firedrill/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-16161A" alt="License: Apache-2.0"></a>
